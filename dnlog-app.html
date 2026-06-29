@@ -814,7 +814,9 @@ const fmtMoney = (v) => 'R$ ' + (v || 0).toLocaleString('pt-BR', {minimumFractio
 const fmtNum = (v) => (v || 0).toLocaleString('pt-BR');
 const fmtDate = (s) => {
   if (!s) return '—';
-  const [y,m,d] = s.split('-');
+  // Aceita 'YYYY-MM-DD' e timestamps do SAP ('YYYY-MM-DDThh:mm:ssZ'):
+  // corta a hora pegando só os 10 primeiros caracteres (a data).
+  const [y,m,d] = s.slice(0,10).split('-');
   return `${d}/${m}/${y}`;
 };
 const fmtDateTime = (iso) => {
@@ -2209,6 +2211,39 @@ const PedidosCompra = ({ ctx }) => {
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <TogglePedidos ctx={ctx} ativo="pedidos-compra" />
+          <button
+            className="btn btn-ghost"
+            onClick={() => {
+              // Exporta CSV dos pedidos de compra (uma linha por item).
+              const linhas = ['Pedido;Fornecedor;Data emissao;Data entrega;Item;Descricao;Embalagem;Qtd total;Qtd entregue;Saldo;Valor unitario;Saldo valor;Status pedido'];
+              dados.forEach(p => {
+                (p.itens || []).forEach(it => {
+                  const status = p.tem_saldo ? 'ABERTO' : 'ATENDIDO';
+                  const linha = [
+                    p.numero, p.fornecedor || '',
+                    p.data_emissao || '', p.data_entrega || '',
+                    it.codigo, it.descricao, it.embalagem || it.unidade || '',
+                    it.qtd_bb, (it.qtd_entregue || 0),
+                    it.saldo, (it.valor_unitario || 0).toFixed(2),
+                    (it.saldo * (it.valor_unitario || 0)).toFixed(2),
+                    status
+                  ].map(c => String(c == null ? '' : c).replace(/;/g, ',')).join(';');
+                  linhas.push(linha);
+                });
+              });
+              const csv = linhas.join('\n');
+              const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `base_pedidos_compra_${new Date().toISOString().slice(0,10)}.csv`;
+              a.click();
+              URL.revokeObjectURL(url);
+              ctx.showToast('Base de compras exportada', `${dados.length} pedidos · saldos atualizados`);
+            }}
+          >
+            <i className="ti ti-file-export"></i> Exportar base
+          </button>
           <span className="chip chip-green"><span className="status-dot"></span> Sincronizado · SAP</span>
         </div>
       </div>
