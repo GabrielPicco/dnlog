@@ -888,10 +888,16 @@ const STORAGE_KEY = 'dnlog_v2';
 const DNLOG_API_BASE = 'http://localhost:3000/api';
 window.__DNLOG_BACKEND_ON = false; // ligado pelo bootstrap quando o /health responde
 
+// Cabeçalho com o token de sessão — a API de dados/OE agora exige login.
+function dnlogAuthHeaders(extra) {
+  const t = localStorage.getItem('dnlog_token') || '';
+  return Object.assign({}, extra || {}, t ? { Authorization: 'Bearer ' + t } : {});
+}
+
 const DNLOG_API = {
   // Busca todas as OEs já persistidas no banco.
   async listarOEs() {
-    const r = await fetch(`${DNLOG_API_BASE}/oe`);
+    const r = await fetch(`${DNLOG_API_BASE}/oe`, { headers: dnlogAuthHeaders() });
     if (!r.ok) throw new Error('GET /oe ' + r.status);
     return r.json();
   },
@@ -902,7 +908,7 @@ const DNLOG_API = {
     try {
       await fetch(`${DNLOG_API_BASE}/oe/sync`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: dnlogAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ ordens }),
       });
     } catch (e) {
@@ -945,7 +951,7 @@ const DNLOG_API = {
 
     const r = await fetch(`${DNLOG_API_BASE}/oe/faturar`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: dnlogAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         oe_id: oe.id,
         oe_numero: oe.numero,
@@ -6250,13 +6256,20 @@ const AuthGate = () => {
     else setEstado('pendente');
   };
   useEffect(() => { DNLOG_AUTH.me().then(aplicar).catch(() => aplicar(null)); }, []);
+  // Login NOVO: se aprovado, recarrega a página para o bootstrap rodar de novo
+  // já com o token e carregar os dados (que exigem login). Pendente/rejeitado
+  // não recarrega (mostra a tela de espera).
+  const aoLogar = (u) => {
+    if (u && u.status === 'APROVADO') { window.location.reload(); return; }
+    aplicar(u);
+  };
   const onLogout = () => {
     DNLOG_AUTH.logout();
     try { window.google && window.google.accounts && window.google.accounts.id.disableAutoSelect(); } catch (e) {}
     setUsuario(null); setEstado('login');
   };
   if (estado === 'carregando') return <TelaCarregando />;
-  if (estado === 'login') return <TelaLogin onLogin={aplicar} />;
+  if (estado === 'login') return <TelaLogin onLogin={aoLogar} />;
   if (estado === 'pendente') return <TelaPendente usuario={usuario} onLogout={onLogout} />;
   return <App usuario={usuario} onLogout={onLogout} />;
 };
@@ -6352,8 +6365,11 @@ const AdminUsuarios = ({ ctx }) => {
   }
 
   function fetchTimeout(url, ms) {
+    // Envia o token de sessão (se logado) — a API de dados agora exige login.
+    const _t = localStorage.getItem('dnlog_token') || '';
+    const _opts = _t ? { headers: { Authorization: 'Bearer ' + _t } } : {};
     return Promise.race([
-      fetch(url).then(r => r.json()),
+      fetch(url, _opts).then(r => r.json()),
       new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))
     ]);
   }
@@ -6366,6 +6382,12 @@ const AdminUsuarios = ({ ctx }) => {
     // Modo somente leitura no SAP: o app não tenta criar nota no SAP enquanto
     // estiver ligado (fase de implantação). A baixa local + banco continuam.
     window.__DNLOG_SAP_READONLY = health.somente_leitura !== false;
+
+    // A API de dados agora exige login. Só carrega dados se já houver sessão.
+    // Sem token: mostra a tela de login; após logar, a página recarrega e
+    // este bootstrap roda de novo com o token, aí os dados entram.
+    const _logado = !!localStorage.getItem('dnlog_token');
+    if (_logado) {
 
     // Hidrata as OEs do banco no localStorage ANTES do React montar.
     // O servidor é a fonte da verdade; mantém lotes/baixas locais como estão.
@@ -6498,6 +6520,8 @@ const AdminUsuarios = ({ ctx }) => {
         b.onclick = () => location.reload();
       }
     }, 800);
+
+    } // fim do if (_logado) — sem token, pula o carregamento (mostra login)
 
   } catch (err) {
     console.warn('[DNLog API] Backend indisponível, usando dados estáticos:', err.message);

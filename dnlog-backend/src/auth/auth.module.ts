@@ -11,6 +11,7 @@ import { JwtAuthGuard, GestorGuard } from './jwt-auth.guard';
   imports: [
     TypeOrmModule.forFeature([Usuario]),
     JwtModule.registerAsync({
+      global: true,
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({

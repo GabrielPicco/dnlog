@@ -8,7 +8,7 @@ import { ApiModule } from './api/api.module';
 import { DatabaseModule } from './database/database.module';
 import { OeModule } from './oe/oe.module';
 import { AuthModule } from './auth/auth.module';
-import { ApiKeyGuard } from './common/api-key.guard';
+import { JwtAuthGuard } from './auth/jwt-auth.guard';
 
 @Module({
   imports: [
@@ -29,7 +29,9 @@ import { ApiKeyGuard } from './common/api-key.guard';
     ApiModule,
   ],
   providers: [
-    { provide: APP_GUARD, useClass: ApiKeyGuard },
+    // Guard GLOBAL de autenticação: toda rota exige login (JWT), exceto as
+    // marcadas com @Public() (health, auth/google, auth/dev-login).
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],
 })
 export class AppModule {}

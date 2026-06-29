@@ -1,10 +1,12 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Patch,
   Post,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
@@ -22,10 +24,23 @@ export class AuthController {
     return this.auth.loginGoogle(body?.credential);
   }
 
-  /** Login de desenvolvimento (só com AUTH_BYPASS=true). */
+  /**
+   * Login de desenvolvimento (só com AUTH_BYPASS=true E vindo de localhost).
+   * O check de localhost torna isto inexplorável em produção: requisições via
+   * proxy (Heroku/Vercel) não têm IP de loopback, então o dev-login é recusado.
+   */
   @Public()
   @Post('dev-login')
-  devLogin(@Body() body: any) {
+  devLogin(@Body() body: any, @Req() req: any) {
+    const ip = String(req.ip || req.socket?.remoteAddress || '');
+    const ehLocal =
+      ip === '::1' ||
+      ip === '127.0.0.1' ||
+      ip === '::ffff:127.0.0.1' ||
+      ip.startsWith('127.');
+    if (!ehLocal) {
+      throw new ForbiddenException('Login DEV permitido apenas localmente');
+    }
     return this.auth.loginDev(body?.email, body?.nome);
   }
 
