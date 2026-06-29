@@ -3,6 +3,65 @@ import { SAP_SERVICE } from '../sap/sap.module';
 import { Public } from '../common/public.decorator';
 import { OeService } from '../oe/oe.service';
 
+// ===== Helpers compartilhados por pedidos de VENDA e de COMPRA =====
+// (Venda e compra têm a MESMA estrutura de linhas no SAP; estas funções evitam
+//  duplicar a tradução das linhas nos dois endpoints — mexer aqui vale p/ ambos.)
+
+type ItemInfo = Record<string, { grupo_codigo: any; grupo_nome: string }>;
+
+/**
+ * Saldo em aberto de uma linha. No SAP o campo pode vir como OpenQuantity ou
+ * RemainingOpenQuantity; sem nenhum, cai para a quantidade total (linha tratada
+ * como totalmente em aberto).
+ */
+function saldoLinha(l: any): number {
+  const v = l.OpenQuantity ?? l.RemainingOpenQuantity ?? l.Quantity ?? 0;
+  return Number(v) || 0;
+}
+
+/** Mapa ItemCode -> { grupo_codigo, grupo_nome } a partir dos catálogos do SAP. */
+function construirItemInfo(itens: any[], grupos: any[]): ItemInfo {
+  const grupoNomePorNumero: Record<string, string> = {};
+  for (const g of grupos || []) grupoNomePorNumero[String(g.Number)] = g.GroupName;
+  const itemInfo: ItemInfo = {};
+  for (const it of itens || []) {
+    itemInfo[it.ItemCode] = {
+      grupo_codigo: it.ItemsGroupCode,
+      grupo_nome: grupoNomePorNumero[String(it.ItemsGroupCode)] || '',
+    };
+  }
+  return itemInfo;
+}
+
+/**
+ * Traduz as DocumentLines do SAP para o formato DNLog e calcula os totais.
+ * Defensivo: pedido sem linhas ou com campos ausentes não quebra a tela.
+ */
+function resumirLinhas(p: any, itemInfo: ItemInfo) {
+  const linhas: any[] = Array.isArray(p.DocumentLines) ? p.DocumentLines : [];
+  return {
+    qtd_total_bb: linhas.reduce((a: number, l: any) => a + (Number(l.Quantity) || 0), 0),
+    qtd_saldo_bb: linhas.reduce((a: number, l: any) => a + saldoLinha(l), 0),
+    saldo_aberto: linhas.reduce((a: number, l: any) => a + saldoLinha(l) * (Number(l.Price) || 0), 0),
+    itens: linhas.map((l: any) => {
+      const info = itemInfo[l.ItemCode] || { grupo_codigo: null, grupo_nome: '' };
+      return {
+        sap_line_num: l.LineNum,
+        codigo: l.ItemCode,
+        descricao: l.ItemDescription,
+        grupo_codigo: info.grupo_codigo,
+        grupo_nome: info.grupo_nome,
+        embalagem: l.MeasureUnit || l.UoMCode || '',
+        qtd_bb: Number(l.Quantity) || 0,
+        qtd_entregue: (Number(l.Quantity) || 0) - saldoLinha(l),
+        saldo: saldoLinha(l),
+        valor_unitario: Number(l.Price) || 0,
+        armazem: l.WarehouseCode,
+      };
+    }),
+  };
+}
+
 /**
  * Endpoints da API consumidos pelo frontend DNLog.
  *
@@ -51,33 +110,13 @@ export class ApiController {
       this.sap.getSalesPersons?.().catch(() => []) ?? [],
     ]);
 
-    // Mapas de apoio
-    const grupoNomePorNumero: Record<string, string> = {};
-    for (const g of grupos || []) grupoNomePorNumero[String(g.Number)] = g.GroupName;
+    const itemInfo = construirItemInfo(itens, grupos);
 
-    const itemInfo: Record<string, { grupo_codigo: any; grupo_nome: string }> = {};
-    for (const it of itens || []) {
-      itemInfo[it.ItemCode] = {
-        grupo_codigo: it.ItemsGroupCode,
-        grupo_nome: grupoNomePorNumero[String(it.ItemsGroupCode)] || '',
-      };
-    }
-
+    // Nome do vendedor por código (catálogo SalesPersons).
     const vendedorNome: Record<string, string> = {};
     for (const v of vendedores || []) vendedorNome[String(v.SalesEmployeeCode)] = v.SalesEmployeeName;
 
-    // Saldo em aberto de uma linha. No SAP real o campo pode vir como
-    // OpenQuantity ou RemainingOpenQuantity; se nenhum existir, cai para a
-    // quantidade total (linha tratada como totalmente em aberto).
-    const saldoLinha = (l: any): number => {
-      const v = l.OpenQuantity ?? l.RemainingOpenQuantity ?? l.Quantity ?? 0;
-      return Number(v) || 0;
-    };
-
-    // Traduz a estrutura SAP para o formato DNLog (defensivo: pedidos sem
-    // linhas ou com campos ausentes nao quebram a tela).
     return pedidosSap.map((p: any) => {
-      const linhas: any[] = Array.isArray(p.DocumentLines) ? p.DocumentLines : [];
       const vendCodigo = p.SalesPersonCode != null ? String(p.SalesPersonCode) : '';
       return {
         numero: `PV-${p.DocNum}`,
@@ -91,25 +130,7 @@ export class ApiController {
         vendedor_codigo: vendCodigo,
         observacoes: p.Comments || '',
         tem_saldo: p.DocumentStatus === 'bost_Open',
-        qtd_total_bb: linhas.reduce((a: number, l: any) => a + (Number(l.Quantity) || 0), 0),
-        qtd_saldo_bb: linhas.reduce((a: number, l: any) => a + saldoLinha(l), 0),
-        saldo_aberto: linhas.reduce((a: number, l: any) => a + saldoLinha(l) * (Number(l.Price) || 0), 0),
-        itens: linhas.map((l: any) => {
-          const info = itemInfo[l.ItemCode] || { grupo_codigo: null, grupo_nome: '' };
-          return {
-            sap_line_num: l.LineNum,
-            codigo: l.ItemCode,
-            descricao: l.ItemDescription,
-            grupo_codigo: info.grupo_codigo,
-            grupo_nome: info.grupo_nome,
-            embalagem: l.MeasureUnit || l.UoMCode || '',
-            qtd_bb: Number(l.Quantity) || 0,
-            qtd_entregue: (Number(l.Quantity) || 0) - saldoLinha(l),
-            saldo: saldoLinha(l),
-            valor_unitario: Number(l.Price) || 0,
-            armazem: l.WarehouseCode,
-          };
-        }),
+        ...resumirLinhas(p, itemInfo),
       };
     });
   }
@@ -129,53 +150,19 @@ export class ApiController {
       this.sap.getItemGroups?.().catch(() => []) ?? [],
     ]);
 
-    const grupoNomePorNumero: Record<string, string> = {};
-    for (const g of grupos || []) grupoNomePorNumero[String(g.Number)] = g.GroupName;
-    const itemInfo: Record<string, { grupo_codigo: any; grupo_nome: string }> = {};
-    for (const it of itens || []) {
-      itemInfo[it.ItemCode] = {
-        grupo_codigo: it.ItemsGroupCode,
-        grupo_nome: grupoNomePorNumero[String(it.ItemsGroupCode)] || '',
-      };
-    }
+    const itemInfo = construirItemInfo(itens, grupos);
 
-    const saldoLinha = (l: any): number => {
-      const v = l.OpenQuantity ?? l.RemainingOpenQuantity ?? l.Quantity ?? 0;
-      return Number(v) || 0;
-    };
-
-    return pedidosSap.map((p: any) => {
-      const linhas: any[] = Array.isArray(p.DocumentLines) ? p.DocumentLines : [];
-      return {
-        numero: `PC-${p.DocNum}`,
-        doc_entry: p.DocEntry,
-        fornecedor: p.CardName,
-        fornecedor_codigo: p.CardCode,
-        data_emissao: p.DocDate,
-        data_entrega: p.DocDueDate,
-        observacoes: p.Comments || '',
-        tem_saldo: p.DocumentStatus === 'bost_Open',
-        qtd_total_bb: linhas.reduce((a: number, l: any) => a + (Number(l.Quantity) || 0), 0),
-        qtd_saldo_bb: linhas.reduce((a: number, l: any) => a + saldoLinha(l), 0),
-        saldo_aberto: linhas.reduce((a: number, l: any) => a + saldoLinha(l) * (Number(l.Price) || 0), 0),
-        itens: linhas.map((l: any) => {
-          const info = itemInfo[l.ItemCode] || { grupo_codigo: null, grupo_nome: '' };
-          return {
-            sap_line_num: l.LineNum,
-            codigo: l.ItemCode,
-            descricao: l.ItemDescription,
-            grupo_codigo: info.grupo_codigo,
-            grupo_nome: info.grupo_nome,
-            embalagem: l.MeasureUnit || l.UoMCode || '',
-            qtd_bb: Number(l.Quantity) || 0,
-            qtd_entregue: (Number(l.Quantity) || 0) - saldoLinha(l),
-            saldo: saldoLinha(l),
-            valor_unitario: Number(l.Price) || 0,
-            armazem: l.WarehouseCode,
-          };
-        }),
-      };
-    });
+    return pedidosSap.map((p: any) => ({
+      numero: `PC-${p.DocNum}`,
+      doc_entry: p.DocEntry,
+      fornecedor: p.CardName,
+      fornecedor_codigo: p.CardCode,
+      data_emissao: p.DocDate,
+      data_entrega: p.DocDueDate,
+      observacoes: p.Comments || '',
+      tem_saldo: p.DocumentStatus === 'bost_Open',
+      ...resumirLinhas(p, itemInfo),
+    }));
   }
 
   // -------- CLIENTES E FORNECEDORES --------
