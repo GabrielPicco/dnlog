@@ -1662,8 +1662,7 @@ const Sidebar = ({ ctx }) => {
     { id: 'triangulares', icon: 'ti-arrows-shuffle', label: 'Triangulares', badge: aguardandoTriang || null,
       badgeStyle: aguardandoTriang ? { background: 'var(--blue-bg)', color: 'var(--blue)' } : null,
       perfis: ['OPERADOR','GESTOR'] },
-    { id: 'pedidos', icon: 'ti-clipboard-list', label: 'Pedidos Venda', perfis: ['OPERADOR','GESTOR'] },
-    { id: 'pedidos-compra', icon: 'ti-shopping-cart', label: 'Pedidos Compra', perfis: ['OPERADOR','GESTOR'] },
+    { id: 'pedidos', icon: 'ti-clipboard-list', label: 'Pedidos', perfis: ['OPERADOR','GESTOR'] },
     { id: 'estoque', icon: 'ti-building-warehouse', label: 'Estoque', perfis: ['OPERADOR','GESTOR'] },
     { id: 'usuarios', icon: 'ti-users', label: 'Usuários', perfis: ['GESTOR'] },
   ];
@@ -1725,6 +1724,8 @@ const Sidebar = ({ ctx }) => {
           // então acende o destaque em qualquer uma dessas rotas.
           const ativo = it.id === 'embarques'
             ? ['embarques', 'agendamentos', 'calendario'].includes(ctx.screen)
+            : it.id === 'pedidos'
+            ? ['pedidos', 'pedidos-compra'].includes(ctx.screen)
             : ctx.screen === it.id;
           return (
           <button
