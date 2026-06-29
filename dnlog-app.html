@@ -1031,13 +1031,14 @@ const App = ({ usuario, onLogout }) => {
     return () => window.removeEventListener('resize', onResize);
   }, []);
   const effectiveCollapsed = sidebarCollapsed || autoCollapsed;
-  // Perfil vem do usuário logado (Google + aprovação). Sem login, cai no padrão.
-  const [perfilAtivo, setPerfilAtivo] = useState(() => (usuario && usuario.perfil) || localStorage.getItem('dnlog_perfil') || 'OPERADOR');
+  // Perfil vem SEMPRE do usuário logado (Google + aprovação) e é FIXO: cada um
+  // vê o app conforme o SEU papel, definido pelo gestor na tela de Usuários.
+  // (Não há mais "ver como" — o papel não é sobreponível.) Sem login, padrão.
+  const perfilAtivo = (usuario && usuario.perfil) || 'OPERADOR';
   // Tema claro/escuro (padrão: escuro). Aplica data-theme no <html> e persiste.
   const [tema, setTema] = useState(() => localStorage.getItem('dnlog_tema') || 'dark');
 
   useEffect(() => { saveState(state); }, [state]);
-  useEffect(() => { localStorage.setItem('dnlog_perfil', perfilAtivo); }, [perfilAtivo]);
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', tema);
     localStorage.setItem('dnlog_tema', tema);
@@ -1312,7 +1313,7 @@ const App = ({ usuario, onLogout }) => {
     viewingPedido, setViewingPedido,
     criarOE, atualizarOE, editarOE, cancelarOE, faturarOE, desfaturarOE,
     sidebarCollapsed: effectiveCollapsed, setSidebarCollapsed,
-    perfilAtivo, setPerfilAtivo,
+    perfilAtivo,
     usuario, onLogout,
     tema, setTema,
     podeEditar: perfilAtivo !== 'CONFERENTE'
@@ -1775,31 +1776,6 @@ const Sidebar = ({ ctx }) => {
           <i className={'ti ' + (ctx.tema === 'dark' ? 'ti-sun' : 'ti-moon')} style={{ fontSize: 16 }}></i>
           {!collapsed && <span>{ctx.tema === 'dark' ? 'Modo claro' : 'Modo escuro'}</span>}
         </button>
-
-        {/* SELETOR DE PERFIL — só o GESTOR pode "ver como" outro perfil (teste) */}
-        {!collapsed && ctx.usuario && ctx.usuario.perfil === 'GESTOR' && (
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 6 }}>
-              Ver como (gestor)
-            </div>
-            <div style={{ display: 'flex', gap: 3, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 5, padding: 2 }}>
-              {['OPERADOR','CONFERENTE','GESTOR'].map(p => (
-                <button
-                  key={p}
-                  onClick={() => ctx.setPerfilAtivo(p)}
-                  style={{
-                    flex: 1,
-                    background: ctx.perfilAtivo === p ? 'var(--bg-hover)' : 'none',
-                    color: ctx.perfilAtivo === p ? perfilInfo[p].cor : 'var(--text-muted)',
-                    border: 'none', padding: '4px 6px', borderRadius: 3, fontSize: 9,
-                    fontFamily: 'inherit', cursor: 'pointer', fontWeight: 700,
-                    textTransform: 'uppercase', letterSpacing: '0.04em'
-                  }}
-                >{p.slice(0,3)}</button>
-              ))}
-            </div>
-          </div>
-        )}
 
         <div style={{ display: 'flex', alignItems: 'center', gap: collapsed ? 0 : 10, marginBottom: collapsed ? 0 : 12, flexDirection: collapsed ? 'column' : 'row' }}>
           <div className="avatar" style={{ background: `linear-gradient(135deg, ${perfil.cor}, ${perfil.cor})`, opacity: 0.95 }}>
