@@ -1,0 +1,35 @@
+# ===== DNLog — arquivos que NÃO entram no versionamento =====
+
+# Dependências (reinstaláveis com npm install)
+node_modules/
+**/node_modules/
+
+# Pacotes/zip de distribuição (grandes, gerados)
+*.zip
+
+# Build do backend
+dist/
+**/dist/
+*.tsbuildinfo
+
+# Ambiente / segredos (use os .env.example como modelo)
+.env
+.env.local
+**/.env
+!**/.env.example
+!**/.env.example.txt
+
+# Banco SQLite local
+data/*.db
+data/*.db-shm
+data/*.db-wal
+**/data/*.db
+
+# Sistema operacional / editores / ferramentas
+.DS_Store
+.claude/
+.gstack/
+*.log
+
+# App servido (cópia do dnlog-app.html dentro do backend)
+dnlog-backend/public/index.html

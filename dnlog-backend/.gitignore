@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+*.log
+.gstack/
+
+# Banco SQLite local (dados de desenvolvimento)
+data/*.db
+data/*.db-shm
+data/*.db-wal
