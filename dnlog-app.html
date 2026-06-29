@@ -1833,9 +1833,17 @@ const PieChart = ({ dados, size = 150 }) => {
 
 const Dashboard = ({ ctx }) => {
   // Pedidos entregues × não entregues (contagem) — safra atual no SAP.
-  const entregue = (DADOS_ENTREGAS && DADOS_ENTREGAS.entregues) || 0;
-  const naoEntregue = (DADOS_ENTREGAS && DADOS_ENTREGAS.nao_entregues) || 0;
+  // Quebra por grupo de itens (filtro do painel). Um pedido conta no(s) grupo(s)
+  // que ele contém; sem filtro, usa o total da safra.
+  const gruposEntrega = (DADOS_ENTREGAS && DADOS_ENTREGAS.grupos) || [];
+  const [grupoSel, setGrupoSel] = useState(''); // '' = todos os grupos
+  const grupoAtivo = grupoSel ? gruposEntrega.find(g => String(g.grupo_codigo) === grupoSel) : null;
+  const entregue = grupoAtivo ? grupoAtivo.entregues : ((DADOS_ENTREGAS && DADOS_ENTREGAS.entregues) || 0);
+  const naoEntregue = grupoAtivo ? grupoAtivo.nao_entregues : ((DADOS_ENTREGAS && DADOS_ENTREGAS.nao_entregues) || 0);
   const entrega = { entregue, naoEntregue, total: entregue + naoEntregue };
+  // Cores neutras (dessaturadas) para a pizza.
+  const COR_ENT = '#6f9080';  // sage discreto = entregues
+  const COR_NAO = '#9aa0a6';  // cinza neutro = não entregues
 
   const stats = useMemo(() => {
     const o = ctx.state.ordens;
@@ -1895,14 +1903,28 @@ const Dashboard = ({ ctx }) => {
             <div className="panel-title">Pedidos entregues × não entregues</div>
             <div className="panel-sub">Pedidos de venda da safra atual · SAP</div>
           </div>
+          {gruposEntrega.length > 0 && (
+            <select
+              className="input"
+              value={grupoSel}
+              onChange={e => setGrupoSel(e.target.value)}
+              title="Filtrar por grupo de itens"
+              style={{ width: 'auto', padding: '5px 10px', fontSize: 12 }}
+            >
+              <option value="">Todos os grupos</option>
+              {gruposEntrega.map(g => (
+                <option key={String(g.grupo_codigo)} value={String(g.grupo_codigo)}>{g.grupo_nome}</option>
+              ))}
+            </select>
+          )}
         </div>
         <div style={{ padding: 18, display: 'flex', alignItems: 'center', gap: 28, flexWrap: 'wrap' }}>
           <PieChart size={150} dados={[
-            { label: 'Entregues', value: entrega.entregue, color: 'var(--green)' },
-            { label: 'Não entregues', value: entrega.naoEntregue, color: 'var(--orange)' },
+            { label: 'Entregues', value: entrega.entregue, color: COR_ENT },
+            { label: 'Não entregues', value: entrega.naoEntregue, color: COR_NAO },
           ]} />
           <div style={{ flex: 1, minWidth: 220 }}>
-            {[['Entregues', entrega.entregue, 'var(--green)'], ['Não entregues (a embarcar)', entrega.naoEntregue, 'var(--orange)']].map(([l, v, c]) => {
+            {[['Entregues', entrega.entregue, COR_ENT], ['Não entregues (a embarcar)', entrega.naoEntregue, COR_NAO]].map(([l, v, c]) => {
               const pct = entrega.total ? (v / entrega.total * 100) : 0;
               return (
                 <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>

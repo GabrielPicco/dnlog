@@ -232,23 +232,70 @@ export class SapClientService implements OnModuleDestroy {
    * safra atual (data de entrega no ano corrente). Usa $inlinecount para
    * contar sem baixar os registros — bem leve. Tudo leitura.
    */
-  async getResumoEntregas(): Promise<{ entregues: number; nao_entregues: number }> {
+  /**
+   * Resumo de entregas da safra (pedidos de venda do ano), entregues (fechados)
+   * × não entregues (abertos), com QUEBRA POR GRUPO DE ITENS para o filtro do
+   * painel. Como a safra é pequena (~centenas de pedidos), busca os pedidos com
+   * as linhas e agrupa em memória. Um pedido conta em cada grupo que ele contém.
+   */
+  async getResumoEntregas(): Promise<{
+    entregues: number;
+    nao_entregues: number;
+    grupos: Array<{ grupo_codigo: any; grupo_nome: string; entregues: number; nao_entregues: number }>;
+  }> {
     await this.ensureSession();
     const anoInicio = `${new Date().getFullYear()}-01-01`;
-    const contar = async (status: string): Promise<number> => {
-      const params = {
-        $select: 'DocEntry',
-        $filter: `DocumentStatus eq '${status}' and DocDueDate ge '${anoInicio}'`,
-        $inlinecount: 'allpages',
-        $top: 1,
-      };
-      const resp = await this.axios.get('/Orders', { params });
-      const c = resp.data['odata.count'] ?? resp.data['@odata.count'] ?? 0;
-      return Number(c) || 0;
-    };
     try {
-      const [naoEnt, ent] = await Promise.all([contar('bost_Open'), contar('bost_Close')]);
-      return { entregues: ent, nao_entregues: naoEnt };
+      const [orders, itens, grupos] = await Promise.all([
+        this.getAllPages('/Orders', {
+          $select: 'DocEntry,DocumentStatus,DocumentLines',
+          $filter: `DocDueDate ge '${anoInicio}'`,
+        }),
+        this.getItems().catch(() => []),
+        this.getItemGroups().catch(() => []),
+      ]);
+
+      const grupoNome: Record<string, string> = {};
+      for (const g of grupos || []) grupoNome[String(g.Number)] = g.GroupName;
+      const itemGrupo: Record<string, { codigo: any; nome: string }> = {};
+      for (const it of itens || []) {
+        itemGrupo[it.ItemCode] = {
+          codigo: it.ItemsGroupCode,
+          nome: grupoNome[String(it.ItemsGroupCode)] || '',
+        };
+      }
+
+      let entregues = 0;
+      let naoEnt = 0;
+      const porGrupo: Record<string, { grupo_codigo: any; grupo_nome: string; entregues: number; nao_entregues: number }> = {};
+      for (const o of orders || []) {
+        const entregue = o.DocumentStatus === 'bost_Close';
+        if (entregue) entregues++; else naoEnt++;
+        // Grupos distintos deste pedido (um pedido conta 1x por grupo).
+        const linhas = Array.isArray(o.DocumentLines) ? o.DocumentLines : [];
+        const vistos = new Set<string>();
+        for (const l of linhas) {
+          const info = itemGrupo[l.ItemCode];
+          const codigo = info ? info.codigo : null;
+          const key = codigo != null ? String(codigo) : 'SEM_GRUPO';
+          if (vistos.has(key)) continue;
+          vistos.add(key);
+          if (!porGrupo[key]) {
+            porGrupo[key] = {
+              grupo_codigo: codigo,
+              grupo_nome: (info && info.nome) || 'Sem grupo',
+              entregues: 0,
+              nao_entregues: 0,
+            };
+          }
+          if (entregue) porGrupo[key].entregues++; else porGrupo[key].nao_entregues++;
+        }
+      }
+
+      const gruposArr = Object.values(porGrupo).sort(
+        (a, b) => b.entregues + b.nao_entregues - (a.entregues + a.nao_entregues),
+      );
+      return { entregues, nao_entregues: naoEnt, grupos: gruposArr };
     } catch (err) {
       this.handleError(err, 'resumo de entregas');
     }

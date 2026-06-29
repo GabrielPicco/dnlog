@@ -138,7 +138,7 @@ export class ApiController {
   // -------- RESUMO DE ENTREGAS (para o gráfico do painel) --------
   @Get('pedidos-resumo')
   async getPedidosResumo() {
-    return (await this.sap.getResumoEntregas?.()) ?? { entregues: 0, nao_entregues: 0 };
+    return (await this.sap.getResumoEntregas?.()) ?? { entregues: 0, nao_entregues: 0, grupos: [] };
   }
 
   // -------- PEDIDOS DE COMPRA --------
