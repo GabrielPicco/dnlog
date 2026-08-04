@@ -445,6 +445,25 @@ export class SapClientService implements OnModuleDestroy {
   }
 
   /**
+   * Saldo por LOTE + armazém, via view da Semantic Layer CALCULOSALDOITENS
+   * (sap.sbodnsprd.agrotisone.facts). É uma view PARAMETRIZADA — o único
+   * parâmetro é ExibirItensSemSaldo ('S'/'N'; 'N' = só quem tem saldo/movimento).
+   * Traz lote, depósito, validade e os saldos (atual, comprometido em PV, a
+   * receber de PC). SOMENTE LEITURA (GET). Substitui a OIBT, que não é acessível
+   * pela Service Layer.
+   */
+  async getSaldoPorLote(): Promise<any[]> {
+    await this.ensureSession();
+    const endpoint =
+      "/sml.svc/CALCULOSALDOITENSParameters(ExibirItensSemSaldo='N')/CALCULOSALDOITENS";
+    try {
+      return await this.getAllPages(endpoint);
+    } catch (err) {
+      this.handleError(err, 'buscar saldo por lote (CALCULOSALDOITENS)');
+    }
+  }
+
+  /**
    * Cria uma Delivery Note (Nota de Saida) baseada em uma OE faturada.
    *
    * Esse e o passo critico: quando a OE eh marcada como faturada no DNLog,

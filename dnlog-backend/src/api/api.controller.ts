@@ -261,6 +261,25 @@ export class ApiController {
     return linhas;
   }
 
+  // -------- ESTOQUE POR LOTE (view Semantic Layer CALCULOSALDOITENS) --------
+  @Get('estoque-lotes')
+  async getEstoqueLotes() {
+    const linhas = (await this.sap.getSaldoPorLote?.()) ?? [];
+    return linhas.map((r: any) => ({
+      item_codigo: r.CodigoItem,
+      descricao: r.NomeItem,
+      lote: r.Lote,
+      lote_mae: r.LoteMae,
+      armazem: r.CodigoDeposito,
+      armazem_nome: r.NomeDeposito,
+      saldo: Number(r.SaldoAtual) || 0,
+      comprometido_venda: Number(r.SaldoPedidoVenda) || 0,
+      a_receber_compra: Number(r.SaldoPedidoCompra) || 0,
+      validade: r.ExpDate || null,
+      custo_medio: Number(r.CustoMedio) || 0,
+    }));
+  }
+
   @Get('itens/:codigo/lotes')
   async getLotes(@Param('codigo') codigo: string) {
     const lotes = await this.sap.getBatchesForItem(codigo);
