@@ -2710,41 +2710,17 @@ const EstoqueSAP = () => {
 };
 
 const Estoque = ({ ctx }) => {
+  // A view CALCULOSALDOITENS traz DOIS tipos de linha:
+  //  • COM lote  → estoque FÍSICO no armazém (aba "Lotes").
+  //  • SEM lote  → total por ITEM, com o comprometido em pedidos de venda e o a
+  //    receber de compra (aba "Compromissos"). Somar as duas juntas contaria o
+  //    saldo em dobro — por isso ficam em abas separadas.
+  const [aba, setAba] = useState('lotes'); // 'lotes' | 'compromissos'
   const [q, setQ] = useState('');
   const [filtroArmazem, setFiltroArmazem] = useState('todos');
-  const [filtroStatus, setFiltroStatus] = useState('todos');
-  const dados = DADOS_ESTOQUE_LOTES || [];
+  const todos = DADOS_ESTOQUE_LOTES || [];
   const disp = (l) => (l.saldo || 0) - (l.comprometido_venda || 0);
 
-  const armazens = useMemo(() =>
-    Array.from(new Set(dados.map(l => l.armazem_nome || l.armazem).filter(Boolean))).sort(),
-  [dados]);
-
-  const lista = useMemo(() => {
-    let l = dados.map(x => ({ ...x, disponivel: disp(x) }));
-    if (filtroArmazem !== 'todos') l = l.filter(x => (x.armazem_nome || x.armazem) === filtroArmazem);
-    if (filtroStatus === 'disponivel') l = l.filter(x => x.disponivel > 0);
-    if (filtroStatus === 'comprometido') l = l.filter(x => (x.comprometido_venda || 0) > 0);
-    if (filtroStatus === 'esgotado') l = l.filter(x => (x.saldo || 0) <= 0);
-    if (q) {
-      const ql = q.toLowerCase();
-      l = l.filter(x =>
-        (x.lote || '').toLowerCase().includes(ql) ||
-        (x.item_codigo || '').toLowerCase().includes(ql) ||
-        (x.descricao || '').toLowerCase().includes(ql)
-      );
-    }
-    return l.sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
-  }, [dados, q, filtroArmazem, filtroStatus]);
-
-  const stats = useMemo(() => ({
-    saldo: dados.reduce((a, l) => a + (l.saldo || 0), 0),
-    comprometido: dados.reduce((a, l) => a + (l.comprometido_venda || 0), 0),
-    disponivel: dados.reduce((a, l) => a + disp(l), 0),
-    n_lotes: dados.filter(l => l.lote).length,
-  }), [dados]);
-
-  // Validade: vencido (< hoje) ou a vencer (<= 60 dias). Usa helpers existentes.
   const hoje = todayISO();
   const lim60 = addDays(hoje, 60);
   const statusValidade = (v) => {
@@ -2755,43 +2731,80 @@ const Estoque = ({ ctx }) => {
     return 'ok';
   };
 
+  const nLotes = todos.filter(l => l.lote).length;
+  const nItens = todos.filter(l => !l.lote).length;
+
+  const base = useMemo(() => todos.filter(l => (aba === 'lotes' ? l.lote : !l.lote)), [todos, aba]);
+  const armazens = useMemo(() =>
+    Array.from(new Set(base.map(l => l.armazem_nome || l.armazem).filter(Boolean))).sort(),
+  [base]);
+
+  const lista = useMemo(() => {
+    let l = base.map(x => ({ ...x, disponivel: disp(x) }));
+    if (filtroArmazem !== 'todos') l = l.filter(x => (x.armazem_nome || x.armazem) === filtroArmazem);
+    if (q) {
+      const ql = q.toLowerCase();
+      l = l.filter(x =>
+        (x.lote || '').toLowerCase().includes(ql) ||
+        (x.item_codigo || '').toLowerCase().includes(ql) ||
+        (x.descricao || '').toLowerCase().includes(ql)
+      );
+    }
+    return l.sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
+  }, [base, q, filtroArmazem]);
+
+  const stats = useMemo(() => ({
+    saldo: base.reduce((a, l) => a + (l.saldo || 0), 0),
+    comprometido: base.reduce((a, l) => a + (l.comprometido_venda || 0), 0),
+    disponivel: base.reduce((a, l) => a + disp(l), 0),
+    areceber: base.reduce((a, l) => a + (l.a_receber_compra || 0), 0),
+    n: base.length,
+    avencer: base.filter(l => ['vencido', 'avencer'].includes(statusValidade(l.validade))).length,
+    negativos: base.filter(l => disp(l) < 0).length,
+  }), [base]);
+
   return (
     <div>
       <div className="page-header">
         <div>
           <div className="crumb"><i className="ti ti-home"></i> Operação · Estoque</div>
-          <h1 className="page-title">Estoque por lote</h1>
+          <h1 className="page-title">Estoque</h1>
           <p className="page-subtitle">
-            {stats.n_lotes} lotes · {dados.length} linhas (lote × armazém) · saldo por lote do SAP
+            {aba === 'lotes'
+              ? `${stats.n} lotes físicos · saldo por lote (SAP)`
+              : `${stats.n} itens · saldo, comprometido e a receber (SAP)`}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <span className="chip chip-green"><span className="status-dot"></span> Sincronizado · SAP</span>
+          <div style={{ display: 'flex', gap: 4, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: 2 }}>
+            {[['lotes', 'Lotes (físico)', 'ti-building-warehouse', nLotes], ['compromissos', 'Compromissos', 'ti-clipboard-list', nItens]].map(([k, l, ic, n]) => (
+              <button key={k} onClick={() => { setAba(k); setFiltroArmazem('todos'); setQ(''); }} style={{
+                background: aba === k ? 'var(--bg-hover)' : 'none',
+                color: aba === k ? 'var(--text)' : 'var(--text-muted)',
+                border: 'none', padding: '6px 12px', borderRadius: 4, fontSize: 12,
+                fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
+              }}><i className={'ti ' + ic}></i> {l} <span style={{ opacity: 0.55 }}>{n}</span></button>
+            ))}
+          </div>
+          <span className="chip chip-green"><span className="status-dot"></span> SAP</span>
         </div>
       </div>
 
-      <div className="metrics">
-        <div className="metric">
-          <div className="metric-label"><i className="ti ti-package"></i> Saldo atual</div>
-          <div className="metric-value">{fmtNum(stats.saldo)}</div>
-          <div className="metric-delta">un. em estoque</div>
+      {aba === 'lotes' ? (
+        <div className="metrics">
+          <div className="metric"><div className="metric-label"><i className="ti ti-package"></i> Estoque físico</div><div className="metric-value">{fmtNum(stats.saldo)}</div><div className="metric-delta">un. em lotes</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-hash"></i> Lotes</div><div className="metric-value">{stats.n}</div><div className="metric-delta">com saldo</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-alarm"></i> A vencer</div><div className="metric-value" style={{ color: stats.avencer ? 'var(--orange)' : 'var(--text)' }}>{stats.avencer}</div><div className="metric-delta">vencidos ou ≤ 60 dias</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-building-warehouse"></i> Armazéns</div><div className="metric-value">{armazens.length}</div><div className="metric-delta">com estoque</div></div>
         </div>
-        <div className="metric">
-          <div className="metric-label"><i className="ti ti-lock"></i> Comprometido</div>
-          <div className="metric-value" style={{ color: 'var(--orange)' }}>{fmtNum(stats.comprometido)}</div>
-          <div className="metric-delta">Em pedidos de venda</div>
+      ) : (
+        <div className="metrics">
+          <div className="metric"><div className="metric-label"><i className="ti ti-package"></i> Saldo</div><div className="metric-value">{fmtNum(stats.saldo)}</div><div className="metric-delta">un. por item</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-lock"></i> Comprometido</div><div className="metric-value" style={{ color: 'var(--orange)' }}>{fmtNum(stats.comprometido)}</div><div className="metric-delta">Em pedidos de venda</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-basket"></i> Disponível</div><div className="metric-value" style={{ color: stats.disponivel < 0 ? 'var(--red)' : 'var(--green)' }}>{fmtNum(stats.disponivel)}</div><div className="metric-delta">{stats.negativos} item(ns) negativo(s)</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-truck-loading"></i> A receber</div><div className="metric-value">{fmtNum(stats.areceber)}</div><div className="metric-delta">De pedidos de compra</div></div>
         </div>
-        <div className="metric">
-          <div className="metric-label"><i className="ti ti-basket"></i> Disponível</div>
-          <div className="metric-value" style={{ color: 'var(--green)' }}>{fmtNum(stats.disponivel)}</div>
-          <div className="metric-delta">Saldo − comprometido</div>
-        </div>
-        <div className="metric">
-          <div className="metric-label"><i className="ti ti-building-warehouse"></i> Lotes</div>
-          <div className="metric-value">{stats.n_lotes}</div>
-          <div className="metric-delta">Em {armazens.length} armazém(ns)</div>
-        </div>
-      </div>
+      )}
 
       <div className="panel">
         <div className="panel-header">
@@ -2800,16 +2813,6 @@ const Estoque = ({ ctx }) => {
               <option value="todos">Todos os armazéns</option>
               {armazens.map(a => <option key={a} value={a}>{a}</option>)}
             </select>
-            <div style={{ display: 'flex', gap: 4, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: 2 }}>
-              {[['todos','Todos'],['disponivel','Disponível'],['comprometido','Comprometido'],['esgotado','Sem saldo']].map(([k,l]) => (
-                <button key={k} onClick={() => setFiltroStatus(k)} style={{
-                  background: filtroStatus === k ? 'var(--bg-hover)' : 'none',
-                  color: filtroStatus === k ? 'var(--text)' : 'var(--text-muted)',
-                  border: 'none', padding: '5px 12px', borderRadius: 4, fontSize: 12,
-                  fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600
-                }}>{l}</button>
-              ))}
-            </div>
           </div>
           <div className="search-box">
             <i className="ti ti-search"></i>
@@ -2819,44 +2822,57 @@ const Estoque = ({ ctx }) => {
         {lista.length === 0 ? (
           <div className="empty">
             <i className="ti ti-building-warehouse"></i>
-            <div>{dados.length === 0 ? 'Sem saldo por lote carregado' : 'Nenhum lote com esse filtro'}</div>
+            <div>{todos.length === 0 ? 'Sem estoque carregado' : 'Nada com esse filtro'}</div>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              {dados.length === 0
+              {todos.length === 0
                 ? 'O backend do DNLog precisa estar no ar (consulta CALCULOSALDOITENS no SAP).'
-                : 'Ajuste a busca ou os filtros de armazém/status.'}
+                : 'Ajuste a busca ou o armazém.'}
             </div>
           </div>
-        ) : (
+        ) : aba === 'lotes' ? (
           <table>
             <thead><tr>
-              <th>Lote</th><th>Item</th><th>Descrição</th><th>Armazém</th><th>Validade</th>
-              <th className="num">Saldo</th><th className="num">Compr.</th><th className="num">Disp.</th><th>Status</th>
+              <th>Lote</th><th>Item</th><th>Descrição</th><th>Armazém</th><th>Validade</th><th className="num">Saldo físico</th>
             </tr></thead>
             <tbody>{lista.map((l, i) => {
               const sv = statusValidade(l.validade);
               return (
-                <tr key={(l.item_codigo || '') + '|' + (l.lote || '') + '|' + (l.armazem || '') + '|' + i}>
-                  <td className="cell-primary mono" style={{ fontSize: 12, color: l.lote ? 'var(--accent-light)' : 'var(--text-dim)' }}>{l.lote || '—'}</td>
+                <tr key={(l.item_codigo || '') + '|' + (l.lote || '') + '|' + i}>
+                  <td className="cell-primary mono" style={{ fontSize: 12, color: 'var(--accent-light)' }}>{l.lote}</td>
                   <td className="mono cell-muted" style={{ fontSize: 11 }}>{l.item_codigo}</td>
                   <td><div className="cell-primary" style={{ fontSize: 13 }}>{l.descricao}</div></td>
                   <td style={{ fontSize: 12 }}>{l.armazem_nome || l.armazem}</td>
-                  <td className="mono" style={{ fontSize: 12, color: sv === 'vencido' ? 'var(--red)' : sv === 'avencer' ? 'var(--orange)' : 'var(--text-muted)' }}>
-                    {fmtDate(l.validade)}{sv === 'vencido' ? ' ⚠' : ''}
-                  </td>
-                  <td className="num mono cell-primary" style={{ fontWeight: 700 }}>{fmtNum(l.saldo || 0)}</td>
-                  <td className="num mono" style={{ color: (l.comprometido_venda || 0) > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{(l.comprometido_venda || 0) > 0 ? fmtNum(l.comprometido_venda) : '—'}</td>
-                  <td className="num mono cell-primary" style={{ color: l.disponivel > 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>{fmtNum(l.disponivel)}</td>
-                  <td>
-                    {(l.saldo || 0) <= 0 ?
-                      <span className="chip chip-red"><i className="ti ti-x"></i> Sem saldo</span> :
-                      (l.comprometido_venda || 0) > 0 ?
-                        <span className="chip chip-orange"><i className="ti ti-lock"></i> Comprometido</span> :
-                        <span className="chip chip-green"><i className="ti ti-check"></i> Livre</span>
-                    }
-                  </td>
+                  <td className="mono" style={{ fontSize: 12, color: sv === 'vencido' ? 'var(--red)' : sv === 'avencer' ? 'var(--orange)' : 'var(--text-muted)' }}>{fmtDate(l.validade)}{sv === 'vencido' ? ' ⚠' : ''}</td>
+                  <td className="num mono cell-primary" style={{ fontWeight: 700, color: 'var(--green)' }}>{fmtNum(l.saldo || 0)}</td>
                 </tr>
               );
             })}</tbody>
+          </table>
+        ) : (
+          <table>
+            <thead><tr>
+              <th>Item</th><th>Descrição</th><th>Armazém</th>
+              <th className="num">Saldo</th><th className="num">Compr.</th><th className="num">A receber</th><th className="num">Disp.</th><th>Status</th>
+            </tr></thead>
+            <tbody>{lista.map((l, i) => (
+              <tr key={(l.item_codigo || '') + '|' + i}>
+                <td className="cell-primary mono" style={{ fontSize: 12 }}>{l.item_codigo}</td>
+                <td><div className="cell-primary" style={{ fontSize: 13 }}>{l.descricao}</div></td>
+                <td style={{ fontSize: 12 }}>{l.armazem_nome || l.armazem}</td>
+                <td className="num mono cell-primary" style={{ fontWeight: 700 }}>{fmtNum(l.saldo || 0)}</td>
+                <td className="num mono" style={{ color: (l.comprometido_venda || 0) > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{(l.comprometido_venda || 0) > 0 ? fmtNum(l.comprometido_venda) : '—'}</td>
+                <td className="num mono" style={{ color: (l.a_receber_compra || 0) > 0 ? 'var(--blue)' : 'var(--text-dim)' }}>{(l.a_receber_compra || 0) > 0 ? fmtNum(l.a_receber_compra) : '—'}</td>
+                <td className="num mono cell-primary" style={{ color: l.disponivel < 0 ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>{fmtNum(l.disponivel)}</td>
+                <td>
+                  {l.disponivel < 0 ?
+                    <span className="chip chip-red"><i className="ti ti-arrow-down"></i> Negativo</span> :
+                    (l.comprometido_venda || 0) > 0 ?
+                      <span className="chip chip-orange"><i className="ti ti-lock"></i> Comprometido</span> :
+                      <span className="chip chip-green"><i className="ti ti-check"></i> Livre</span>
+                  }
+                </td>
+              </tr>
+            ))}</tbody>
           </table>
         )}
       </div>
