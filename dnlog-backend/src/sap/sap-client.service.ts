@@ -233,10 +233,12 @@ export class SapClientService implements OnModuleDestroy {
    * contar sem baixar os registros — bem leve. Tudo leitura.
    */
   /**
-   * Resumo de entregas da safra (pedidos de venda do ano), entregues (fechados)
-   * × não entregues (abertos), com QUEBRA POR GRUPO DE ITENS para o filtro do
-   * painel. Como a safra é pequena (~centenas de pedidos), busca os pedidos com
-   * as linhas e agrupa em memória. Um pedido conta em cada grupo que ele contém.
+   * Resumo de entregas da safra (pedidos de venda do ano) por VOLUME: soma as
+   * quantidades entregues × não entregues (não conta pedidos — um pedido grande
+   * pesa mais que um pequeno). Por linha: entregue = Quantity − saldo em aberto;
+   * não entregue = saldo em aberto (pedido fechado = tudo entregue). Com quebra
+   * por GRUPO DE ITENS para o filtro do painel. Safra pequena → busca as linhas
+   * e soma em memória.
    */
   async getResumoEntregas(): Promise<{
     entregues: number;
@@ -269,17 +271,20 @@ export class SapClientService implements OnModuleDestroy {
       let naoEnt = 0;
       const porGrupo: Record<string, { grupo_codigo: any; grupo_nome: string; entregues: number; nao_entregues: number }> = {};
       for (const o of orders || []) {
-        const entregue = o.DocumentStatus === 'bost_Close';
-        if (entregue) entregues++; else naoEnt++;
-        // Grupos distintos deste pedido (um pedido conta 1x por grupo).
+        const fechado = o.DocumentStatus === 'bost_Close';
         const linhas = Array.isArray(o.DocumentLines) ? o.DocumentLines : [];
-        const vistos = new Set<string>();
         for (const l of linhas) {
+          const qtd = Number(l.Quantity) || 0;
+          // Saldo em aberto (não entregue). Pedido fechado = tudo entregue.
+          const aberto = fechado
+            ? 0
+            : Math.min(qtd, Math.max(0, Number(l.OpenQuantity ?? l.RemainingOpenQuantity ?? qtd) || 0));
+          const entregueVol = qtd - aberto;
+          entregues += entregueVol;
+          naoEnt += aberto;
           const info = itemGrupo[l.ItemCode];
           const codigo = info ? info.codigo : null;
           const key = codigo != null ? String(codigo) : 'SEM_GRUPO';
-          if (vistos.has(key)) continue;
-          vistos.add(key);
           if (!porGrupo[key]) {
             porGrupo[key] = {
               grupo_codigo: codigo,
@@ -288,7 +293,8 @@ export class SapClientService implements OnModuleDestroy {
               nao_entregues: 0,
             };
           }
-          if (entregue) porGrupo[key].entregues++; else porGrupo[key].nao_entregues++;
+          porGrupo[key].entregues += entregueVol;
+          porGrupo[key].nao_entregues += aberto;
         }
       }
 

@@ -1905,8 +1905,8 @@ const Dashboard = ({ ctx }) => {
       <div className="panel" style={{ marginBottom: 16 }}>
         <div className="panel-header">
           <div>
-            <div className="panel-title">Pedidos entregues × não entregues</div>
-            <div className="panel-sub">Pedidos de venda da safra atual · SAP</div>
+            <div className="panel-title">Volume entregue × não entregue</div>
+            <div className="panel-sub">Volume (un.) de venda da safra atual · SAP</div>
           </div>
           {gruposEntrega.length > 0 && (
             <select
@@ -1936,13 +1936,13 @@ const Dashboard = ({ ctx }) => {
                   <span style={{ width: 12, height: 12, borderRadius: 3, background: c, display: 'inline-block', flexShrink: 0 }}></span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{l}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fmtNum(v)} pedidos · {pct.toFixed(1)}%</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fmtNum(v)} un. · {pct.toFixed(1)}%</div>
                   </div>
                 </div>
               );
             })}
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
-              Total da safra: <strong style={{ color: 'var(--text)' }}>{fmtNum(entrega.total)} pedidos</strong>
+              Total da safra: <strong style={{ color: 'var(--text)' }}>{fmtNum(entrega.total)} un.</strong>
             </div>
           </div>
         </div>
