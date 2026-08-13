@@ -2,6 +2,7 @@ import { Controller, Get, Post, Body, Inject, Logger, Param, HttpException, Http
 import { SAP_SERVICE } from '../sap/sap.module';
 import { Public } from '../common/public.decorator';
 import { OeService } from '../oe/oe.service';
+import { CacheService } from '../common/cache.service';
 
 // ===== Helpers compartilhados por pedidos de VENDA e de COMPRA =====
 // (Venda e compra têm a MESMA estrutura de linhas no SAP; estas funções evitam
@@ -75,6 +76,7 @@ export class ApiController {
   constructor(
     @Inject(SAP_SERVICE) private sap: any,
     private readonly oeService: OeService,
+    private readonly cache: CacheService,
   ) {}
 
   // -------- HEALTH --------
@@ -100,6 +102,7 @@ export class ApiController {
   // -------- PEDIDOS --------
   @Get('pedidos')
   async getPedidos() {
+   return this.cache.wrap('pedidos', async () => {
     // Busca tudo em paralelo: pedidos + catalogos para enriquecer
     // (nome do vendedor e grupo de cada item). Os catalogos sao opcionais —
     // se algum falhar, o pedido ainda volta, so sem o enriquecimento.
@@ -133,17 +136,26 @@ export class ApiController {
         ...resumirLinhas(p, itemInfo),
       };
     });
+   });
   }
 
   // -------- RESUMO DE ENTREGAS (para o gráfico do painel) --------
   @Get('pedidos-resumo')
   async getPedidosResumo() {
-    return (await this.sap.getResumoEntregas?.()) ?? { entregues: 0, nao_entregues: 0, grupos: [] };
+    // cacheIf: não guarda um resumo degradado (sem grupos) — assim um hiccup de
+    // catálogo logo após o restart não fica preso por todo o TTL.
+    return this.cache.wrap(
+      'pedidos-resumo',
+      async () => (await this.sap.getResumoEntregas?.()) ?? { entregues: 0, nao_entregues: 0, grupos: [] },
+      undefined,
+      (r: any) => Array.isArray(r?.grupos) && r.grupos.length > 0,
+    );
   }
 
   // -------- PEDIDOS DE COMPRA --------
   @Get('pedidos-compra')
   async getPedidosCompra() {
+   return this.cache.wrap('pedidos-compra', async () => {
     const [pedidosSap, itens, grupos] = await Promise.all([
       this.sap.getPedidosCompraAbertos?.().catch(() => []) ?? [],
       this.sap.getItems?.().catch(() => []) ?? [],
@@ -163,11 +175,14 @@ export class ApiController {
       tem_saldo: p.DocumentStatus === 'bost_Open',
       ...resumirLinhas(p, itemInfo),
     }));
+   });
   }
 
   // -------- CLIENTES E FORNECEDORES --------
   @Get('clientes')
   async getClientes() {
+   // Cadastros mudam pouco → TTL maior (10 min).
+   return this.cache.wrap('clientes', async () => {
     const bps = await this.sap.getBusinessPartners('cCustomer');
     return bps.map((b: any) => ({
       codigo: b.CardCode,
@@ -176,10 +191,12 @@ export class ApiController {
       telefone: b.Phone1,
       email: b.EmailAddress,
     }));
+   }, 600000);
   }
 
   @Get('fornecedores')
   async getFornecedores() {
+   return this.cache.wrap('fornecedores', async () => {
     const bps = await this.sap.getBusinessPartners('cSupplier');
     return bps.map((b: any) => {
       const a = this.escolherEndereco(b.BPAddresses);
@@ -192,6 +209,7 @@ export class ApiController {
         uf: a?.State || '',
       };
     });
+   }, 600000);
   }
 
   /** Escolhe o endereco do parceiro: prefere entrega (ShipTo), senao o primeiro. */
@@ -216,6 +234,7 @@ export class ApiController {
   // -------- ITENS / LOTES --------
   @Get('itens')
   async getItens() {
+   return this.cache.wrap('itens', async () => {
     const itens = await this.sap.getItems();
     return itens.map((i: any) => ({
       codigo: i.ItemCode,
@@ -223,11 +242,13 @@ export class ApiController {
       cultivar: i.U_CULTIVAR,
       controla_lote: i.ManageBatchNumbers === 'tYES',
     }));
+   }, 600000);
   }
 
   // -------- ESTOQUE (saldo por item x armazem) --------
   @Get('estoque')
   async getEstoque() {
+   return this.cache.wrap('estoque', async () => {
     const [itens, armazens] = await Promise.all([
       this.sap.getEstoque(),
       this.sap.getWarehouses(),
@@ -259,11 +280,13 @@ export class ApiController {
       }
     }
     return linhas;
+   });
   }
 
   // -------- ESTOQUE POR LOTE (view Semantic Layer CALCULOSALDOITENS) --------
   @Get('estoque-lotes')
   async getEstoqueLotes() {
+   return this.cache.wrap('estoque-lotes', async () => {
     const linhas = (await this.sap.getSaldoPorLote?.()) ?? [];
     return linhas.map((r: any) => ({
       item_codigo: r.CodigoItem,
@@ -278,6 +301,7 @@ export class ApiController {
       validade: r.ExpDate || null,
       custo_medio: Number(r.CustoMedio) || 0,
     }));
+   });
   }
 
   @Get('itens/:codigo/lotes')
@@ -392,6 +416,10 @@ export class ApiController {
       }
     }
 
+    // A baixa de estoque no SAP aconteceu → limpa o cache de leitura (estoque,
+    // pedidos, resumo) para não servir saldo velho no próximo carregamento.
+    this.cache.invalidate();
+
     return {
       sucesso: true,
       notas,
@@ -424,6 +452,7 @@ export class ApiController {
     };
 
     const po = await this.sap.createPurchaseOrder(payload);
+    this.cache.invalidate(); // criou pedido de compra no SAP → limpa o cache
     return {
       sucesso: true,
       sap_doc_entry: po.DocEntry,
