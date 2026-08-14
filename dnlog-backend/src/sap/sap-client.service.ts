@@ -470,6 +470,26 @@ export class SapClientService implements OnModuleDestroy {
   }
 
   /**
+   * Estoque por item × armazém — usado para os armazéns de TERCEIROS, que a view
+   * de lotes (CALCULOSALDOITENS, escopo DN_EST) não cobre:
+   *  - DN_EMTER "EM Terceiros" = nosso estoque guardado em terceiros;
+   *  - DN_DETER "DE Terceiros" = estoque de terceiros guardado conosco (serviço).
+   * Vem do ItemWarehouseInfoCollection. A Service Layer não filtra coleção
+   * aninhada (any() dá erro), então busca todos os itens (poucos, ~500) e o
+   * controller filtra os armazéns de terceiros. SOMENTE LEITURA.
+   */
+  async getEstoqueTerceiros(): Promise<any[]> {
+    await this.ensureSession();
+    try {
+      return await this.getAllPages('/Items', {
+        $select: 'ItemCode,ItemName,ItemsGroupCode,ItemWarehouseInfoCollection',
+      });
+    } catch (err) {
+      this.handleError(err, 'buscar estoque de terceiros');
+    }
+  }
+
+  /**
    * Cria uma Delivery Note (Nota de Saida) baseada em uma OE faturada.
    *
    * Esse e o passo critico: quando a OE eh marcada como faturada no DNLog,

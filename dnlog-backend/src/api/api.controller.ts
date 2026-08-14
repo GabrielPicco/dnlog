@@ -287,21 +287,73 @@ export class ApiController {
   @Get('estoque-lotes')
   async getEstoqueLotes() {
    return this.cache.wrap('estoque-lotes', async () => {
-    const linhas = (await this.sap.getSaldoPorLote?.()) ?? [];
-    return linhas.map((r: any) => ({
-      item_codigo: r.CodigoItem,
-      descricao: r.NomeItem,
-      lote: r.Lote,
-      lote_mae: r.LoteMae,
-      armazem: r.CodigoDeposito,
-      armazem_nome: r.NomeDeposito,
-      saldo: Number(r.SaldoAtual) || 0,
-      comprometido_venda: Number(r.SaldoPedidoVenda) || 0,
-      a_receber_compra: Number(r.SaldoPedidoCompra) || 0,
-      validade: r.ExpDate || null,
-      custo_medio: Number(r.CustoMedio) || 0,
-    }));
+    const [linhas, itens, grupos] = await Promise.all([
+      this.sap.getSaldoPorLote?.() ?? [],
+      this.sap.getItems?.().catch(() => []) ?? [],
+      this.sap.getItemGroups?.().catch(() => []) ?? [],
+    ]);
+    const itemInfo = construirItemInfo(itens, grupos);
+    return (linhas as any[]).map((r: any) => {
+      const info = itemInfo[r.CodigoItem] || { grupo_codigo: null, grupo_nome: '' };
+      return {
+        item_codigo: r.CodigoItem,
+        descricao: r.NomeItem,
+        grupo_codigo: info.grupo_codigo,
+        grupo_nome: info.grupo_nome,
+        lote: r.Lote,
+        lote_mae: r.LoteMae,
+        armazem: r.CodigoDeposito,
+        armazem_nome: r.NomeDeposito,
+        saldo: Number(r.SaldoAtual) || 0,
+        comprometido_venda: Number(r.SaldoPedidoVenda) || 0,
+        a_receber_compra: Number(r.SaldoPedidoCompra) || 0,
+        validade: r.ExpDate || null,
+        custo_medio: Number(r.CustoMedio) || 0,
+      };
+    });
    });
+  }
+
+  // -------- ESTOQUE EM/DE TERCEIROS (armazéns DN_EMTER e DN_DETER) --------
+  @Get('estoque-terceiros')
+  async getEstoqueTerceiros() {
+    return this.cache.wrap('estoque-terceiros', async () => {
+      const [itens, armazens, grupos] = await Promise.all([
+        this.sap.getEstoqueTerceiros?.() ?? [],
+        this.sap.getWarehouses?.().catch(() => []) ?? [],
+        this.sap.getItemGroups?.().catch(() => []) ?? [],
+      ]);
+      const nomeArmazem: Record<string, string> = {};
+      for (const w of armazens || []) nomeArmazem[w.WarehouseCode] = w.WarehouseName;
+      const grupoNome: Record<string, string> = {};
+      for (const g of grupos || []) grupoNome[String(g.Number)] = g.GroupName;
+      // DN_EMTER = nosso, guardado em terceiros ('em'); DN_DETER = de terceiros,
+      // guardado conosco ('de'). Só esses dois armazéns interessam aqui.
+      const TIPO: Record<string, string> = { DN_EMTER: 'em', DN_DETER: 'de' };
+      const linhas: any[] = [];
+      for (const it of itens || []) {
+        for (const w of it.ItemWarehouseInfoCollection || []) {
+          const tipo = TIPO[w.WarehouseCode];
+          if (!tipo) continue;
+          const saldo = Number(w.InStock) || 0;
+          const comprometido = Number(w.Committed) || 0;
+          if (saldo === 0 && comprometido === 0) continue;
+          linhas.push({
+            item_codigo: it.ItemCode,
+            descricao: it.ItemName,
+            grupo_codigo: it.ItemsGroupCode,
+            grupo_nome: grupoNome[String(it.ItemsGroupCode)] || '',
+            armazem: w.WarehouseCode,
+            armazem_nome: nomeArmazem[w.WarehouseCode] || w.WarehouseCode,
+            tipo, // 'em' | 'de'
+            saldo,
+            comprometido,
+            disponivel: saldo - comprometido,
+          });
+        }
+      }
+      return linhas;
+    }, 600000); // 10 min — muda pouco
   }
 
   @Get('itens/:codigo/lotes')

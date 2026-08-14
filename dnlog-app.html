@@ -791,6 +791,12 @@ let DADOS_ESTOQUE = [];
 //   a_receber_compra, validade, ...}]. Vazio até o backend responder.
 let DADOS_ESTOQUE_LOTES = [];
 
+// Estoque nos armazéns de TERCEIROS (item × armazém, do SAP):
+// [{item_codigo, descricao, armazem, armazem_nome, tipo:'em'|'de', saldo,
+//   comprometido, disponivel}]. 'em' = nosso guardado fora; 'de' = de terceiros
+// guardado conosco. Vazio até o backend responder.
+let DADOS_ESTOQUE_TERCEIROS = [];
+
 // Pedidos de COMPRA (PurchaseOrders) carregados do SAP no bootstrap.
 let DADOS_PEDIDOS_COMPRA = [];
 
@@ -2715,11 +2721,14 @@ const Estoque = ({ ctx }) => {
   //  • SEM lote  → total por ITEM, com o comprometido em pedidos de venda e o a
   //    receber de compra (aba "Compromissos"). Somar as duas juntas contaria o
   //    saldo em dobro — por isso ficam em abas separadas.
-  const [aba, setAba] = useState('lotes'); // 'lotes' | 'compromissos'
+  const [aba, setAba] = useState('lotes'); // 'lotes' | 'compromissos' | 'terceiros'
   const [q, setQ] = useState('');
   const [filtroArmazem, setFiltroArmazem] = useState('todos');
-  const todos = DADOS_ESTOQUE_LOTES || [];
-  const disp = (l) => (l.saldo || 0) - (l.comprometido_venda || 0);
+  const [filtroGrupo, setFiltroGrupo] = useState('todos');
+  const lotesRaw = DADOS_ESTOQUE_LOTES || [];
+  const terceirosRaw = DADOS_ESTOQUE_TERCEIROS || [];
+  // disponível: usa o já calculado (terceiros) ou saldo − comprometido (lotes).
+  const disp = (l) => (l.disponivel != null ? l.disponivel : (l.saldo || 0) - (l.comprometido_venda || 0));
 
   const hoje = todayISO();
   const lim60 = addDays(hoje, 60);
@@ -2731,17 +2740,25 @@ const Estoque = ({ ctx }) => {
     return 'ok';
   };
 
-  const nLotes = todos.filter(l => l.lote).length;
-  const nItens = todos.filter(l => !l.lote).length;
+  const nLotes = lotesRaw.filter(l => l.lote).length;
+  const nItens = lotesRaw.filter(l => !l.lote).length;
+  const nTerc = terceirosRaw.length;
 
-  const base = useMemo(() => todos.filter(l => (aba === 'lotes' ? l.lote : !l.lote)), [todos, aba]);
+  const base = useMemo(() => {
+    if (aba === 'terceiros') return terceirosRaw;
+    return lotesRaw.filter(l => (aba === 'lotes' ? l.lote : !l.lote));
+  }, [lotesRaw, terceirosRaw, aba]);
   const armazens = useMemo(() =>
     Array.from(new Set(base.map(l => l.armazem_nome || l.armazem).filter(Boolean))).sort(),
+  [base]);
+  const grupos = useMemo(() =>
+    Array.from(new Set(base.map(l => l.grupo_nome).filter(Boolean))).sort(),
   [base]);
 
   const lista = useMemo(() => {
     let l = base.map(x => ({ ...x, disponivel: disp(x) }));
     if (filtroArmazem !== 'todos') l = l.filter(x => (x.armazem_nome || x.armazem) === filtroArmazem);
+    if (filtroGrupo !== 'todos') l = l.filter(x => x.grupo_nome === filtroGrupo);
     if (q) {
       const ql = q.toLowerCase();
       l = l.filter(x =>
@@ -2751,16 +2768,18 @@ const Estoque = ({ ctx }) => {
       );
     }
     return l.sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
-  }, [base, q, filtroArmazem]);
+  }, [base, q, filtroArmazem, filtroGrupo]);
 
   const stats = useMemo(() => ({
     saldo: base.reduce((a, l) => a + (l.saldo || 0), 0),
-    comprometido: base.reduce((a, l) => a + (l.comprometido_venda || 0), 0),
+    comprometido: base.reduce((a, l) => a + (l.comprometido_venda || l.comprometido || 0), 0),
     disponivel: base.reduce((a, l) => a + disp(l), 0),
     areceber: base.reduce((a, l) => a + (l.a_receber_compra || 0), 0),
     n: base.length,
     avencer: base.filter(l => ['vencido', 'avencer'].includes(statusValidade(l.validade))).length,
     negativos: base.filter(l => disp(l) < 0).length,
+    em: base.filter(l => l.tipo === 'em').reduce((a, l) => a + (l.saldo || 0), 0),
+    de: base.filter(l => l.tipo === 'de').reduce((a, l) => a + (l.saldo || 0), 0),
   }), [base]);
 
   return (
@@ -2772,13 +2791,15 @@ const Estoque = ({ ctx }) => {
           <p className="page-subtitle">
             {aba === 'lotes'
               ? `${stats.n} lotes físicos · saldo por lote (SAP)`
-              : `${stats.n} itens · saldo, comprometido e a receber (SAP)`}
+              : aba === 'compromissos'
+              ? `${stats.n} itens · saldo, comprometido e a receber (SAP)`
+              : `${stats.n} linha(s) em armazéns de terceiros (SAP)`}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: 4, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: 2 }}>
-            {[['lotes', 'Lotes (físico)', 'ti-building-warehouse', nLotes], ['compromissos', 'Compromissos', 'ti-clipboard-list', nItens]].map(([k, l, ic, n]) => (
-              <button key={k} onClick={() => { setAba(k); setFiltroArmazem('todos'); setQ(''); }} style={{
+            {[['lotes', 'Lotes (físico)', 'ti-building-warehouse', nLotes], ['compromissos', 'Compromissos', 'ti-clipboard-list', nItens], ['terceiros', 'Terceiros', 'ti-arrows-exchange', nTerc]].map(([k, l, ic, n]) => (
+              <button key={k} onClick={() => { setAba(k); setFiltroArmazem('todos'); setFiltroGrupo('todos'); setQ(''); }} style={{
                 background: aba === k ? 'var(--bg-hover)' : 'none',
                 color: aba === k ? 'var(--text)' : 'var(--text-muted)',
                 border: 'none', padding: '6px 12px', borderRadius: 4, fontSize: 12,
@@ -2797,12 +2818,19 @@ const Estoque = ({ ctx }) => {
           <div className="metric"><div className="metric-label"><i className="ti ti-alarm"></i> A vencer</div><div className="metric-value" style={{ color: stats.avencer ? 'var(--orange)' : 'var(--text)' }}>{stats.avencer}</div><div className="metric-delta">vencidos ou ≤ 60 dias</div></div>
           <div className="metric"><div className="metric-label"><i className="ti ti-building-warehouse"></i> Armazéns</div><div className="metric-value">{armazens.length}</div><div className="metric-delta">com estoque</div></div>
         </div>
-      ) : (
+      ) : aba === 'compromissos' ? (
         <div className="metrics">
           <div className="metric"><div className="metric-label"><i className="ti ti-package"></i> Saldo</div><div className="metric-value">{fmtNum(stats.saldo)}</div><div className="metric-delta">un. por item</div></div>
           <div className="metric"><div className="metric-label"><i className="ti ti-lock"></i> Comprometido</div><div className="metric-value" style={{ color: 'var(--orange)' }}>{fmtNum(stats.comprometido)}</div><div className="metric-delta">Em pedidos de venda</div></div>
           <div className="metric"><div className="metric-label"><i className="ti ti-basket"></i> Disponível</div><div className="metric-value" style={{ color: stats.disponivel < 0 ? 'var(--red)' : 'var(--green)' }}>{fmtNum(stats.disponivel)}</div><div className="metric-delta">{stats.negativos} item(ns) negativo(s)</div></div>
           <div className="metric"><div className="metric-label"><i className="ti ti-truck-loading"></i> A receber</div><div className="metric-value">{fmtNum(stats.areceber)}</div><div className="metric-delta">De pedidos de compra</div></div>
+        </div>
+      ) : (
+        <div className="metrics">
+          <div className="metric"><div className="metric-label"><i className="ti ti-arrows-exchange"></i> Total em terceiros</div><div className="metric-value">{fmtNum(stats.saldo)}</div><div className="metric-delta">un. nos armazéns de terceiros</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-building-warehouse"></i> EM terceiros</div><div className="metric-value" style={{ color: 'var(--blue)' }}>{fmtNum(stats.em)}</div><div className="metric-delta">Nosso, guardado fora</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-users"></i> DE terceiros</div><div className="metric-value" style={{ color: 'var(--orange)' }}>{fmtNum(stats.de)}</div><div className="metric-delta">De clientes, conosco</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-list"></i> Linhas</div><div className="metric-value">{stats.n}</div><div className="metric-delta">item × armazém</div></div>
         </div>
       )}
 
@@ -2813,6 +2841,10 @@ const Estoque = ({ ctx }) => {
               <option value="todos">Todos os armazéns</option>
               {armazens.map(a => <option key={a} value={a}>{a}</option>)}
             </select>
+            <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filtroGrupo} onChange={e => setFiltroGrupo(e.target.value)}>
+              <option value="todos">Todos os grupos</option>
+              {grupos.map(g => <option key={g} value={g}>{g}</option>)}
+            </select>
           </div>
           <div className="search-box">
             <i className="ti ti-search"></i>
@@ -2822,10 +2854,14 @@ const Estoque = ({ ctx }) => {
         {lista.length === 0 ? (
           <div className="empty">
             <i className="ti ti-building-warehouse"></i>
-            <div>{todos.length === 0 ? 'Sem estoque carregado' : 'Nada com esse filtro'}</div>
+            <div>{base.length === 0
+              ? (aba === 'terceiros' ? 'Sem estoque em terceiros no momento' : 'Sem estoque carregado')
+              : 'Nada com esse filtro'}</div>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              {todos.length === 0
-                ? 'O backend do DNLog precisa estar no ar (consulta CALCULOSALDOITENS no SAP).'
+              {base.length === 0
+                ? (aba === 'terceiros'
+                    ? 'Nenhum saldo nos armazéns EM/DE Terceiros agora. Aparece aqui automaticamente quando houver mercadoria.'
+                    : 'O backend do DNLog precisa estar no ar (consulta CALCULOSALDOITENS no SAP).')
                 : 'Ajuste a busca ou o armazém.'}
             </div>
           </div>
@@ -2848,7 +2884,7 @@ const Estoque = ({ ctx }) => {
               );
             })}</tbody>
           </table>
-        ) : (
+        ) : aba === 'compromissos' ? (
           <table>
             <thead><tr>
               <th>Item</th><th>Descrição</th><th>Armazém</th>
@@ -2871,6 +2907,28 @@ const Estoque = ({ ctx }) => {
                       <span className="chip chip-green"><i className="ti ti-check"></i> Livre</span>
                   }
                 </td>
+              </tr>
+            ))}</tbody>
+          </table>
+        ) : (
+          <table>
+            <thead><tr>
+              <th>Tipo</th><th>Item</th><th>Descrição</th><th>Armazém</th>
+              <th className="num">Saldo</th><th className="num">Compr.</th><th className="num">Disp.</th>
+            </tr></thead>
+            <tbody>{lista.map((l, i) => (
+              <tr key={(l.item_codigo || '') + '|' + (l.armazem || '') + '|' + i}>
+                <td>
+                  {l.tipo === 'em'
+                    ? <span className="chip" style={{ background: 'var(--blue-bg)', color: 'var(--blue)' }}>Em terceiros</span>
+                    : <span className="chip chip-orange">De terceiros</span>}
+                </td>
+                <td className="mono cell-muted" style={{ fontSize: 11 }}>{l.item_codigo}</td>
+                <td><div className="cell-primary" style={{ fontSize: 13 }}>{l.descricao}</div></td>
+                <td style={{ fontSize: 12 }}>{l.armazem_nome || l.armazem}</td>
+                <td className="num mono cell-primary" style={{ fontWeight: 700 }}>{fmtNum(l.saldo || 0)}</td>
+                <td className="num mono" style={{ color: (l.comprometido || 0) > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{(l.comprometido || 0) > 0 ? fmtNum(l.comprometido) : '—'}</td>
+                <td className="num mono cell-primary" style={{ color: l.disponivel < 0 ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>{fmtNum(l.disponivel)}</td>
               </tr>
             ))}</tbody>
           </table>
@@ -6560,6 +6618,17 @@ const AdminUsuarios = ({ ctx }) => {
       }
     } catch (e) {
       console.warn('[DNLog API] Saldo por lote não carregado:', e.message);
+    }
+
+    // Estoque em/de terceiros (armazéns DN_EMTER/DN_DETER) — não-fatal.
+    try {
+      const terc = await fetchTimeout(`${API_BASE}/estoque-terceiros`, DATA_TIMEOUT_MS);
+      if (Array.isArray(terc)) {
+        DADOS_ESTOQUE_TERCEIROS = terc;
+        console.log(`[DNLog API] ${DADOS_ESTOQUE_TERCEIROS.length} linhas de estoque em terceiros`);
+      }
+    } catch (e) {
+      console.warn('[DNLog API] Estoque de terceiros não carregado:', e.message);
     }
 
     // Pedidos de compra (não-fatal).
