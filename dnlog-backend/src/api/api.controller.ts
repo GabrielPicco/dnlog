@@ -87,16 +87,17 @@ export class ApiController {
     return {
       status: 'ok',
       modo: process.env.USE_MOCK === 'true' ? 'mock' : 'sap_real',
-      // Somente leitura no SAP (padrao). O frontend usa isso para nem tentar
-      // faturar enquanto a escrita estiver desligada.
-      somente_leitura: process.env.SAP_READ_ONLY !== 'false',
+      // SOMENTE LEITURA no SAP — HARDCODED (não depende de .env). O frontend usa
+      // isso para nem oferecer faturar. A escrita é bloqueada por construção no
+      // sap-client (trava de rede + trava de método).
+      somente_leitura: true,
       timestamp: new Date().toISOString(),
     };
   }
 
-  /** true enquanto a escrita no SAP estiver desligada (padrao). */
+  /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
-    return process.env.SAP_READ_ONLY !== 'false';
+    return true;
   }
 
   // -------- PEDIDOS --------

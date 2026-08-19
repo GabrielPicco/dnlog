@@ -49,21 +49,20 @@ export class SapClientService implements OnModuleDestroy {
     });
 
     // ========================================================================
-    // TRAVA DE REDE ABSOLUTA (somente leitura) — a garantia mais forte.
-    // Bloqueia QUALQUER método que não seja GET (POST/PATCH/PUT/DELETE) antes
-    // de sair pela rede. Assim o DNLog NUNCA insere, baixa estoque/lote/saldo,
-    // emite ou exclui nada no SAP — nem por engano, nem por código novo.
-    // Exceção: /Login e /Logout (apenas sessão, não são dados).
-    // Só é possível liberar com a flag EXPLÍCITA SAP_ENABLE_WRITES=true
-    // (padrão false). Mantenha false. Ligar exige decisão deliberada.
+    // TRAVA DE REDE ABSOLUTA E HARDCODED (somente leitura) — a garantia final.
+    // Bloqueia QUALQUER método que não seja GET (POST/PATCH/PUT/DELETE) antes de
+    // sair pela rede. NÃO existe flag, variável de ambiente ou configuração que
+    // libere isso: o DNLog NUNCA insere, baixa estoque/lote/saldo, emite ou
+    // exclui nada no SAP. Só uma MUDANÇA DELIBERADA DESTE CÓDIGO poderia permitir
+    // escrita — jamais um .env. Exceção: /Login e /Logout (apenas sessão, não são
+    // dados; o Login ainda usa outra instância axios e nem passa por aqui).
     // ========================================================================
     this.axios.interceptors.request.use((cfg) => {
       const metodo = (cfg.method || 'get').toLowerCase();
       const url = String(cfg.url || '');
       const ehSessao = /\/Login$|\/Logout$/i.test(url);
-      const escritaLiberada = this.config.get<string>('SAP_ENABLE_WRITES') === 'true';
-      if (metodo !== 'get' && !ehSessao && !escritaLiberada) {
-        this.logger.error(`BLOQUEIO DE REDE: ${metodo.toUpperCase()} ${url} recusado — o DNLog é SOMENTE LEITURA no SAP.`);
+      if (metodo !== 'get' && !ehSessao) {
+        this.logger.error(`BLOQUEIO DE REDE: ${metodo.toUpperCase()} ${url} recusado — o DNLog é SOMENTE LEITURA no SAP (sem exceção).`);
         return Promise.reject(
           new HttpException(
             `DNLog é SOMENTE LEITURA no SAP: ${metodo.toUpperCase()} ${url} bloqueado na camada de rede. Nada foi enviado ao SAP.`,
@@ -88,17 +87,6 @@ export class SapClientService implements OnModuleDestroy {
         return Promise.reject(error);
       },
     );
-  }
-
-  /**
-   * Modo SOMENTE LEITURA. Quando ligado (padrao), qualquer tentativa de
-   * escrita no SAP (criar Delivery Note / Purchase Order) e bloqueada ANTES
-   * de sair pela rede. Existe para garantir que, na fase de implantacao e
-   * testes, o DNLog nunca altere o banco do SAP — so consulta.
-   * So desliga se SAP_READ_ONLY estiver explicitamente em 'false'.
-   */
-  private get readOnly(): boolean {
-    return this.config.get<string>('SAP_READ_ONLY') !== 'false';
   }
 
   /**
@@ -525,20 +513,19 @@ export class SapClientService implements OnModuleDestroy {
   }
 
   /**
-   * Trava de seguranca: aborta qualquer escrita no SAP enquanto o modo
-   * SOMENTE LEITURA estiver ligado. Lancada ANTES de qualquer chamada de rede,
-   * entao nada chega ao SAP. E a ultima linha de defesa contra alterar o ERP
-   * durante a implantacao.
+   * Trava de segurança HARDCODED: aborta SEMPRE qualquer escrita no SAP,
+   * independente de qualquer flag/.env. Lançada ANTES de qualquer chamada de
+   * rede, então nada chega ao SAP. Junto com a trava de rede no construtor, são
+   * as duas garantias de que o DNLog é somente leitura por construção. Habilitar
+   * escrita exigiria remover ESTA trava E a de rede (mudança de código), nunca
+   * uma variável de ambiente.
    */
   private bloquearSeSomenteLeitura(acao: string): void {
-    if (this.readOnly) {
-      this.logger.warn(`BLOQUEADO (somente leitura): tentativa de ${acao} no SAP`);
-      throw new HttpException(
-        `SAP em modo SOMENTE LEITURA — ${acao} foi bloqueado. Nada foi gravado no SAP. ` +
-          `Para habilitar escrita, defina SAP_READ_ONLY=false no .env.`,
-        HttpStatus.FORBIDDEN,
-      );
-    }
+    this.logger.warn(`BLOQUEADO (somente leitura, hardcoded): tentativa de ${acao} no SAP`);
+    throw new HttpException(
+      `DNLog é SOMENTE LEITURA no SAP — ${acao} bloqueado. Nada foi gravado no SAP.`,
+      HttpStatus.FORBIDDEN,
+    );
   }
 
   /**
