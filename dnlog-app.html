@@ -898,7 +898,12 @@ const STORAGE_KEY = 'dnlog_v2';
 // o servidor vira a fonte da verdade e todos os usuários veem as mesmas OEs.
 // Tudo aqui é "best-effort": se o backend cair, o app segue funcionando.
 // ============================================================
-const DNLOG_API_BASE = 'http://localhost:3000/api';
+// A API fica na MESMA origem que serve o app (o backend serve o index.html).
+// Assim funciona em qualquer lugar: localhost:3000 no dev, dnlog.onrender.com em
+// produção. Fallback para localhost só quando aberto como arquivo (file://).
+const DNLOG_API_BASE = (typeof window !== 'undefined' && window.location && window.location.origin && window.location.origin.indexOf('http') === 0)
+  ? window.location.origin + '/api'
+  : 'http://localhost:3000/api';
 window.__DNLOG_BACKEND_ON = false; // ligado pelo bootstrap quando o /health responde
 
 // Cabeçalho com o token de sessão — a API de dados/OE agora exige login.
@@ -6485,7 +6490,9 @@ const AdminUsuarios = ({ ctx }) => {
     if (temaSalvo) document.documentElement.setAttribute('data-theme', temaSalvo);
   } catch (e) {}
 
-  const API_BASE = 'http://localhost:3000/api';
+  const API_BASE = (window.location && window.location.origin && window.location.origin.indexOf('http') === 0)
+    ? window.location.origin + '/api'
+    : 'http://localhost:3000/api';
   const TIMEOUT_MS = 4000;        // probe rápido do /health (detecta backend)
   const DATA_TIMEOUT_MS = 45000;  // consultas de dados (pedidos paginados do SAP demoram)
 

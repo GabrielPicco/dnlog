@@ -1,0 +1,77 @@
+# ============================================================
+# Render Blueprint — DNLog (backend NestJS que também serve o app)
+# ------------------------------------------------------------
+# Um único web service persistente: reusa UMA sessão SAP e mantém o cache
+# (por isso não é serverless). O banco é o Supabase (Postgres), setado por
+# variáveis de ambiente SECRETAS no painel do Render (sync: false).
+#
+# Para usar: no Render → New → Blueprint → aponte para este repositório.
+# Depois preencha no painel as variáveis marcadas "sync: false".
+# ============================================================
+services:
+  - type: web
+    name: dnlog
+    runtime: node
+    rootDir: dnlog-backend
+    plan: free
+    branch: main
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /api/health
+    envVars:
+      # ----- Node -----
+      - key: NODE_VERSION
+        value: "20"
+      # ----- Modo / segurança (somente leitura já é hardcoded no código) -----
+      - key: USE_MOCK
+        value: "false"
+      - key: SAP_READ_ONLY
+        value: "true"
+      - key: AUTH_BYPASS
+        value: "false"
+      - key: DNLOG_PUBLIC_DIR
+        value: "public"
+      # ----- SAP Service Layer (não-secreto; a SENHA é secreta, abaixo) -----
+      - key: SAP_SERVICE_LAYER_URL
+        value: "https://sap-dnseeds-sl.skyinone.net:50000/b1s/v1"
+      - key: SAP_COMPANY_DB
+        value: "SBODNSPRD"
+      - key: SAP_USERNAME
+        value: "int_dnseeds"
+      - key: SAP_LANGUAGE
+        value: "23"
+      - key: SAP_IGNORE_SSL_ERRORS
+        value: "true"
+      # ----- Login Google (Client ID é público) -----
+      - key: GOOGLE_CLIENT_ID
+        value: "920998476809-iuhc7pfj55mgk3pmkebljacd4r5ti3vn.apps.googleusercontent.com"
+      - key: GOOGLE_AUTHORIZED_DOMAIN
+        value: "dnseeds.com.br"
+      - key: ADMIN_EMAIL
+        value: "gabriel@dnseeds.com.br"
+      # ----- Banco: Postgres (Supabase) -----
+      - key: DB_TYPE
+        value: "postgres"
+      - key: DB_SSL
+        value: "true"
+      - key: DB_SYNCHRONIZE
+        value: "true"   # cria as tabelas no 1º deploy; trocar por migrations depois
+      # ============================================================
+      # SEGREDOS — preencher NO PAINEL do Render (sync: false = não vem do repo)
+      # ============================================================
+      - key: SAP_PASSWORD          # senha do usuário int_dnseeds (a mesma do BI)
+        sync: false
+      - key: JWT_SECRET            # gerar novo: openssl rand -base64 48
+        sync: false
+      - key: DB_HOST               # Supabase → Project Settings → Database → Host
+        sync: false
+      - key: DB_PORT               # 5432 (conexão direta) ou 6543 (pooler)
+        sync: false
+      - key: DB_USERNAME           # normalmente "postgres"
+        sync: false
+      - key: DB_PASSWORD           # senha do banco Supabase
+        sync: false
+      - key: DB_NAME               # normalmente "postgres"
+        sync: false
+      - key: CORS_ORIGIN           # a URL do serviço, ex.: https://dnlog.onrender.com
+        sync: false

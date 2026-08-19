@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "description": "Backend de integração SAP B1 para DNLog",
   "private": true,
+  "engines": {
+    "node": ">=18 <=22"
+  },
   "scripts": {
     "build": "nest build",
+    "postbuild": "node scripts/copy-frontend.js",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main",
