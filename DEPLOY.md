@@ -20,10 +20,19 @@ git remote add origin https://github.com/<sua-org>/dnlog.git
 git push -u origin main
 ```
 
-## 2. Criar o banco no Supabase
+## 2. Banco no Supabase (projeto novo OU reaproveitar um existente)
 
-1. supabase.com → New project (nome: `dnlog`). Guarde a **Database Password**.
-2. Project Settings → **Database** → **Connection string** → aba **"Session pooler"**
+Pode **reaproveitar** um projeto Supabase que já existe (ex.: o do QC) — o DNLog
+fica num **schema próprio (`dnlog`)**, isolado das outras tabelas. Ou criar um
+projeto novo, se o plano free permitir.
+
+1. Se novo: supabase.com → New project (nome `dnlog`). Guarde a **Database Password**.
+   Se reaproveitar: use a senha do banco do projeto existente.
+2. **Crie o schema** do DNLog — Supabase → **SQL Editor** → rode:
+   ```sql
+   create schema if not exists dnlog;
+   ```
+3. Project Settings → **Database** → **Connection string** → aba **"Session pooler"**
    (é IPv4, funciona com o Render). Anote:
    - **Host**: `aws-0-<região>.pooler.supabase.com`
    - **Port**: `5432`

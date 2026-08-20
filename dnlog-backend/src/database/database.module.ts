@@ -33,7 +33,10 @@ import { Oe } from '../oe/oe.entity';
           config.get<string>('DB_SYNCHRONIZE') === 'true' || type === 'sqlite';
 
         if (type === 'postgres') {
-          logger.log('Banco: PostgreSQL');
+          // schema dedicado (ex.: 'dnlog') permite compartilhar o MESMO banco
+          // Supabase com outros apps (QC) sem colisão de tabelas. Padrão: public.
+          const schema = config.get<string>('DB_SCHEMA') || 'public';
+          logger.log(`Banco: PostgreSQL (schema: ${schema})`);
           return {
             type: 'postgres' as const,
             host: config.get<string>('DB_HOST') || 'localhost',
@@ -41,6 +44,7 @@ import { Oe } from '../oe/oe.entity';
             username: config.get<string>('DB_USERNAME') || 'dnlog',
             password: config.get<string>('DB_PASSWORD') || '',
             database: config.get<string>('DB_NAME') || 'dnlog',
+            schema,
             ssl:
               config.get<string>('DB_SSL') === 'true'
                 ? { rejectUnauthorized: false }
