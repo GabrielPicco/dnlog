@@ -996,12 +996,18 @@ const loadState = () => {
       // Migração única: remove lotes fictícios antigos salvos no navegador.
       if (!parsed._semLotesFicticios) { parsed.lotes = []; parsed._semLotesFicticios = true; }
       if (!parsed.baixasFaturadas) parsed.baixasFaturadas = {};
+      // OEs de retirada em fornecedor (entrada). Lista à parte de `ordens`
+      // (vendas), pra não misturar com o fluxo de saída.
+      if (!parsed.ordensCompra) parsed.ordensCompra = [];
+      if (parsed.proxNumeroCompra == null) parsed.proxNumeroCompra = 1;
       return parsed;
     }
   } catch(e) {}
   return {
     ordens: [],
     proxNumero: 1,
+    ordensCompra: [],
+    proxNumeroCompra: 1,
     notificacoes: [],
     lotes: LOTES_ESTOQUE_INICIAL,
     // baixasFaturadas: { 'PV-XX|SOJ000015': 10, ... }  → consumo permanente faturado
@@ -1211,6 +1217,31 @@ const App = ({ usuario, onLogout }) => {
     }));
   };
 
+  // ---- OEs de RETIRADA EM FORNECEDOR (entrada) — lista própria (ordensCompra) ----
+  const criarOECompra = (oe) => {
+    setState(s => {
+      const numero = `OEF-2026-${String(s.proxNumeroCompra || 1).padStart(5, '0')}`;
+      const nova = {
+        ...oe,
+        tipo: 'compra',
+        id: 'oef_' + Date.now(),
+        numero,
+        criado_em: new Date().toISOString(),
+        criado_por: (usuario && (usuario.nome || usuario.email)) || 'Sistema',
+        status: 'PROGRAMADA',
+      };
+      showToast('OE de retirada criada!', `${numero} · ${oe.fornecedor || ''}`);
+      return { ...s, ordensCompra: [...(s.ordensCompra || []), nova], proxNumeroCompra: (s.proxNumeroCompra || 1) + 1 };
+    });
+  };
+  const atualizarOECompra = (id, updates) => {
+    setState(s => ({ ...s, ordensCompra: (s.ordensCompra || []).map(o => o.id === id ? { ...o, ...updates } : o) }));
+  };
+  const cancelarOECompra = (id) => {
+    setState(s => ({ ...s, ordensCompra: (s.ordensCompra || []).map(o => o.id === id ? { ...o, status: 'CANCELADA' } : o) }));
+    showToast('OE de retirada cancelada', '');
+  };
+
   // Marca OE como FATURADA: move consumo da OE pra baixas permanentes (qtd_entregue)
   // O efeito visível: o pedido perde aquele saldo na lista de pedidos abertos
   const faturarOE = (id, nfNumero, nfData) => {
@@ -1328,6 +1359,7 @@ const App = ({ usuario, onLogout }) => {
     conferenceOE, setConferenceOE,
     viewingPedido, setViewingPedido,
     criarOE, atualizarOE, editarOE, cancelarOE, faturarOE, desfaturarOE,
+    criarOECompra, atualizarOECompra, cancelarOECompra,
     sidebarCollapsed: effectiveCollapsed, setSidebarCollapsed,
     perfilAtivo,
     usuario, onLogout,
@@ -1364,6 +1396,8 @@ const App = ({ usuario, onLogout }) => {
             {screen === 'editar-oe' && <NovaOE ctx={ctx} editMode />}
             {screen === 'detalhe-oe' && <DetalheOE ctx={ctx} />}
             {screen === 'conferencia-detalhe' && <ConferenciaDetalhe ctx={ctx} />}
+            {screen === 'embarque-fornecedores' && <EmbarquesFornecedores ctx={ctx} />}
+            {screen === 'nova-oe-fornecedor' && <NovaOEFornecedor ctx={ctx} />}
           </>
         )}
       </main>
@@ -1675,6 +1709,7 @@ const Sidebar = ({ ctx }) => {
     { id: 'dashboard', icon: 'ti-layout-dashboard', label: 'Painel', perfis: ['OPERADOR','GESTOR'] },
     { id: 'relatorios', icon: 'ti-chart-bar', label: 'Relatórios', perfis: ['GESTOR','OPERADOR'] },
     { id: 'embarques', icon: 'ti-truck-delivery', label: 'Embarques', badge: programadas || null, perfis: ['OPERADOR','GESTOR'] },
+    { id: 'embarque-fornecedores', icon: 'ti-truck-loading', label: 'Embarque - Fornecedores', perfis: ['OPERADOR','GESTOR'] },
     { id: 'conferencia', icon: 'ti-device-tablet', label: 'Conferência', badge: aguardandoConf || null,
       badgeStyle: aguardandoConf ? { background: 'var(--orange-bg)', color: 'var(--orange)' } : null,
       perfis: ['OPERADOR','GESTOR','CONFERENTE'] },
@@ -2946,6 +2981,218 @@ const Estoque = ({ ctx }) => {
 // ============================================================
 // TOAST
 // ============================================================
+// ============================================================
+// EMBARQUE · RETIRADA EM FORNECEDORES (OE de entrada)
+// ============================================================
+// Lista as OEs de retirada (state.ordensCompra) e permite criar uma nova a
+// partir de um pedido de compra do SAP. Fluxo espelha a OE de vendas, mas de
+// entrada: escolhe o pedido de compra, os itens/quantidades e o motorista.
+const EmbarquesFornecedores = ({ ctx }) => {
+  const [q, setQ] = useState('');
+  const dados = ctx.state.ordensCompra || [];
+  const lista = useMemo(() => {
+    let l = [...dados].sort((a, b) => new Date(b.criado_em) - new Date(a.criado_em));
+    if (q) {
+      const ql = q.toLowerCase();
+      l = l.filter(o =>
+        (o.numero || '').toLowerCase().includes(ql) ||
+        (o.fornecedor || '').toLowerCase().includes(ql) ||
+        (o.pedido_compra_numero || '').toLowerCase().includes(ql));
+    }
+    return l;
+  }, [dados, q]);
+  const ativos = dados.filter(o => o.status !== 'CANCELADA').length;
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="crumb"><i className="ti ti-home"></i> Operação · Embarque Fornecedores</div>
+          <h1 className="page-title">Embarque · Retirada em Fornecedores</h1>
+          <p className="page-subtitle">OEs de entrada (retirar produto no fornecedor) · {ativos} ativas</p>
+        </div>
+        <button className="btn btn-primary" onClick={() => ctx.setScreen('nova-oe-fornecedor')}>
+          <i className="ti ti-plus"></i> Nova OE de retirada
+        </button>
+      </div>
+      <div className="panel">
+        <div className="panel-header">
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{dados.length} OE(s) no total</div>
+          <div className="search-box"><i className="ti ti-search"></i>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar OE, fornecedor, pedido..." /></div>
+        </div>
+        {lista.length === 0 ? (
+          <div className="empty">
+            <i className="ti ti-truck-loading"></i>
+            <div>Nenhuma OE de retirada ainda</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+              Clique em "Nova OE de retirada" para criar a primeira (a partir de um pedido de compra do SAP).
+            </div>
+          </div>
+        ) : (
+          <table>
+            <thead><tr>
+              <th>OE</th><th>Fornecedor</th><th>Pedido compra</th><th className="num">Itens</th>
+              <th className="num">Volumes</th><th>Motorista</th><th>Placa</th><th>Prevista</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody>{lista.map(o => {
+              const vol = (o.itens || []).reduce((a, it) => a + (Number(it.qtd) || 0), 0);
+              return (
+                <tr key={o.id}>
+                  <td className="cell-primary mono" style={{ fontSize: 12, color: 'var(--accent-light)' }}>{o.numero}</td>
+                  <td style={{ fontSize: 13 }}>{o.fornecedor}</td>
+                  <td className="mono cell-muted" style={{ fontSize: 12 }}>{o.pedido_compra_numero || '—'}</td>
+                  <td className="num mono">{(o.itens || []).length}</td>
+                  <td className="num mono">{fmtNum(vol)}</td>
+                  <td style={{ fontSize: 12 }}>{o.motorista_nome || '—'}</td>
+                  <td className="mono" style={{ fontSize: 12 }}>{o.veiculo_placa || '—'}</td>
+                  <td className="mono" style={{ fontSize: 12 }}>{fmtDate(o.data_prevista)}</td>
+                  <td><StatusChip status={o.status} /></td>
+                  <td>
+                    {ctx.podeEditar && o.status !== 'CANCELADA' && (
+                      <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }}
+                        onClick={() => { if (confirm(`Cancelar a OE ${o.numero}?`)) ctx.cancelarOECompra(o.id); }}>
+                        <i className="ti ti-x"></i>
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}</tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const NovaOEFornecedor = ({ ctx }) => {
+  const pedidos = (typeof DADOS_PEDIDOS_COMPRA !== 'undefined' ? DADOS_PEDIDOS_COMPRA : []).filter(p => p.tem_saldo);
+  const [pcNumero, setPcNumero] = useState('');
+  const pc = useMemo(() => pedidos.find(p => p.numero === pcNumero) || null, [pedidos, pcNumero]);
+  const [sel, setSel] = useState({}); // { [codigo]: { incluir, qtd, it } }
+  const [mot, setMot] = useState({ nome: '', cpf: '', placa: '', uf: '' });
+  const [dataPrev, setDataPrev] = useState('');
+  const [obs, setObs] = useState('');
+
+  // Ao trocar de pedido, pré-marca todos os itens com a quantidade do saldo.
+  useEffect(() => {
+    if (!pc) { setSel({}); return; }
+    const init = {};
+    (pc.itens || []).forEach(it => {
+      init[it.codigo] = { incluir: true, qtd: (it.saldo != null ? it.saldo : it.qtd_bb) || 0, it };
+    });
+    setSel(init);
+  }, [pcNumero]);
+
+  const escolhidos = Object.values(sel).filter(x => x.incluir && Number(x.qtd) > 0);
+  const totalVol = escolhidos.reduce((a, x) => a + Number(x.qtd), 0);
+  const lbl = { fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 };
+
+  const salvar = () => {
+    if (!pc) { ctx.showToast('Escolha um pedido de compra', ''); return; }
+    if (escolhidos.length === 0) { ctx.showToast('Selecione ao menos um item com quantidade', ''); return; }
+    if (!mot.nome.trim() || !mot.placa.trim()) { ctx.showToast('Informe o motorista e a placa', ''); return; }
+    ctx.criarOECompra({
+      fornecedor: pc.fornecedor,
+      fornecedor_codigo: pc.fornecedor_codigo,
+      pedido_compra_numero: pc.numero,
+      pedido_compra_doc_entry: pc.doc_entry,
+      itens: escolhidos.map(x => ({
+        codigo: x.it.codigo,
+        descricao: x.it.descricao,
+        embalagem: x.it.embalagem || '',
+        unidade: x.it.embalagem || 'un',
+        qtd: Number(x.qtd),
+        saldo_pedido: x.it.saldo,
+        valor_unitario: x.it.valor_unitario,
+        grupo_nome: x.it.grupo_nome,
+      })),
+      motorista_nome: mot.nome.trim(),
+      motorista_cpf: mot.cpf.trim(),
+      veiculo_placa: mot.placa.trim().toUpperCase(),
+      veiculo_placa_uf: mot.uf.trim().toUpperCase(),
+      data_prevista: dataPrev || null,
+      observacoes: obs.trim(),
+    });
+    ctx.setScreen('embarque-fornecedores');
+  };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="crumb"><i className="ti ti-home"></i> Operação · Nova OE de Retirada</div>
+          <h1 className="page-title">Nova OE · Retirada em Fornecedor</h1>
+          <p className="page-subtitle">Escolha o pedido de compra, os itens e informe motorista/veículo</p>
+        </div>
+        <button className="btn btn-ghost" onClick={() => ctx.setScreen('embarque-fornecedores')}><i className="ti ti-arrow-left"></i> Voltar</button>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 16 }}>
+        <div className="panel-header"><div><div className="panel-title">1 · Pedido de compra</div><div className="panel-sub">Fornecedor de onde vamos retirar</div></div></div>
+        <div style={{ padding: 18 }}>
+          <select className="input" value={pcNumero} onChange={e => setPcNumero(e.target.value)} style={{ maxWidth: 560 }}>
+            <option value="">— Selecione o pedido de compra —</option>
+            {pedidos.map(p => <option key={p.numero} value={p.numero}>{p.numero} · {p.fornecedor} · saldo {fmtNum(p.qtd_saldo_bb || 0)}</option>)}
+          </select>
+          {pedidos.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>Nenhum pedido de compra com saldo em aberto no SAP.</div>}
+          {pc && <div style={{ marginTop: 12, fontSize: 13 }}><strong>{pc.fornecedor}</strong> <span className="cell-muted mono" style={{ fontSize: 12 }}>({pc.fornecedor_codigo})</span></div>}
+        </div>
+      </div>
+
+      {pc && (
+        <div className="panel" style={{ marginBottom: 16 }}>
+          <div className="panel-header">
+            <div><div className="panel-title">2 · Itens a retirar</div><div className="panel-sub">Marque os itens e ajuste as quantidades (padrão: saldo do pedido)</div></div>
+            <span className="chip chip-green"><span className="status-dot"></span> {escolhidos.length} item(ns) · {fmtNum(totalVol)} vol.</span>
+          </div>
+          <table>
+            <thead><tr><th style={{ width: 40 }}></th><th>Item</th><th>Descrição</th><th>Embalagem</th><th className="num">Saldo</th><th className="num">Qtd a retirar</th></tr></thead>
+            <tbody>{(pc.itens || []).map(it => {
+              const s = sel[it.codigo] || { incluir: false, qtd: 0 };
+              return (
+                <tr key={it.codigo} style={{ opacity: s.incluir ? 1 : 0.5 }}>
+                  <td><input type="checkbox" checked={!!s.incluir} onChange={e => setSel(prev => ({ ...prev, [it.codigo]: { ...(prev[it.codigo] || {}), it, incluir: e.target.checked } }))} /></td>
+                  <td className="mono cell-muted" style={{ fontSize: 11 }}>{it.codigo}</td>
+                  <td><div className="cell-primary" style={{ fontSize: 13 }}>{it.descricao}</div></td>
+                  <td className="mono cell-muted" style={{ fontSize: 12 }}>{it.embalagem || '—'}</td>
+                  <td className="num mono">{fmtNum(it.saldo != null ? it.saldo : it.qtd_bb)}</td>
+                  <td className="num">
+                    <input className="input" type="number" min="0" value={s.qtd != null ? s.qtd : ''} disabled={!s.incluir}
+                      onChange={e => setSel(prev => ({ ...prev, [it.codigo]: { ...(prev[it.codigo] || {}), it, qtd: e.target.value } }))}
+                      style={{ width: 110, textAlign: 'right' }} />
+                  </td>
+                </tr>
+              );
+            })}</tbody>
+          </table>
+        </div>
+      )}
+
+      {pc && (
+        <div className="panel" style={{ marginBottom: 16 }}>
+          <div className="panel-header"><div><div className="panel-title">3 · Motorista e veículo</div><div className="panel-sub">Quem vai buscar</div></div></div>
+          <div style={{ padding: 18, display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 90px', gap: 12 }}>
+            <div><label style={lbl}>Motorista *</label><input className="input" value={mot.nome} onChange={e => setMot({ ...mot, nome: e.target.value })} placeholder="Nome do motorista" /></div>
+            <div><label style={lbl}>CPF</label><input className="input" value={mot.cpf} onChange={e => setMot({ ...mot, cpf: e.target.value })} placeholder="CPF" /></div>
+            <div><label style={lbl}>Placa *</label><input className="input" value={mot.placa} onChange={e => setMot({ ...mot, placa: e.target.value })} placeholder="ABC1D23" /></div>
+            <div><label style={lbl}>UF</label><input className="input" value={mot.uf} onChange={e => setMot({ ...mot, uf: e.target.value })} placeholder="UF" maxLength={2} /></div>
+          </div>
+          <div style={{ padding: '0 18px 18px', display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
+            <div><label style={lbl}>Data prevista</label><input className="input" type="date" value={dataPrev} onChange={e => setDataPrev(e.target.value)} /></div>
+            <div><label style={lbl}>Observações</label><input className="input" value={obs} onChange={e => setObs(e.target.value)} placeholder="Observações da retirada" /></div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+        <button className="btn btn-ghost" onClick={() => ctx.setScreen('embarque-fornecedores')}>Cancelar</button>
+        <button className="btn btn-primary" onClick={salvar} disabled={!pc || escolhidos.length === 0}><i className="ti ti-check"></i> Criar OE de retirada</button>
+      </div>
+    </div>
+  );
+};
+
 const Toast = ({ title, msg }) => (
   <div className="toast">
     <i className="ti ti-circle-check"></i>
