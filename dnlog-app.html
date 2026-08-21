@@ -2236,6 +2236,7 @@ const PedidosCompra = ({ ctx }) => {
   const lista = useMemo(() => {
     let l = [...dados];
     if (filtro === 'com_saldo') l = l.filter(p => p.tem_saldo && (p.qtd_saldo_bb || 0) > 0);
+    if (filtro === 'atendidos') l = l.filter(p => !(p.tem_saldo && (p.qtd_saldo_bb || 0) > 0));
     if (q) {
       const ql = q.toLowerCase();
       l = l.filter(p => (p.numero || '').toLowerCase().includes(ql) || (p.fornecedor || '').toLowerCase().includes(ql));
@@ -2318,7 +2319,7 @@ const PedidosCompra = ({ ctx }) => {
       <div className="panel">
         <div className="panel-header">
           <div style={{ display: 'flex', gap: 4, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: 2 }}>
-            {[['com_saldo', 'Com saldo'], ['todos', 'Todos']].map(([k, l]) => (
+            {[['com_saldo', 'Com saldo'], ['atendidos', 'Atendidos (baixados)'], ['todos', 'Todos']].map(([k, l]) => (
               <button key={k} onClick={() => setFiltro(k)} style={{
                 background: filtro === k ? 'var(--bg-hover)' : 'none',
                 color: filtro === k ? 'var(--text)' : 'var(--text-muted)',

@@ -296,13 +296,15 @@ export class SapClientService implements OnModuleDestroy {
   }
 
   /**
-   * Busca pedidos de COMPRA em aberto (com saldo a receber do fornecedor).
-   * Mesma lógica/segurança da getPedidosAbertos, mas em /PurchaseOrders.
+   * Busca pedidos de COMPRA: todos os ABERTOS (com saldo a receber) + os
+   * FECHADOS/baixados do ano corrente (pra aparecerem também os já atendidos).
+   * Os fechados antigos ficam de fora pra não trazer histórico inteiro.
    */
   async getPedidosCompraAbertos(): Promise<any[]> {
     await this.ensureSession();
+    const anoInicio = `${new Date().getFullYear()}-01-01`;
     const params = {
-      $filter: "DocumentStatus eq 'bost_Open'",
+      $filter: `DocumentStatus eq 'bost_Open' or (DocumentStatus eq 'bost_Close' and DocDueDate ge '${anoInicio}')`,
       $select:
         'DocEntry,DocNum,DocDate,DocDueDate,CardCode,CardName,DocTotal,Comments,DocumentStatus,DocumentLines',
       $orderby: 'DocDueDate asc',
