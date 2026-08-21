@@ -188,8 +188,9 @@ export class SapClientService implements OnModuleDestroy {
   // ========================================================
 
   /**
-   * Busca pedidos de venda em aberto (com saldo).
-   * Filtra DocumentStatus=bost_Open no SAP.
+   * Busca pedidos de venda: todos os ABERTOS + os FECHADOS/cancelados do ano
+   * corrente (pra mostrar status Aberto/Fechado/Cancelado e o saldo de cada um).
+   * Cancelados vêm como DocumentStatus=bost_Close + Cancelled=tYES.
    */
   async getPedidosAbertos(): Promise<any[]> {
     await this.ensureSession();
@@ -200,10 +201,11 @@ export class SapClientService implements OnModuleDestroy {
     // pelo PROPRIO $select (sao uma colecao embutida, nao navigation property:
     // usar $expand resulta em "Cannot expand invalid navigation property").
     // O vendedor sai por SalesPersonCode (codigo padrao), nao por UDF.
+    const anoInicio = `${new Date().getFullYear()}-01-01`;
     const params = {
-      $filter: "DocumentStatus eq 'bost_Open'",
+      $filter: `DocumentStatus eq 'bost_Open' or (DocumentStatus eq 'bost_Close' and DocDueDate ge '${anoInicio}')`,
       $select:
-        'DocEntry,DocNum,DocDate,DocDueDate,CardCode,CardName,DocTotal,Comments,DocumentStatus,SalesPersonCode,DocumentLines',
+        'DocEntry,DocNum,DocDate,DocDueDate,CardCode,CardName,DocTotal,Comments,DocumentStatus,Cancelled,SalesPersonCode,DocumentLines',
       $orderby: 'DocDueDate asc',
     };
 
@@ -306,7 +308,7 @@ export class SapClientService implements OnModuleDestroy {
     const params = {
       $filter: `DocumentStatus eq 'bost_Open' or (DocumentStatus eq 'bost_Close' and DocDueDate ge '${anoInicio}')`,
       $select:
-        'DocEntry,DocNum,DocDate,DocDueDate,CardCode,CardName,DocTotal,Comments,DocumentStatus,DocumentLines',
+        'DocEntry,DocNum,DocDate,DocDueDate,CardCode,CardName,DocTotal,Comments,DocumentStatus,Cancelled,DocumentLines',
       $orderby: 'DocDueDate asc',
     };
     try {

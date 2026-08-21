@@ -20,6 +20,12 @@ function saldoLinha(l: any): number {
   return Number(v) || 0;
 }
 
+/** Status do pedido no SAP: 'aberto' | 'fechado' | 'cancelado'. */
+function statusSap(p: any): string {
+  if (p.Cancelled === 'tYES') return 'cancelado';
+  return p.DocumentStatus === 'bost_Close' ? 'fechado' : 'aberto';
+}
+
 /** Mapa ItemCode -> { grupo_codigo, grupo_nome } a partir dos catálogos do SAP. */
 function construirItemInfo(itens: any[], grupos: any[]): ItemInfo {
   const grupoNomePorNumero: Record<string, string> = {};
@@ -134,6 +140,8 @@ export class ApiController {
         vendedor_codigo: vendCodigo,
         observacoes: p.Comments || '',
         tem_saldo: p.DocumentStatus === 'bost_Open',
+        status_sap: statusSap(p),
+        cancelado: p.Cancelled === 'tYES',
         ...resumirLinhas(p, itemInfo),
       };
     });
@@ -174,6 +182,8 @@ export class ApiController {
       data_entrega: p.DocDueDate,
       observacoes: p.Comments || '',
       tem_saldo: p.DocumentStatus === 'bost_Open',
+      status_sap: statusSap(p),
+      cancelado: p.Cancelled === 'tYES',
       ...resumirLinhas(p, itemInfo),
     }));
    });

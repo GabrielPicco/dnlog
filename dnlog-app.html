@@ -2227,22 +2227,53 @@ const TogglePedidos = ({ ctx, ativo }) => (
 );
 
 // Tela de PEDIDOS DE COMPRA (PurchaseOrders do SAP) — somente leitura.
+// Status do pedido no SAP (Aberto / Fechado / Cancelado) — chip + filtro
+// multi-seleção, usados nas telas de Vendas e Compras.
+const STATUS_SAP = [
+  ['aberto', 'Aberto', 'chip-green', 'var(--green)'],
+  ['fechado', 'Fechado', 'chip-neutral', 'var(--text-muted)'],
+  ['cancelado', 'Cancelado', 'chip-red', 'var(--red)'],
+];
+const StatusSapChip = ({ status }) => {
+  const s = STATUS_SAP.find(x => x[0] === status) || STATUS_SAP[0];
+  return <span className={'chip ' + s[2]}>{s[1]}</span>;
+};
+const FiltroStatusSap = ({ sel, setSel }) => (
+  <div style={{ display: 'flex', gap: 4, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: 2 }}
+    title="Filtrar por status do pedido no SAP (marque um ou mais)">
+    {STATUS_SAP.map(([k, label, , cor]) => {
+      const on = sel.includes(k);
+      return (
+        <button key={k} onClick={() => setSel(on ? sel.filter(x => x !== k) : [...sel, k])} style={{
+          background: on ? 'var(--bg-hover)' : 'none',
+          color: on ? cor : 'var(--text-muted)',
+          border: 'none', padding: '5px 12px', borderRadius: 4, fontSize: 12,
+          fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600,
+          display: 'flex', alignItems: 'center', gap: 5,
+        }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: cor, opacity: on ? 1 : 0.35 }}></span>
+          {label}
+        </button>
+      );
+    })}
+  </div>
+);
+
 const PedidosCompra = ({ ctx }) => {
   const [q, setQ] = useState('');
-  const [filtro, setFiltro] = useState('com_saldo');
+  const [statusSel, setStatusSel] = useState(['aberto']);
   const [aberto, setAberto] = useState(null); // numero do pedido expandido
   const dados = DADOS_PEDIDOS_COMPRA || [];
 
   const lista = useMemo(() => {
     let l = [...dados];
-    if (filtro === 'com_saldo') l = l.filter(p => p.tem_saldo && (p.qtd_saldo_bb || 0) > 0);
-    if (filtro === 'atendidos') l = l.filter(p => !(p.tem_saldo && (p.qtd_saldo_bb || 0) > 0));
+    if (statusSel.length) l = l.filter(p => statusSel.includes(p.status_sap));
     if (q) {
       const ql = q.toLowerCase();
       l = l.filter(p => (p.numero || '').toLowerCase().includes(ql) || (p.fornecedor || '').toLowerCase().includes(ql));
     }
     return l.sort((a, b) => (a.data_entrega || '').localeCompare(b.data_entrega || ''));
-  }, [dados, q, filtro]);
+  }, [dados, q, statusSel]);
 
   const stats = useMemo(() => ({
     total: dados.length,
@@ -2318,16 +2349,7 @@ const PedidosCompra = ({ ctx }) => {
 
       <div className="panel">
         <div className="panel-header">
-          <div style={{ display: 'flex', gap: 4, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: 2 }}>
-            {[['com_saldo', 'Com saldo'], ['atendidos', 'Atendidos (baixados)'], ['todos', 'Todos']].map(([k, l]) => (
-              <button key={k} onClick={() => setFiltro(k)} style={{
-                background: filtro === k ? 'var(--bg-hover)' : 'none',
-                color: filtro === k ? 'var(--text)' : 'var(--text-muted)',
-                border: 'none', padding: '5px 12px', borderRadius: 4, fontSize: 12,
-                fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600,
-              }}>{l}</button>
-            ))}
-          </div>
+          <FiltroStatusSap sel={statusSel} setSel={setStatusSel} />
           <div className="search-box">
             <i className="ti ti-search"></i>
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar pedido ou fornecedor..." />
@@ -2339,7 +2361,7 @@ const PedidosCompra = ({ ctx }) => {
           <table>
             <thead><tr>
               <th>Pedido</th><th>Fornecedor</th><th>Emissão</th><th>Entrega</th>
-              <th className="num">Itens</th><th className="num">Saldo (un.)</th><th className="num">Saldo (R$)</th><th></th>
+              <th className="num">Itens</th><th className="num">Qtd total</th><th className="num">Saldo (un.)</th><th className="num">Saldo (R$)</th><th>Status</th><th></th>
             </tr></thead>
             <tbody>{lista.map(p => (
               <React.Fragment key={p.numero}>
@@ -2349,8 +2371,10 @@ const PedidosCompra = ({ ctx }) => {
                   <td style={{ fontSize: 12 }}>{fmtDate(p.data_emissao)}</td>
                   <td style={{ fontSize: 12 }}>{fmtDate(p.data_entrega)}</td>
                   <td className="num mono">{(p.itens || []).length}</td>
+                  <td className="num mono">{fmtNum(p.qtd_total_bb)}</td>
                   <td className="num mono cell-primary" style={{ color: 'var(--green)', fontWeight: 700 }}>{fmtNum(p.qtd_saldo_bb)}</td>
                   <td className="num mono">{fmtMoney(p.saldo_aberto)}</td>
+                  <td><StatusSapChip status={p.status_sap} /></td>
                   <td className="num"><i className={`ti ti-chevron-${aberto === p.numero ? 'up' : 'down'}`} style={{ color: 'var(--text-muted)' }}></i></td>
                 </tr>
                 {aberto === p.numero && (p.itens || []).map((it, i) => (
@@ -2359,8 +2383,10 @@ const PedidosCompra = ({ ctx }) => {
                     <td className="mono cell-muted" style={{ fontSize: 11 }}>{it.codigo}</td>
                     <td colSpan={2} style={{ fontSize: 12 }}>{it.descricao} {it.embalagem ? <span className="cell-muted" style={{ fontSize: 11 }}>· {it.embalagem}</span> : null}</td>
                     <td className="num mono cell-muted" style={{ fontSize: 11 }}>{it.grupo_nome || '—'}</td>
+                    <td className="num mono">{fmtNum(it.qtd_bb)}</td>
                     <td className="num mono" style={{ color: 'var(--green)' }}>{fmtNum(it.saldo)}</td>
                     <td className="num mono">{fmtMoney(it.saldo * (it.valor_unitario || 0))}</td>
+                    <td></td>
                     <td></td>
                   </tr>
                 ))}
@@ -2375,7 +2401,7 @@ const PedidosCompra = ({ ctx }) => {
 
 const Pedidos = ({ ctx }) => {
   const [q, setQ] = useState('');
-  const [filtro, setFiltro] = useState('com_saldo');
+  const [statusSel, setStatusSel] = useState(['aberto']);
   const [filtroPrazo, setFiltroPrazo] = useState('todos'); // todos, atrasado, hoje, 7d, 30d, sem_prazo
   const [ordenacao, setOrdenacao] = useState('prazo_asc'); // prazo_asc, prazo_desc, saldo_desc, emissao_desc
 
@@ -2398,8 +2424,7 @@ const Pedidos = ({ ctx }) => {
 
   const lista = useMemo(() => {
     let l = ctx.pedidos;
-    if (filtro === 'com_saldo') l = l.filter(p => p.tem_saldo);
-    else if (filtro === 'sem_saldo') l = l.filter(p => !p.tem_saldo);
+    if (statusSel.length) l = l.filter(p => statusSel.includes(p.status_sap));
     if (q) {
       const ql = q.toLowerCase();
       l = l.filter(p =>
@@ -2436,7 +2461,7 @@ const Pedidos = ({ ctx }) => {
       copia.sort((a, b) => (b.data_emissao || '').localeCompare(a.data_emissao || ''));
     }
     return copia;
-  }, [ctx.pedidos, q, filtro, filtroPrazo, ordenacao]);
+  }, [ctx.pedidos, q, statusSel, filtroPrazo, ordenacao]);
 
   // Stats por urgência
   const statsPrazo = useMemo(() => {
@@ -2577,16 +2602,7 @@ const Pedidos = ({ ctx }) => {
 
       <div className="panel">
         <div className="panel-header">
-          <div style={{ display: 'flex', gap: 4, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: 2 }}>
-            {[['com_saldo','Com saldo'],['sem_saldo','Sem saldo'],['todos','Todos']].map(([k,l]) => (
-              <button key={k} onClick={() => setFiltro(k)} style={{
-                background: filtro === k ? 'var(--bg-hover)' : 'none',
-                color: filtro === k ? 'var(--text)' : 'var(--text-muted)',
-                border: 'none', padding: '5px 12px', borderRadius: 4, fontSize: 12,
-                fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600
-              }}>{l}</button>
-            ))}
-          </div>
+          <FiltroStatusSap sel={statusSel} setSel={setStatusSel} />
           <div className="search-box">
             <i className="ti ti-search"></i>
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar pedido, cliente, vendedor..." />
@@ -2619,7 +2635,7 @@ const Pedidos = ({ ctx }) => {
           <thead><tr>
             <th>Pedido</th><th>Cliente</th><th>Vendedor</th><th>Emissão</th>
             <th>Entrega prevista</th><th style={{ width: 90 }}>Urgência</th>
-            <th className="num">Itens</th><th className="num">Saldo (un.)</th><th className="num">Saldo aberto</th><th>Status</th>
+            <th className="num">Itens</th><th className="num">Saldo / Total</th><th className="num">Saldo aberto</th><th>Status</th>
           </tr></thead>
           <tbody>{lista.map(p => {
             const u = calcUrgencia(p.data_entrega);
@@ -2656,12 +2672,7 @@ const Pedidos = ({ ctx }) => {
                   {p.qtd_saldo_bb} / {p.qtd_total_bb}
                 </td>
                 <td className="num cell-primary">{fmtMoney(p.saldo_aberto)}</td>
-                <td>
-                  {p.tem_saldo ?
-                    <span className="chip chip-green"><i className="ti ti-circle-check"></i> Aberto</span> :
-                    <span className="chip chip-neutral"><i className="ti ti-check"></i> Atendido</span>
-                  }
-                </td>
+                <td><StatusSapChip status={p.status_sap} /></td>
               </tr>
             );
           })}</tbody>
@@ -6826,6 +6837,14 @@ const AdminUsuarios = ({ ctx }) => {
       // doc_entry guarda referência SAP para faturamento
       _sap_doc_entry: p.doc_entry,
       _sap_cliente_codigo: p.cliente_codigo,
+      // Totais e status vindos do backend (o pedidosComSaldo recalcula o saldo
+      // considerando as OEs; qtd_total_bb e status_sap vêm prontos daqui).
+      qtd_total_bb: p.qtd_total_bb,
+      qtd_saldo_bb: p.qtd_saldo_bb,
+      saldo_aberto: p.saldo_aberto,
+      tem_saldo: p.tem_saldo,
+      status_sap: p.status_sap,
+      cancelado: p.cancelado,
       itens: (p.itens || []).map(it => ({
         codigo: it.codigo,
         descricao: it.descricao,
