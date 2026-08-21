@@ -7,6 +7,14 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
+// O Postgres não tem o tipo 'datetime' (usa 'timestamp'); o SQLite usa 'datetime'.
+// Em produção o Render define DB_TYPE como variável de ambiente do SO (já
+// disponível no import). No dev local (SQLite) cai no padrão 'datetime'.
+const DATETIME =
+  (process.env.DB_TYPE || 'sqlite').toLowerCase() === 'postgres'
+    ? 'timestamp'
+    : 'datetime';
+
 /**
  * Usuário do DNLog. O login é via conta Google @dnseeds.com.br — não há senha
  * armazenada aqui (o Google autentica). Guardamos quem é, o perfil e se já foi
@@ -44,10 +52,10 @@ export class Usuario {
   @Column('varchar', { name: 'aprovado_por', nullable: true })
   aprovadoPor: string | null;
 
-  @Column('datetime', { name: 'aprovado_em', nullable: true })
+  @Column(DATETIME, { name: 'aprovado_em', nullable: true })
   aprovadoEm: Date | null;
 
-  @Column('datetime', { name: 'ultimo_login', nullable: true })
+  @Column(DATETIME, { name: 'ultimo_login', nullable: true })
   ultimoLogin: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
