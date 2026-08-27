@@ -329,41 +329,42 @@ export class ApiController {
   @Get('estoque-terceiros')
   async getEstoqueTerceiros() {
     return this.cache.wrap('estoque-terceiros', async () => {
-      const [itens, armazens, grupos] = await Promise.all([
-        this.sap.getEstoqueTerceiros?.() ?? [],
-        this.sap.getWarehouses?.().catch(() => []) ?? [],
+      // Fonte: CALCULOSALDOITENS (a mesma dos lotes) — agora que há saldo nos
+      // armazéns de terceiros, ela traz LOTE e validade deles também. Filtramos
+      // os depósitos DN_EMTER (nosso, guardado fora) e DN_DETER (de terceiros).
+      const [linhas, itens, grupos] = await Promise.all([
+        this.sap.getSaldoPorLote?.() ?? [],
+        this.sap.getItems?.().catch(() => []) ?? [],
         this.sap.getItemGroups?.().catch(() => []) ?? [],
       ]);
-      const nomeArmazem: Record<string, string> = {};
-      for (const w of armazens || []) nomeArmazem[w.WarehouseCode] = w.WarehouseName;
-      const grupoNome: Record<string, string> = {};
-      for (const g of grupos || []) grupoNome[String(g.Number)] = g.GroupName;
-      // DN_EMTER = nosso, guardado em terceiros ('em'); DN_DETER = de terceiros,
-      // guardado conosco ('de'). Só esses dois armazéns interessam aqui.
+      const itemInfo = construirItemInfo(itens, grupos);
       const TIPO: Record<string, string> = { DN_EMTER: 'em', DN_DETER: 'de' };
-      const linhas: any[] = [];
-      for (const it of itens || []) {
-        for (const w of it.ItemWarehouseInfoCollection || []) {
-          const tipo = TIPO[w.WarehouseCode];
-          if (!tipo) continue;
-          const saldo = Number(w.InStock) || 0;
-          const comprometido = Number(w.Committed) || 0;
-          if (saldo === 0 && comprometido === 0) continue;
-          linhas.push({
-            item_codigo: it.ItemCode,
-            descricao: it.ItemName,
-            grupo_codigo: it.ItemsGroupCode,
-            grupo_nome: grupoNome[String(it.ItemsGroupCode)] || '',
-            armazem: w.WarehouseCode,
-            armazem_nome: nomeArmazem[w.WarehouseCode] || w.WarehouseCode,
-            tipo, // 'em' | 'de'
+      const terc = (linhas as any[]).filter((r: any) => TIPO[r.CodigoDeposito]);
+      // Dedup: se um item tem linha COM lote num depósito, descarta a agregada
+      // (Lote=null) daquele item+depósito — senão o saldo conta em dobro.
+      const temLote = new Set<string>();
+      for (const r of terc) if (r.Lote) temLote.add(r.CodigoItem + '|' + r.CodigoDeposito);
+      return terc
+        .filter((r: any) => r.Lote || !temLote.has(r.CodigoItem + '|' + r.CodigoDeposito))
+        .map((r: any) => {
+          const info = itemInfo[r.CodigoItem] || { grupo_codigo: null, grupo_nome: '' };
+          const saldo = Number(r.SaldoAtual) || 0;
+          const comprometido = Number(r.SaldoPedidoVenda) || 0;
+          return {
+            item_codigo: r.CodigoItem,
+            descricao: r.NomeItem,
+            grupo_codigo: info.grupo_codigo,
+            grupo_nome: info.grupo_nome,
+            lote: r.Lote,
+            armazem: r.CodigoDeposito,
+            armazem_nome: r.NomeDeposito,
+            tipo: TIPO[r.CodigoDeposito], // 'em' | 'de'
             saldo,
             comprometido,
+            validade: r.ExpDate || null,
             disponivel: saldo - comprometido,
-          });
-        }
-      }
-      return linhas;
+          };
+        });
     }, 600000); // 10 min — muda pouco
   }
 

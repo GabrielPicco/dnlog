@@ -2792,13 +2792,16 @@ const Estoque = ({ ctx }) => {
     return 'ok';
   };
 
-  const nLotes = lotesRaw.filter(l => l.lote).length;
-  const nItens = lotesRaw.filter(l => !l.lote).length;
+  // Lotes/Compromissos = estoque PRÓPRIO (DN_EST). Terceiros vem à parte, já com
+  // lote/validade dos armazéns DN_EMTER/DN_DETER.
+  const proprio = lotesRaw.filter(l => l.armazem === 'DN_EST');
+  const nLotes = proprio.filter(l => l.lote).length;
+  const nItens = proprio.filter(l => !l.lote).length;
   const nTerc = terceirosRaw.length;
 
   const base = useMemo(() => {
     if (aba === 'terceiros') return terceirosRaw;
-    return lotesRaw.filter(l => (aba === 'lotes' ? l.lote : !l.lote));
+    return proprio.filter(l => (aba === 'lotes' ? l.lote : !l.lote));
   }, [lotesRaw, terceirosRaw, aba]);
   const armazens = useMemo(() =>
     Array.from(new Set(base.map(l => l.armazem_nome || l.armazem).filter(Boolean))).sort(),
@@ -2965,24 +2968,29 @@ const Estoque = ({ ctx }) => {
         ) : (
           <table>
             <thead><tr>
-              <th>Tipo</th><th>Item</th><th>Descrição</th><th>Armazém</th>
+              <th>Tipo</th><th>Lote</th><th>Item</th><th>Descrição</th><th>Armazém</th><th>Validade</th>
               <th className="num">Saldo</th><th className="num">Compr.</th><th className="num">Disp.</th>
             </tr></thead>
-            <tbody>{lista.map((l, i) => (
-              <tr key={(l.item_codigo || '') + '|' + (l.armazem || '') + '|' + i}>
-                <td>
-                  {l.tipo === 'em'
-                    ? <span className="chip" style={{ background: 'var(--blue-bg)', color: 'var(--blue)' }}>Em terceiros</span>
-                    : <span className="chip chip-orange">De terceiros</span>}
-                </td>
-                <td className="mono cell-muted" style={{ fontSize: 11 }}>{l.item_codigo}</td>
-                <td><div className="cell-primary" style={{ fontSize: 13 }}>{l.descricao}</div></td>
-                <td style={{ fontSize: 12 }}>{l.armazem_nome || l.armazem}</td>
-                <td className="num mono cell-primary" style={{ fontWeight: 700 }}>{fmtNum(l.saldo || 0)}</td>
-                <td className="num mono" style={{ color: (l.comprometido || 0) > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{(l.comprometido || 0) > 0 ? fmtNum(l.comprometido) : '—'}</td>
-                <td className="num mono cell-primary" style={{ color: l.disponivel < 0 ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>{fmtNum(l.disponivel)}</td>
-              </tr>
-            ))}</tbody>
+            <tbody>{lista.map((l, i) => {
+              const sv = statusValidade(l.validade);
+              return (
+                <tr key={(l.item_codigo || '') + '|' + (l.lote || '') + '|' + (l.armazem || '') + '|' + i}>
+                  <td>
+                    {l.tipo === 'em'
+                      ? <span className="chip" style={{ background: 'var(--blue-bg)', color: 'var(--blue)' }}>Em terceiros</span>
+                      : <span className="chip chip-orange">De terceiros</span>}
+                  </td>
+                  <td className="cell-primary mono" style={{ fontSize: 12, color: l.lote ? 'var(--accent-light)' : 'var(--text-dim)' }}>{l.lote || '—'}</td>
+                  <td className="mono cell-muted" style={{ fontSize: 11 }}>{l.item_codigo}</td>
+                  <td><div className="cell-primary" style={{ fontSize: 13 }}>{l.descricao}</div></td>
+                  <td style={{ fontSize: 12 }}>{l.armazem_nome || l.armazem}</td>
+                  <td className="mono" style={{ fontSize: 12, color: sv === 'vencido' ? 'var(--red)' : sv === 'avencer' ? 'var(--orange)' : 'var(--text-muted)' }}>{fmtDate(l.validade)}{sv === 'vencido' ? ' ⚠' : ''}</td>
+                  <td className="num mono cell-primary" style={{ fontWeight: 700 }}>{fmtNum(l.saldo || 0)}</td>
+                  <td className="num mono" style={{ color: (l.comprometido || 0) > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{(l.comprometido || 0) > 0 ? fmtNum(l.comprometido) : '—'}</td>
+                  <td className="num mono cell-primary" style={{ color: l.disponivel < 0 ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>{fmtNum(l.disponivel)}</td>
+                </tr>
+              );
+            })}</tbody>
           </table>
         )}
       </div>
