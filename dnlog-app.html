@@ -2777,6 +2777,19 @@ const Estoque = ({ ctx }) => {
   const [q, setQ] = useState('');
   const [filtroArmazem, setFiltroArmazem] = useState('todos');
   const [filtroGrupo, setFiltroGrupo] = useState('todos');
+  const [filtroCultivar, setFiltroCultivar] = useState('todos');
+  const [filtroItem, setFiltroItem] = useState('todos');
+  const [sortBy, setSortBy] = useState('saldo');   // 'saldo' | 'descricao'
+  const [sortDir, setSortDir] = useState('desc');  // 'asc' | 'desc'
+  const toggleSort = (col) => {
+    if (sortBy === col) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortBy(col); setSortDir(col === 'descricao' ? 'asc' : 'desc'); }
+  };
+  const SortArrow = ({ col }) => (
+    <i className={'ti ' + (sortBy === col ? (sortDir === 'asc' ? 'ti-arrow-up' : 'ti-arrow-down') : 'ti-arrows-sort')}
+       style={{ fontSize: 11, marginLeft: 3, opacity: sortBy === col ? 1 : 0.35 }}></i>
+  );
+  const thSort = { cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' };
   const lotesRaw = DADOS_ESTOQUE_LOTES || [];
   const terceirosRaw = DADOS_ESTOQUE_TERCEIROS || [];
   // disponível: usa o já calculado (terceiros) ou saldo − comprometido (lotes).
@@ -2807,13 +2820,24 @@ const Estoque = ({ ctx }) => {
     Array.from(new Set(base.map(l => l.armazem_nome || l.armazem).filter(Boolean))).sort(),
   [base]);
   const grupos = useMemo(() =>
-    Array.from(new Set(base.map(l => l.grupo_nome).filter(Boolean))).sort(),
+    Array.from(new Set(base.map(l => l.grupo_nome).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')),
+  [base]);
+  // Cultivar = descrição do item. Item = código. Opções sempre vêm da aba inteira
+  // (base), para o usuário poder escolher qualquer valor mesmo com outro filtro ativo.
+  const cultivares = useMemo(() =>
+    Array.from(new Set(base.map(l => l.descricao).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')),
+  [base]);
+  const itens = useMemo(() =>
+    Array.from(new Map(base.filter(l => l.item_codigo).map(l => [l.item_codigo, l.descricao || ''])).entries())
+      .sort((a, b) => a[0].localeCompare(b[0])),
   [base]);
 
   const lista = useMemo(() => {
     let l = base.map(x => ({ ...x, disponivel: disp(x) }));
     if (filtroArmazem !== 'todos') l = l.filter(x => (x.armazem_nome || x.armazem) === filtroArmazem);
     if (filtroGrupo !== 'todos') l = l.filter(x => x.grupo_nome === filtroGrupo);
+    if (filtroCultivar !== 'todos') l = l.filter(x => x.descricao === filtroCultivar);
+    if (filtroItem !== 'todos') l = l.filter(x => x.item_codigo === filtroItem);
     if (q) {
       const ql = q.toLowerCase();
       l = l.filter(x =>
@@ -2822,20 +2846,27 @@ const Estoque = ({ ctx }) => {
         (x.descricao || '').toLowerCase().includes(ql)
       );
     }
-    return l.sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
-  }, [base, q, filtroArmazem, filtroGrupo]);
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return l.sort((a, b) => sortBy === 'descricao'
+      ? dir * String(a.descricao || '').localeCompare(String(b.descricao || ''), 'pt')
+      : dir * ((a.saldo || 0) - (b.saldo || 0)));
+  }, [base, q, filtroArmazem, filtroGrupo, filtroCultivar, filtroItem, sortBy, sortDir]);
 
+  // Totalizador reflete o que está FILTRADO (lista), não a aba inteira.
   const stats = useMemo(() => ({
-    saldo: base.reduce((a, l) => a + (l.saldo || 0), 0),
-    comprometido: base.reduce((a, l) => a + (l.comprometido_venda || l.comprometido || 0), 0),
-    disponivel: base.reduce((a, l) => a + disp(l), 0),
-    areceber: base.reduce((a, l) => a + (l.a_receber_compra || 0), 0),
-    n: base.length,
-    avencer: base.filter(l => ['vencido', 'avencer'].includes(statusValidade(l.validade))).length,
-    negativos: base.filter(l => disp(l) < 0).length,
-    em: base.filter(l => l.tipo === 'em').reduce((a, l) => a + (l.saldo || 0), 0),
-    de: base.filter(l => l.tipo === 'de').reduce((a, l) => a + (l.saldo || 0), 0),
-  }), [base]);
+    saldo: lista.reduce((a, l) => a + (l.saldo || 0), 0),
+    comprometido: lista.reduce((a, l) => a + (l.comprometido_venda || l.comprometido || 0), 0),
+    disponivel: lista.reduce((a, l) => a + disp(l), 0),
+    areceber: lista.reduce((a, l) => a + (l.a_receber_compra || 0), 0),
+    n: lista.length,
+    avencer: lista.filter(l => ['vencido', 'avencer'].includes(statusValidade(l.validade))).length,
+    negativos: lista.filter(l => disp(l) < 0).length,
+    em: lista.filter(l => l.tipo === 'em').reduce((a, l) => a + (l.saldo || 0), 0),
+    de: lista.filter(l => l.tipo === 'de').reduce((a, l) => a + (l.saldo || 0), 0),
+    narmazens: new Set(lista.map(l => l.armazem_nome || l.armazem).filter(Boolean)).size,
+  }), [lista]);
+  const filtrado = filtroArmazem !== 'todos' || filtroGrupo !== 'todos' || filtroCultivar !== 'todos' || filtroItem !== 'todos' || !!q;
+  const limparFiltros = () => { setFiltroArmazem('todos'); setFiltroGrupo('todos'); setFiltroCultivar('todos'); setFiltroItem('todos'); setQ(''); };
 
   return (
     <div>
@@ -2854,7 +2885,7 @@ const Estoque = ({ ctx }) => {
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: 4, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: 2 }}>
             {[['lotes', 'Lotes (físico)', 'ti-building-warehouse', nLotes], ['compromissos', 'Compromissos', 'ti-clipboard-list', nItens], ['terceiros', 'Terceiros', 'ti-arrows-exchange', nTerc]].map(([k, l, ic, n]) => (
-              <button key={k} onClick={() => { setAba(k); setFiltroArmazem('todos'); setFiltroGrupo('todos'); setQ(''); }} style={{
+              <button key={k} onClick={() => { setAba(k); limparFiltros(); setSortBy('saldo'); setSortDir('desc'); }} style={{
                 background: aba === k ? 'var(--bg-hover)' : 'none',
                 color: aba === k ? 'var(--text)' : 'var(--text-muted)',
                 border: 'none', padding: '6px 12px', borderRadius: 4, fontSize: 12,
@@ -2871,7 +2902,7 @@ const Estoque = ({ ctx }) => {
           <div className="metric"><div className="metric-label"><i className="ti ti-package"></i> Estoque físico</div><div className="metric-value">{fmtNum(stats.saldo)}</div><div className="metric-delta">un. em lotes</div></div>
           <div className="metric"><div className="metric-label"><i className="ti ti-hash"></i> Lotes</div><div className="metric-value">{stats.n}</div><div className="metric-delta">com saldo</div></div>
           <div className="metric"><div className="metric-label"><i className="ti ti-alarm"></i> A vencer</div><div className="metric-value" style={{ color: stats.avencer ? 'var(--orange)' : 'var(--text)' }}>{stats.avencer}</div><div className="metric-delta">vencidos ou ≤ 60 dias</div></div>
-          <div className="metric"><div className="metric-label"><i className="ti ti-building-warehouse"></i> Armazéns</div><div className="metric-value">{armazens.length}</div><div className="metric-delta">com estoque</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-building-warehouse"></i> Armazéns</div><div className="metric-value">{stats.narmazens}</div><div className="metric-delta">com estoque</div></div>
         </div>
       ) : aba === 'compromissos' ? (
         <div className="metrics">
@@ -2900,6 +2931,19 @@ const Estoque = ({ ctx }) => {
               <option value="todos">Todos os grupos</option>
               {grupos.map(g => <option key={g} value={g}>{g}</option>)}
             </select>
+            <select className="input" style={{ width: 'auto', maxWidth: 220, padding: '6px 10px', fontSize: 12 }} value={filtroCultivar} onChange={e => setFiltroCultivar(e.target.value)}>
+              <option value="todos">Todas as cultivares</option>
+              {cultivares.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select className="input" style={{ width: 'auto', maxWidth: 220, padding: '6px 10px', fontSize: 12 }} value={filtroItem} onChange={e => setFiltroItem(e.target.value)}>
+              <option value="todos">Todos os itens</option>
+              {itens.map(([cod, desc]) => <option key={cod} value={cod}>{cod}{desc ? ' — ' + desc : ''}</option>)}
+            </select>
+            {filtrado && (
+              <button onClick={limparFiltros} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', borderRadius: 6, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <i className="ti ti-x"></i> Limpar
+              </button>
+            )}
           </div>
           <div className="search-box">
             <i className="ti ti-search"></i>
@@ -2923,7 +2967,10 @@ const Estoque = ({ ctx }) => {
         ) : aba === 'lotes' ? (
           <table>
             <thead><tr>
-              <th>Lote</th><th>Item</th><th>Descrição</th><th>Armazém</th><th>Validade</th><th className="num">Saldo físico</th>
+              <th>Lote</th><th>Item</th>
+              <th style={thSort} onClick={() => toggleSort('descricao')}>Descrição <SortArrow col="descricao" /></th>
+              <th>Armazém</th><th>Validade</th>
+              <th className="num" style={thSort} onClick={() => toggleSort('saldo')}>Saldo físico <SortArrow col="saldo" /></th>
             </tr></thead>
             <tbody>{lista.map((l, i) => {
               const sv = statusValidade(l.validade);
@@ -2942,8 +2989,11 @@ const Estoque = ({ ctx }) => {
         ) : aba === 'compromissos' ? (
           <table>
             <thead><tr>
-              <th>Item</th><th>Descrição</th><th>Armazém</th>
-              <th className="num">Saldo</th><th className="num">Compr.</th><th className="num">A receber</th><th className="num">Disp.</th><th>Status</th>
+              <th>Item</th>
+              <th style={thSort} onClick={() => toggleSort('descricao')}>Descrição <SortArrow col="descricao" /></th>
+              <th>Armazém</th>
+              <th className="num" style={thSort} onClick={() => toggleSort('saldo')}>Saldo <SortArrow col="saldo" /></th>
+              <th className="num">Compr.</th><th className="num">A receber</th><th className="num">Disp.</th><th>Status</th>
             </tr></thead>
             <tbody>{lista.map((l, i) => (
               <tr key={(l.item_codigo || '') + '|' + i}>
@@ -2968,8 +3018,11 @@ const Estoque = ({ ctx }) => {
         ) : (
           <table>
             <thead><tr>
-              <th>Tipo</th><th>Lote</th><th>Item</th><th>Descrição</th><th>Armazém</th><th>Validade</th>
-              <th className="num">Saldo</th><th className="num">Compr.</th><th className="num">Disp.</th>
+              <th>Tipo</th><th>Lote</th><th>Item</th>
+              <th style={thSort} onClick={() => toggleSort('descricao')}>Descrição <SortArrow col="descricao" /></th>
+              <th>Armazém</th><th>Validade</th>
+              <th className="num" style={thSort} onClick={() => toggleSort('saldo')}>Saldo <SortArrow col="saldo" /></th>
+              <th className="num">Compr.</th><th className="num">Disp.</th>
             </tr></thead>
             <tbody>{lista.map((l, i) => {
               const sv = statusValidade(l.validade);
