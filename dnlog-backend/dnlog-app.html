@@ -997,6 +997,30 @@ const DNLOG_API = {
     if (!r.ok) throw new Error('POST /oe/faturar ' + r.status);
     return r.json();
   },
+
+  // ---- Agendamentos de Embarque (retirada avulsa em fornecedor) ----
+  async listarAgendamentos() {
+    const r = await fetch(`${DNLOG_API_BASE}/agendamento`, { headers: dnlogAuthHeaders() });
+    if (!r.ok) throw new Error('GET /agendamento ' + r.status);
+    return r.json();
+  },
+  async salvarAgendamento(ag) {
+    const r = await fetch(`${DNLOG_API_BASE}/agendamento`, {
+      method: 'POST',
+      headers: dnlogAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(ag),
+    });
+    if (!r.ok) throw new Error('POST /agendamento ' + r.status);
+    return r.json();
+  },
+  async removerAgendamento(id) {
+    const r = await fetch(`${DNLOG_API_BASE}/agendamento/${id}`, {
+      method: 'DELETE',
+      headers: dnlogAuthHeaders(),
+    });
+    if (!r.ok) throw new Error('DELETE /agendamento ' + r.status);
+    return r.json();
+  },
 };
 window.DNLOG_API = DNLOG_API;
 
@@ -1015,6 +1039,7 @@ const loadState = () => {
       // (vendas), pra não misturar com o fluxo de saída.
       if (!parsed.ordensCompra) parsed.ordensCompra = [];
       if (parsed.proxNumeroCompra == null) parsed.proxNumeroCompra = 1;
+      if (!parsed.agendamentos) parsed.agendamentos = [];
       return parsed;
     }
   } catch(e) {}
@@ -1023,6 +1048,7 @@ const loadState = () => {
     proxNumero: 1,
     ordensCompra: [],
     proxNumeroCompra: 1,
+    agendamentos: [],
     notificacoes: [],
     lotes: lotesDoEstoqueSAP(),
     // baixasFaturadas: { 'PV-XX|SOJ000015': 10, ... }  → consumo permanente faturado
@@ -1257,6 +1283,36 @@ const App = ({ usuario, onLogout }) => {
     showToast('OE de retirada cancelada', '');
   };
 
+  // ---- AGENDAMENTOS DE EMBARQUE (retirada avulsa em fornecedor) — no banco ----
+  // O banco é a fonte da verdade: salvar faz upsert e o registro volta com o num
+  // sequencial do servidor. O estado local só espelha para a UI reagir na hora.
+  const salvarAgendamento = async (ag) => {
+    try {
+      const salvo = await DNLOG_API.salvarAgendamento(ag);
+      setState(s => {
+        const lista = s.agendamentos || [];
+        const existe = lista.some(a => a.id === salvo.id);
+        const nova = existe ? lista.map(a => a.id === salvo.id ? salvo : a) : [salvo, ...lista];
+        return { ...s, agendamentos: nova };
+      });
+      showToast(ag.id ? 'Agendamento atualizado' : 'Agendamento salvo', `#${salvo.num} · ${salvo.fornecedor || ''}`);
+      return salvo;
+    } catch (e) {
+      showToast('Falha ao salvar no banco', e.message || 'tente de novo');
+      throw e;
+    }
+  };
+  const removerAgendamento = async (id) => {
+    if (!confirm('Remover este agendamento? Esta ação não pode ser desfeita.')) return;
+    try {
+      await DNLOG_API.removerAgendamento(id);
+      setState(s => ({ ...s, agendamentos: (s.agendamentos || []).filter(a => a.id !== id) }));
+      showToast('Agendamento removido', '');
+    } catch (e) {
+      showToast('Falha ao remover', e.message || '');
+    }
+  };
+
   // Marca OE como FATURADA: move consumo da OE pra baixas permanentes (qtd_entregue)
   // O efeito visível: o pedido perde aquele saldo na lista de pedidos abertos
   const faturarOE = (id, nfNumero, nfData) => {
@@ -1375,6 +1431,7 @@ const App = ({ usuario, onLogout }) => {
     viewingPedido, setViewingPedido,
     criarOE, atualizarOE, editarOE, cancelarOE, faturarOE, desfaturarOE,
     criarOECompra, atualizarOECompra, cancelarOECompra,
+    salvarAgendamento, removerAgendamento,
     sidebarCollapsed: effectiveCollapsed, setSidebarCollapsed,
     perfilAtivo,
     usuario, onLogout,
@@ -3306,6 +3363,7 @@ const Estoque = ({ ctx }) => {
 // partir de um pedido de compra do SAP. Fluxo espelha a OE de vendas, mas de
 // entrada: escolhe o pedido de compra, os itens/quantidades e o motorista.
 const EmbarquesFornecedores = ({ ctx }) => {
+  const [aba, setAba] = useState('retirada'); // 'retirada' | 'agendamentos'
   const [q, setQ] = useState('');
   const dados = ctx.state.ordensCompra || [];
   const lista = useMemo(() => {
@@ -3320,64 +3378,389 @@ const EmbarquesFornecedores = ({ ctx }) => {
     return l;
   }, [dados, q]);
   const ativos = dados.filter(o => o.status !== 'CANCELADA').length;
+  const nAg = (ctx.state.agendamentos || []).length;
   return (
     <div>
       <div className="page-header">
         <div>
           <div className="crumb"><i className="ti ti-home"></i> Operação · Embarque Fornecedores</div>
-          <h1 className="page-title">Embarque · Retirada em Fornecedores</h1>
-          <p className="page-subtitle">OEs de entrada (retirar produto no fornecedor) · {ativos} ativas</p>
+          <h1 className="page-title">Embarque · Fornecedores</h1>
+          <p className="page-subtitle">
+            {aba === 'retirada'
+              ? `OEs de entrada (retirar produto no fornecedor) · ${ativos} ativas`
+              : `Agendamentos avulsos de retirada · ${nAg} salvo(s) no banco`}
+          </p>
         </div>
-        <button className="btn btn-primary" onClick={() => ctx.setScreen('nova-oe-fornecedor')}>
-          <i className="ti ti-plus"></i> Nova OE de retirada
-        </button>
+        <div style={{ display: 'flex', gap: 4, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: 2 }}>
+          {[['retirada', 'OEs de retirada', 'ti-truck-loading', ativos], ['agendamentos', 'Agendamentos', 'ti-calendar-event', nAg]].map(([k, l, ic, n]) => (
+            <button key={k} onClick={() => setAba(k)} style={{
+              background: aba === k ? 'var(--bg-hover)' : 'none',
+              color: aba === k ? 'var(--text)' : 'var(--text-muted)',
+              border: 'none', padding: '6px 12px', borderRadius: 4, fontSize: 12,
+              fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
+            }}><i className={'ti ' + ic}></i> {l} <span style={{ opacity: 0.55 }}>{n}</span></button>
+          ))}
+        </div>
       </div>
+
+      {aba === 'retirada' ? (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+            <button className="btn btn-primary" onClick={() => ctx.setScreen('nova-oe-fornecedor')}>
+              <i className="ti ti-plus"></i> Nova OE de retirada
+            </button>
+          </div>
+          <div className="panel">
+            <div className="panel-header">
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{dados.length} OE(s) no total</div>
+              <div className="search-box"><i className="ti ti-search"></i>
+                <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar OE, fornecedor, pedido..." /></div>
+            </div>
+            {lista.length === 0 ? (
+              <div className="empty">
+                <i className="ti ti-truck-loading"></i>
+                <div>Nenhuma OE de retirada ainda</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                  Clique em "Nova OE de retirada" para criar a primeira (a partir de um pedido de compra do SAP).
+                </div>
+              </div>
+            ) : (
+              <table>
+                <thead><tr>
+                  <th>OE</th><th>Fornecedor</th><th>Pedido compra</th><th className="num">Itens</th>
+                  <th className="num">Volumes</th><th>Motorista</th><th>Placa</th><th>Prevista</th><th>Status</th><th></th>
+                </tr></thead>
+                <tbody>{lista.map(o => {
+                  const vol = (o.itens || []).reduce((a, it) => a + (Number(it.qtd) || 0), 0);
+                  return (
+                    <tr key={o.id}>
+                      <td className="cell-primary mono" style={{ fontSize: 12, color: 'var(--accent-light)' }}>{o.numero}</td>
+                      <td style={{ fontSize: 13 }}>{o.fornecedor}</td>
+                      <td className="mono cell-muted" style={{ fontSize: 12 }}>{o.pedido_compra_numero || '—'}</td>
+                      <td className="num mono">{(o.itens || []).length}</td>
+                      <td className="num mono">{fmtNum(vol)}</td>
+                      <td style={{ fontSize: 12 }}>{o.motorista_nome || '—'}</td>
+                      <td className="mono" style={{ fontSize: 12 }}>{o.veiculo_placa || '—'}</td>
+                      <td className="mono" style={{ fontSize: 12 }}>{fmtDate(o.data_prevista)}</td>
+                      <td><StatusChip status={o.status} /></td>
+                      <td>
+                        {ctx.podeEditar && o.status !== 'CANCELADA' && (
+                          <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }}
+                            onClick={() => { if (confirm(`Cancelar a OE ${o.numero}?`)) ctx.cancelarOECompra(o.id); }}>
+                            <i className="ti ti-x"></i>
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      ) : (
+        <AgendamentosFornecedor ctx={ctx} />
+      )}
+    </div>
+  );
+};
+
+// ============================================================
+// AGENDAMENTOS DE EMBARQUE (retirada avulsa em fornecedor) — persistidos no banco
+// ============================================================
+// Seções do formulário (mesmos campos do documento de agendamento standalone).
+const AG_SECOES = [
+  { num: '01', titulo: 'Fornecedor e local de coleta', campos: [
+    { k: 'fornecedor', label: 'Fornecedor', ph: 'Nome do fornecedor', w: 2 },
+    { k: 'cnpj_do_fornecedor', label: 'CNPJ do fornecedor', ph: '00.000.000/0000-00', mono: true },
+    { k: 'local_de_retirada', label: 'Local de retirada', ph: 'Endereço / cidade – UF', w: 2 },
+    { k: 'contato_no_local', label: 'Contato no local', ph: 'Nome e telefone' },
+    { k: 'data_prevista_do_embarque', label: 'Data prevista do embarque', tipo: 'date' },
+    { k: 'horario_previsto', label: 'Horário previsto', tipo: 'time' },
+  ]},
+  { num: '02', titulo: 'Motorista e veículo', campos: [
+    { k: 'motorista', label: 'Motorista', ph: 'Nome do motorista', w: 2 },
+    { k: 'cpf', label: 'CPF', ph: '000.000.000-00', mono: true },
+    { k: 'telefone', label: 'Telefone', ph: '(00) 00000-0000', mono: true },
+    { k: 'placa', label: 'Placa', ph: 'ABC1D23', mono: true, up: true },
+    { k: 'uf', label: 'UF', ph: 'UF', mono: true, up: true, max: 2 },
+    { k: 'tipo_de_veiculo', label: 'Tipo de veículo', ph: 'Ex.: Truck, Carreta, Bitrem' },
+  ]},
+  { num: '03', titulo: 'Transportadora', campos: [
+    { k: 'razao_social', label: 'Razão social', ph: 'Nome da transportadora', w: 2 },
+    { k: 'cnpj', label: 'CNPJ', ph: '00.000.000/0000-00', mono: true },
+    { k: 'inscricao_estadual', label: 'Inscrição estadual', ph: '000.000.000.000', mono: true },
+    { k: 'endereco', label: 'Endereço', ph: 'Rua, nº, bairro · cidade – UF', w: 2 },
+  ]},
+];
+
+const AgendamentosFornecedor = ({ ctx }) => {
+  const [q, setQ] = useState('');
+  const [editando, setEditando] = useState(null); // objeto do agendamento (ou {} novo) | null
+  const dados = ctx.state.agendamentos || [];
+  const lista = useMemo(() => {
+    let l = [...dados].sort((a, b) => (b.num || 0) - (a.num || 0));
+    if (q) {
+      const ql = q.toLowerCase();
+      l = l.filter(a =>
+        String(a.num || '').includes(ql) ||
+        (a.fornecedor || '').toLowerCase().includes(ql) ||
+        ((a.campos && a.campos.motorista) || '').toLowerCase().includes(ql));
+    }
+    return l;
+  }, [dados, q]);
+
+  const recebidas = dados.filter(a => a.recebida).length;
+  const freteTotal = dados.reduce((s, a) => s + (Number(a.valor_frete) || 0), 0);
+
+  const exportarCSV = () => {
+    const cab = ['Num', 'Fornecedor', 'Data prevista', 'Motorista', 'Placa', 'Produtos', 'Volumes', 'Recebida', 'Valor frete'];
+    const linhas = [cab.join(';')];
+    dados.forEach(a => {
+      const c = a.campos || {};
+      const vol = (a.produtos || []).reduce((s, p) => s + (Number(p.qtd) || 0), 0);
+      linhas.push([
+        a.num, a.fornecedor || c.fornecedor || '', c.data_prevista_do_embarque || '',
+        c.motorista || '', c.placa || '', (a.produtos || []).length, vol,
+        a.recebida ? 'SIM' : 'NAO', (Number(a.valor_frete) || 0).toFixed(2),
+      ].map(x => String(x == null ? '' : x).replace(/;/g, ',')).join(';'));
+    });
+    const blob = new Blob(['﻿' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const el = document.createElement('a'); el.href = url; el.download = `agendamentos_${new Date().toISOString().slice(0,10)}.csv`; el.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div>
+      <div className="metrics" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+        <div className="metric"><div className="metric-label"><i className="ti ti-calendar-event"></i> Agendamentos</div><div className="metric-value">{dados.length}</div><div className="metric-delta">salvos no banco</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-package-import"></i> Recebidas</div><div className="metric-value" style={{ color: 'var(--green)' }}>{recebidas}</div><div className="metric-delta">de {dados.length}</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-clock"></i> Pendentes</div><div className="metric-value" style={{ color: dados.length - recebidas ? 'var(--orange)' : 'var(--text)' }}>{dados.length - recebidas}</div><div className="metric-delta">a receber</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-cash"></i> Frete pago</div><div className="metric-value" style={{ fontSize: 22 }}>{fmtMoney(freteTotal)}</div><div className="metric-delta">soma dos fretes</div></div>
+      </div>
+
       <div className="panel">
         <div className="panel-header">
-          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{dados.length} OE(s) no total</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-primary" onClick={() => setEditando({})}>
+              <i className="ti ti-plus"></i> Novo agendamento
+            </button>
+            <button className="btn btn-ghost" onClick={exportarCSV} disabled={dados.length === 0}>
+              <i className="ti ti-file-export"></i> CSV
+            </button>
+          </div>
           <div className="search-box"><i className="ti ti-search"></i>
-            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar OE, fornecedor, pedido..." /></div>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar nº, fornecedor, motorista..." /></div>
         </div>
         {lista.length === 0 ? (
           <div className="empty">
-            <i className="ti ti-truck-loading"></i>
-            <div>Nenhuma OE de retirada ainda</div>
+            <i className="ti ti-calendar-event"></i>
+            <div>{dados.length === 0 ? 'Nenhum agendamento salvo ainda' : 'Nada com essa busca'}</div>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              Clique em "Nova OE de retirada" para criar a primeira (a partir de um pedido de compra do SAP).
+              Clique em "Novo agendamento" para registrar uma retirada avulsa no fornecedor.
             </div>
           </div>
         ) : (
           <table>
             <thead><tr>
-              <th>OE</th><th>Fornecedor</th><th>Pedido compra</th><th className="num">Itens</th>
-              <th className="num">Volumes</th><th>Motorista</th><th>Placa</th><th>Prevista</th><th>Status</th><th></th>
+              <th className="num">Nº</th><th>Fornecedor</th><th>Data</th><th>Motorista</th><th>Placa</th>
+              <th className="num">Volumes</th><th style={{ textAlign: 'center' }}>Recebida</th>
+              <th className="num">Valor frete</th><th></th>
             </tr></thead>
-            <tbody>{lista.map(o => {
-              const vol = (o.itens || []).reduce((a, it) => a + (Number(it.qtd) || 0), 0);
-              return (
-                <tr key={o.id}>
-                  <td className="cell-primary mono" style={{ fontSize: 12, color: 'var(--accent-light)' }}>{o.numero}</td>
-                  <td style={{ fontSize: 13 }}>{o.fornecedor}</td>
-                  <td className="mono cell-muted" style={{ fontSize: 12 }}>{o.pedido_compra_numero || '—'}</td>
-                  <td className="num mono">{(o.itens || []).length}</td>
-                  <td className="num mono">{fmtNum(vol)}</td>
-                  <td style={{ fontSize: 12 }}>{o.motorista_nome || '—'}</td>
-                  <td className="mono" style={{ fontSize: 12 }}>{o.veiculo_placa || '—'}</td>
-                  <td className="mono" style={{ fontSize: 12 }}>{fmtDate(o.data_prevista)}</td>
-                  <td><StatusChip status={o.status} /></td>
-                  <td>
-                    {ctx.podeEditar && o.status !== 'CANCELADA' && (
-                      <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }}
-                        onClick={() => { if (confirm(`Cancelar a OE ${o.numero}?`)) ctx.cancelarOECompra(o.id); }}>
-                        <i className="ti ti-x"></i>
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}</tbody>
+            <tbody>{lista.map(a => (
+              <LinhaAgendamento key={a.id} ag={a} ctx={ctx} onEditar={() => setEditando(a)} />
+            ))}</tbody>
           </table>
         )}
+      </div>
+
+      {editando && (
+        <AgendamentoForm
+          ctx={ctx}
+          inicial={editando}
+          onFechar={() => setEditando(null)}
+        />
+      )}
+    </div>
+  );
+};
+
+// Linha da lista com Recebida (checkbox) e Valor do frete (editável), que salvam
+// direto no banco. O frete usa estado local + onBlur para não gravar a cada tecla.
+const LinhaAgendamento = ({ ag, ctx, onEditar }) => {
+  const c = ag.campos || {};
+  const vol = (ag.produtos || []).reduce((s, p) => s + (Number(p.qtd) || 0), 0);
+  const [frete, setFrete] = useState(ag.valor_frete == null ? '' : String(ag.valor_frete));
+  useEffect(() => { setFrete(ag.valor_frete == null ? '' : String(ag.valor_frete)); }, [ag.valor_frete]);
+
+  const salvarFrete = () => {
+    const novo = frete === '' ? null : Number(String(frete).replace(',', '.'));
+    if ((novo == null ? null : novo) === (ag.valor_frete == null ? null : ag.valor_frete)) return; // sem mudança
+    ctx.salvarAgendamento({ ...ag, valor_frete: novo });
+  };
+  const toggleRecebida = () => ctx.salvarAgendamento({ ...ag, recebida: !ag.recebida });
+
+  return (
+    <tr>
+      <td className="num mono cell-primary" style={{ color: 'var(--accent-light)', fontWeight: 700 }}>{ag.num}</td>
+      <td style={{ fontSize: 13 }}>{ag.fornecedor || c.fornecedor || '—'}</td>
+      <td className="mono" style={{ fontSize: 12 }}>{fmtDate(c.data_prevista_do_embarque)}</td>
+      <td style={{ fontSize: 12 }}>{c.motorista || '—'}</td>
+      <td className="mono" style={{ fontSize: 12 }}>{c.placa || '—'}</td>
+      <td className="num mono">{vol ? fmtNum(vol) : '—'}</td>
+      <td style={{ textAlign: 'center' }}>
+        <input type="checkbox" checked={!!ag.recebida} onChange={toggleRecebida}
+          title={ag.recebida ? 'Recebida' : 'Marcar como recebida'}
+          style={{ width: 18, height: 18, cursor: 'pointer', accentColor: 'var(--green)' }} />
+      </td>
+      <td className="num">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+          <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>R$</span>
+          <input value={frete} onChange={e => setFrete(e.target.value)} onBlur={salvarFrete}
+            onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+            inputMode="decimal" placeholder="0,00"
+            style={{ width: 90, padding: '4px 6px', textAlign: 'right', background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 4, color: 'var(--text)', fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }} />
+        </div>
+      </td>
+      <td>
+        <div style={{ display: 'flex', gap: 2 }}>
+          <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} onClick={onEditar} title="Editar">
+            <i className="ti ti-edit"></i>
+          </button>
+          <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} onClick={() => ctx.removerAgendamento(ag.id)} title="Remover">
+            <i className="ti ti-trash"></i>
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+};
+
+// Formulário (modal) de criação/edição de agendamento avulso.
+const AgendamentoForm = ({ ctx, inicial, onFechar }) => {
+  const editar = !!(inicial && inicial.id);
+  const [campos, setCampos] = useState(() => ({ ...(inicial.campos || {}) }));
+  const [produtos, setProdutos] = useState(() =>
+    (inicial.produtos && inicial.produtos.length) ? inicial.produtos.map(p => ({ ...p })) : [{ produto: '', embalagem: '', qtd: '' }]
+  );
+  const [recebida, setRecebida] = useState(!!inicial.recebida);
+  const [valorFrete, setValorFrete] = useState(inicial.valor_frete == null ? '' : String(inicial.valor_frete));
+  const [salvando, setSalvando] = useState(false);
+
+  const setCampo = (k, v) => setCampos(c => ({ ...c, [k]: v }));
+  const setProd = (i, k, v) => setProdutos(ps => ps.map((p, j) => j === i ? { ...p, [k]: v } : p));
+  const addProd = () => setProdutos(ps => [...ps, { produto: '', embalagem: '', qtd: '' }]);
+  const rmProd = (i) => setProdutos(ps => ps.length > 1 ? ps.filter((_, j) => j !== i) : ps);
+
+  const salvar = async () => {
+    if (!(campos.fornecedor || '').trim()) { ctx.showToast('Informe o fornecedor', ''); return; }
+    const prods = produtos.filter(p => (p.produto || '').trim() || (p.qtd || '').toString().trim());
+    const rec = {
+      ...(inicial.id ? { id: inicial.id, num: inicial.num } : {}),
+      campos,
+      produtos: prods,
+      fornecedor: (campos.fornecedor || '').trim(),
+      data: campos.data_prevista_do_embarque || null,
+      recebida,
+      valor_frete: valorFrete === '' ? null : Number(String(valorFrete).replace(',', '.')),
+    };
+    setSalvando(true);
+    try { await ctx.salvarAgendamento(rec); onFechar(); }
+    catch (e) { /* toast já exibido */ }
+    finally { setSalvando(false); }
+  };
+
+  const lbl = { fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 };
+  const inp = { width: '100%', padding: '7px 9px', background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 5, color: 'var(--text)', fontFamily: 'inherit', fontSize: 13 };
+
+  return (
+    <div className="modal-backdrop" onClick={onFechar}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 820, maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+        <div className="modal-header">
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>Agendamento de embarque</div>
+            <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{editar ? `Editar #${inicial.num}` : 'Novo agendamento (retirada avulsa)'}</div>
+          </div>
+          <button className="btn btn-ghost" style={{ padding: '4px 8px' }} onClick={onFechar}><i className="ti ti-x"></i></button>
+        </div>
+
+        <div className="modal-body" style={{ padding: 20, overflowY: 'auto' }}>
+          {AG_SECOES.map(sec => (
+            <div key={sec.num} style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-light)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ opacity: 0.6 }}>{sec.num}</span> {sec.titulo}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                {sec.campos.map(f => (
+                  <div key={f.k} style={{ gridColumn: f.w === 2 ? 'span 2' : 'span 1' }}>
+                    <label style={lbl}>{f.label}</label>
+                    <input
+                      type={f.tipo || 'text'}
+                      value={campos[f.k] || ''}
+                      maxLength={f.max}
+                      onChange={e => setCampo(f.k, f.up ? e.target.value.toUpperCase() : e.target.value)}
+                      placeholder={f.ph || ''}
+                      style={{ ...inp, ...(f.mono ? { fontFamily: 'JetBrains Mono, monospace' } : {}) }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {/* 04 Produtos */}
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-light)', marginBottom: 8 }}>
+              <span style={{ opacity: 0.6 }}>04</span> Produtos a retirar
+            </div>
+            <table style={{ width: '100%' }}>
+              <thead><tr>
+                <th>Produto</th><th style={{ width: 160 }}>Embalagem</th><th className="num" style={{ width: 110 }}>Qtd</th><th style={{ width: 40 }}></th>
+              </tr></thead>
+              <tbody>{produtos.map((p, i) => (
+                <tr key={i}>
+                  <td><input value={p.produto} onChange={e => setProd(i, 'produto', e.target.value)} placeholder="Cultivar / descrição" style={inp} /></td>
+                  <td><input value={p.embalagem} onChange={e => setProd(i, 'embalagem', e.target.value)} placeholder="BB / Saca..." style={inp} /></td>
+                  <td><input value={p.qtd} onChange={e => setProd(i, 'qtd', e.target.value)} inputMode="numeric" placeholder="0" style={{ ...inp, textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }} /></td>
+                  <td style={{ textAlign: 'center' }}>
+                    <button className="btn btn-ghost" style={{ padding: '4px 6px' }} onClick={() => rmProd(i)} disabled={produtos.length <= 1}><i className="ti ti-x"></i></button>
+                  </td>
+                </tr>
+              ))}</tbody>
+            </table>
+            <button className="btn btn-ghost" style={{ marginTop: 6, fontSize: 12 }} onClick={addProd}><i className="ti ti-plus"></i> Adicionar produto</button>
+          </div>
+
+          {/* 05 Observações */}
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-light)', marginBottom: 8 }}>
+              <span style={{ opacity: 0.6 }}>05</span> Observações
+            </div>
+            <textarea value={campos.instrucoes_para_o_fornecedor || ''} onChange={e => setCampo('instrucoes_para_o_fornecedor', e.target.value)}
+              placeholder="Instruções para o fornecedor" rows={3} style={{ ...inp, resize: 'vertical' }} />
+          </div>
+
+          {/* Controle */}
+          <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap', padding: '12px 14px', background: 'var(--bg-card)', borderRadius: 8, border: '1px solid var(--border)' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={recebida} onChange={e => setRecebida(e.target.checked)} style={{ width: 18, height: 18, cursor: 'pointer', accentColor: 'var(--green)' }} />
+              Carga recebida
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+              Valor do frete pago (R$)
+              <input value={valorFrete} onChange={e => setValorFrete(e.target.value)} inputMode="decimal" placeholder="0,00"
+                style={{ width: 110, padding: '6px 8px', textAlign: 'right', background: 'var(--bg-elev)', border: '1px solid var(--border-strong)', borderRadius: 5, color: 'var(--text)', fontFamily: 'JetBrains Mono, monospace', fontSize: 13 }} />
+            </label>
+          </div>
+        </div>
+
+        <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
+          <button className="btn btn-ghost" onClick={onFechar}>Cancelar</button>
+          <button className="btn btn-primary" onClick={salvar} disabled={salvando}>
+            <i className="ti ti-device-floppy"></i> {salvando ? 'Salvando...' : (editar ? 'Salvar alterações' : 'Salvar no banco')}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -7116,6 +7499,19 @@ const AdminUsuarios = ({ ctx }) => {
       }
     } catch (e) {
       console.warn('[DNLog API] Não foi possível carregar OEs do banco:', e.message);
+    }
+
+    // Hidrata os AGENDAMENTOS de embarque do banco (fonte da verdade).
+    try {
+      const agsBanco = await fetchTimeout(`${API_BASE}/agendamento`, DATA_TIMEOUT_MS);
+      if (Array.isArray(agsBanco)) {
+        const atual = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        atual.agendamentos = agsBanco;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(atual));
+        console.log(`[DNLog API] ${agsBanco.length} agendamento(s) carregados do banco`);
+      }
+    } catch (e) {
+      console.warn('[DNLog API] Não foi possível carregar agendamentos do banco:', e.message);
     }
 
     // Puxa os pedidos (NÃO-FATAL: se o SAP falhar, o app continua conectado ao
