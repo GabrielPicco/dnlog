@@ -2274,10 +2274,48 @@ const FiltroStatusSap = ({ sel, setSel }) => (
   </div>
 );
 
+// ============================================================
+// ORDENAÇÃO POR CLIQUE NO CABEÇALHO (reutilizável entre tabelas)
+// ============================================================
+// useSort guarda coluna + direção; SortTh é o <th> clicável com a setinha;
+// sortRows ordena por um accessor genérico (vazios/null sempre vão pro fim).
+const useSort = (defCol, defDir) => {
+  const [sortCol, setSortCol] = useState(defCol);
+  const [sortDir, setSortDir] = useState(defDir || 'asc');
+  const onSort = (col, colDefDir) => {
+    if (sortCol === col) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortCol(col); setSortDir(colDefDir || 'asc'); }
+  };
+  return { sortCol, sortDir, onSort };
+};
+const SortTh = ({ col, sortCol, sortDir, onSort, defDir, className, style, children }) => (
+  <th className={className}
+      style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', ...(style || {}) }}
+      onClick={() => onSort(col, defDir)}>
+    {children}{' '}
+    <i className={'ti ' + (sortCol === col ? (sortDir === 'asc' ? 'ti-arrow-up' : 'ti-arrow-down') : 'ti-arrows-sort')}
+       style={{ fontSize: 11, marginLeft: 2, opacity: sortCol === col ? 1 : 0.35 }}></i>
+  </th>
+);
+const sortRows = (rows, sortCol, sortDir, getVal) => {
+  const dir = sortDir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const va = getVal(a, sortCol), vb = getVal(b, sortCol);
+    const ea = va === '' || va == null, eb = vb === '' || vb == null;
+    if (ea && eb) return 0;
+    if (ea) return 1;   // vazio sempre por último
+    if (eb) return -1;
+    if (typeof va === 'number' && typeof vb === 'number') return dir * (va - vb);
+    return dir * String(va).localeCompare(String(vb), 'pt');
+  });
+};
+
 const PedidosCompra = ({ ctx }) => {
   const [q, setQ] = useState('');
   const [statusSel, setStatusSel] = useState(['aberto']);
   const [aberto, setAberto] = useState(null); // numero do pedido expandido
+  const { sortCol, sortDir, onSort } = useSort('entrega', 'asc');
+  const sortProps = { sortCol, sortDir, onSort };
   const dados = DADOS_PEDIDOS_COMPRA || [];
 
   const lista = useMemo(() => {
@@ -2287,8 +2325,22 @@ const PedidosCompra = ({ ctx }) => {
       const ql = q.toLowerCase();
       l = l.filter(p => (p.numero || '').toLowerCase().includes(ql) || (p.fornecedor || '').toLowerCase().includes(ql));
     }
-    return l.sort((a, b) => (a.data_entrega || '').localeCompare(b.data_entrega || ''));
-  }, [dados, q, statusSel]);
+    const getVal = (p, col) => {
+      switch (col) {
+        case 'numero': return p.numero || '';
+        case 'fornecedor': return p.fornecedor || '';
+        case 'emissao': return p.data_emissao || '';
+        case 'entrega': return p.data_entrega || '';
+        case 'itens': return (p.itens || []).length;
+        case 'qtdtotal': return p.qtd_total_bb || 0;
+        case 'saldo': return p.qtd_saldo_bb || 0;
+        case 'saldoR': return p.saldo_aberto || 0;
+        case 'status': return p.status_sap || '';
+        default: return '';
+      }
+    };
+    return sortRows(l, sortCol, sortDir, getVal);
+  }, [dados, q, statusSel, sortCol, sortDir]);
 
   const stats = useMemo(() => ({
     total: dados.length,
@@ -2375,8 +2427,16 @@ const PedidosCompra = ({ ctx }) => {
         ) : (
           <table>
             <thead><tr>
-              <th>Pedido</th><th>Fornecedor</th><th>Emissão</th><th>Entrega</th>
-              <th className="num">Itens</th><th className="num">Qtd total</th><th className="num">Saldo (un.)</th><th className="num">Saldo (R$)</th><th>Status</th><th></th>
+              <SortTh col="numero" {...sortProps}>Pedido</SortTh>
+              <SortTh col="fornecedor" {...sortProps}>Fornecedor</SortTh>
+              <SortTh col="emissao" defDir="desc" {...sortProps}>Emissão</SortTh>
+              <SortTh col="entrega" {...sortProps}>Entrega</SortTh>
+              <SortTh col="itens" className="num" defDir="desc" {...sortProps}>Itens</SortTh>
+              <SortTh col="qtdtotal" className="num" defDir="desc" {...sortProps}>Qtd total</SortTh>
+              <SortTh col="saldo" className="num" defDir="desc" {...sortProps}>Saldo (un.)</SortTh>
+              <SortTh col="saldoR" className="num" defDir="desc" {...sortProps}>Saldo (R$)</SortTh>
+              <SortTh col="status" {...sortProps}>Status</SortTh>
+              <th></th>
             </tr></thead>
             <tbody>{lista.map(p => (
               <React.Fragment key={p.numero}>
@@ -2418,7 +2478,8 @@ const Pedidos = ({ ctx }) => {
   const [q, setQ] = useState('');
   const [statusSel, setStatusSel] = useState(['aberto']);
   const [filtroPrazo, setFiltroPrazo] = useState('todos'); // todos, atrasado, hoje, 7d, 30d, sem_prazo
-  const [ordenacao, setOrdenacao] = useState('prazo_asc'); // prazo_asc, prazo_desc, saldo_desc, emissao_desc
+  const { sortCol, sortDir, onSort } = useSort('entrega', 'asc'); // ordenação por clique no cabeçalho
+  const sortProps = { sortCol, sortDir, onSort };
 
   // Helpers de cálculo de urgência
   const calcUrgencia = (dataEntrega) => {
@@ -2460,23 +2521,23 @@ const Pedidos = ({ ctx }) => {
         return true;
       });
     }
-    // Ordenação
-    const copia = [...l];
-    if (ordenacao === 'prazo_asc') {
-      copia.sort((a, b) => {
-        if (!a.data_entrega) return 1;
-        if (!b.data_entrega) return -1;
-        return a.data_entrega.localeCompare(b.data_entrega);
-      });
-    } else if (ordenacao === 'prazo_desc') {
-      copia.sort((a, b) => (b.data_entrega || '').localeCompare(a.data_entrega || ''));
-    } else if (ordenacao === 'saldo_desc') {
-      copia.sort((a, b) => b.saldo_aberto - a.saldo_aberto);
-    } else if (ordenacao === 'emissao_desc') {
-      copia.sort((a, b) => (b.data_emissao || '').localeCompare(a.data_emissao || ''));
-    }
-    return copia;
-  }, [ctx.pedidos, q, statusSel, filtroPrazo, ordenacao]);
+    // Ordenação por clique no cabeçalho
+    const getVal = (p, col) => {
+      switch (col) {
+        case 'numero': return p.numero || '';
+        case 'cliente': return p.cliente || '';
+        case 'vendedor': return p.vendedor || '';
+        case 'emissao': return p.data_emissao || '';
+        case 'entrega': return p.data_entrega || '';
+        case 'itens': return p.itens.length;
+        case 'saldo': return p.qtd_saldo_bb || 0;
+        case 'saldoaberto': return p.saldo_aberto || 0;
+        case 'status': return p.status_sap || '';
+        default: return '';
+      }
+    };
+    return sortRows(l, sortCol, sortDir, getVal);
+  }, [ctx.pedidos, q, statusSel, filtroPrazo, sortCol, sortDir]);
 
   // Stats por urgência
   const statsPrazo = useMemo(() => {
@@ -2622,12 +2683,9 @@ const Pedidos = ({ ctx }) => {
             <i className="ti ti-search"></i>
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar pedido, cliente, vendedor..." />
           </div>
-          <select value={ordenacao} onChange={e => setOrdenacao(e.target.value)} className="input" style={{ width: 'auto', padding: '5px 8px', fontSize: 12 }}>
-            <option value="prazo_asc">Prazo ↑ (mais urgente)</option>
-            <option value="prazo_desc">Prazo ↓ (mais distante)</option>
-            <option value="saldo_desc">Maior saldo aberto</option>
-            <option value="emissao_desc">Emissão recente</option>
-          </select>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+            <i className="ti ti-arrows-sort" style={{ fontSize: 12 }}></i> clique no cabeçalho p/ ordenar
+          </span>
         </div>
 
         {filtroPrazo !== 'todos' && (
@@ -2648,9 +2706,16 @@ const Pedidos = ({ ctx }) => {
 
         <table>
           <thead><tr>
-            <th>Pedido</th><th>Cliente</th><th>Vendedor</th><th>Emissão</th>
-            <th>Entrega prevista</th><th style={{ width: 90 }}>Urgência</th>
-            <th className="num">Itens</th><th className="num">Saldo / Total</th><th className="num">Saldo aberto</th><th>Status</th>
+            <SortTh col="numero" {...sortProps}>Pedido</SortTh>
+            <SortTh col="cliente" {...sortProps}>Cliente</SortTh>
+            <SortTh col="vendedor" {...sortProps}>Vendedor</SortTh>
+            <SortTh col="emissao" defDir="desc" {...sortProps}>Emissão</SortTh>
+            <SortTh col="entrega" {...sortProps}>Entrega prevista</SortTh>
+            <th style={{ width: 90 }}>Urgência</th>
+            <SortTh col="itens" className="num" defDir="desc" {...sortProps}>Itens</SortTh>
+            <SortTh col="saldo" className="num" defDir="desc" {...sortProps}>Saldo / Total</SortTh>
+            <SortTh col="saldoaberto" className="num" defDir="desc" {...sortProps}>Saldo aberto</SortTh>
+            <SortTh col="status" {...sortProps}>Status</SortTh>
           </tr></thead>
           <tbody>{lista.map(p => {
             const u = calcUrgencia(p.data_entrega);
