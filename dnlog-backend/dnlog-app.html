@@ -1534,6 +1534,48 @@ const Relatorios = ({ ctx }) => {
   const statusKeys = Object.keys(rel.statusCount).sort((a, b) => rel.statusCount[b] - rel.statusCount[a]);
   const maxStatus = Math.max(1, ...statusKeys.map(k => rel.statusCount[k]));
 
+  // ---- Resumo comercial de pedidos (abertos/fechados, unidades, valor, comissão) ----
+  // Comissão é % configurável (não vem do SAP); aplica sobre o valor total.
+  const [comissaoPct, setComissaoPct] = useState('');
+  const resumo = useMemo(() => {
+    const peds = ctx.pedidos || [];
+    const naoCancel = peds.filter(p => p.status_sap !== 'cancelado');
+    let unidades = 0, valor = 0, abertos = 0, fechados = 0;
+    const porRep = {};
+    naoCancel.forEach(p => {
+      const its = p.itens || [];
+      const uPed = its.reduce((a, i) => a + (i.qtd_bb || 0), 0);
+      const vPed = its.reduce((a, i) => a + (i.valor_total != null ? i.valor_total : (i.qtd_bb || 0) * (i.valor_unitario || 0)), 0);
+      unidades += uPed; valor += vPed;
+      if (p.status_sap === 'aberto') abertos++;
+      if (p.status_sap === 'fechado') fechados++;
+      const k = p.vendedor || '—';
+      if (!porRep[k]) porRep[k] = { vendedor: k, pedidos: 0, abertos: 0, unidades: 0, valor: 0 };
+      porRep[k].pedidos++;
+      if (p.status_sap === 'aberto') porRep[k].abertos++;
+      porRep[k].unidades += uPed;
+      porRep[k].valor += vPed;
+    });
+    const representantes = Object.values(porRep).sort((a, b) => b.valor - a.valor);
+    const cancelados = peds.filter(p => p.status_sap === 'cancelado').length;
+    return { abertos, fechados, cancelados, unidades, valor, representantes, nPedidos: naoCancel.length };
+  }, [ctx.pedidos]);
+  const pct = parseFloat(String(comissaoPct).replace(',', '.')) || 0;
+  const comissaoTotal = resumo.valor * pct / 100;
+
+  const exportarResumo = () => {
+    const linhas = ['Representante;Pedidos;Abertos;Unidades;Valor total;Comissao (' + pct + '%)'];
+    resumo.representantes.forEach(r => {
+      linhas.push([r.vendedor, r.pedidos, r.abertos, r.unidades, r.valor.toFixed(2), (r.valor * pct / 100).toFixed(2)].map(c => String(c).replace(/;/g, ',')).join(';'));
+    });
+    linhas.push(['TOTAL', resumo.nPedidos, resumo.abertos, resumo.unidades, resumo.valor.toFixed(2), comissaoTotal.toFixed(2)].join(';'));
+    const blob = new Blob(['﻿' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `relatorio_pedidos_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    ctx.showToast('Relatório exportado', `${resumo.representantes.length} representantes`);
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -1542,6 +1584,61 @@ const Relatorios = ({ ctx }) => {
           <h1 className="page-title">Relatórios</h1>
           <p className="page-subtitle">Visão analítica da carteira aberta no SAP e dos embarques · {rel.abertos.length} pedidos em aberto</p>
         </div>
+      </div>
+
+      {/* ===== RESUMO COMERCIAL DE PEDIDOS (abertos/fechados, unidades, valor, comissão) ===== */}
+      <div className="panel" style={{ marginBottom: 16 }}>
+        <div className="panel-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <i className="ti ti-report-money" style={{ color: 'var(--accent-light)' }}></i>
+            <strong style={{ fontSize: 14 }}>Resumo comercial de pedidos</strong>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>SAP · exclui cancelados</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              Comissão (%)
+              <input type="number" step="0.1" min="0" value={comissaoPct} onChange={e => setComissaoPct(e.target.value)} placeholder="ex.: 2"
+                style={{ width: 72, padding: '5px 8px', background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 4, color: 'var(--text)', fontFamily: 'inherit', fontSize: 13 }} />
+            </label>
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 10px' }} onClick={exportarResumo}>
+              <i className="ti ti-file-export"></i> CSV
+            </button>
+          </div>
+        </div>
+        <div className="metrics" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+          <div className="metric"><div className="metric-label"><i className="ti ti-folder-open"></i> Pedidos abertos</div><div className="metric-value" style={{ color: 'var(--green)' }}>{resumo.abertos}</div><div className="metric-delta">com saldo no SAP</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-folder-check"></i> Pedidos fechados</div><div className="metric-value">{resumo.fechados}</div><div className="metric-delta">já atendidos</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-package"></i> Unidades totais</div><div className="metric-value">{fmtNum(resumo.unidades)}</div><div className="metric-delta">em {resumo.nPedidos} pedidos</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-cash"></i> Valor total</div><div className="metric-value" style={{ fontSize: 22 }}>{fmtMoney(resumo.valor)}</div><div className="metric-delta">soma dos pedidos</div></div>
+          <div className="metric"><div className="metric-label"><i className="ti ti-percentage"></i> Comissão total</div><div className="metric-value" style={{ color: pct ? 'var(--accent-light)' : 'var(--text-dim)', fontSize: 22 }}>{pct ? fmtMoney(comissaoTotal) : '—'}</div><div className="metric-delta">{pct ? `${pct}% sobre o valor` : 'defina a % acima'}</div></div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>Representante</th>
+            <th className="num">Pedidos</th><th className="num">Abertos</th>
+            <th className="num">Unidades</th><th className="num">Valor total</th><th className="num">Comissão</th>
+          </tr></thead>
+          <tbody>
+            {resumo.representantes.map(r => (
+              <tr key={r.vendedor}>
+                <td className="cell-primary">{r.vendedor}</td>
+                <td className="num mono">{r.pedidos}</td>
+                <td className="num mono" style={{ color: r.abertos ? 'var(--green)' : 'var(--text-dim)' }}>{r.abertos}</td>
+                <td className="num mono">{fmtNum(r.unidades)}</td>
+                <td className="num mono cell-primary">{fmtMoney(r.valor)}</td>
+                <td className="num mono" style={{ color: pct ? 'var(--accent-light)' : 'var(--text-dim)' }}>{pct ? fmtMoney(r.valor * pct / 100) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot><tr style={{ borderTop: '2px solid var(--border-strong)', fontWeight: 700 }}>
+            <td className="cell-primary">TOTAL</td>
+            <td className="num mono">{resumo.nPedidos}</td>
+            <td className="num mono" style={{ color: 'var(--green)' }}>{resumo.abertos}</td>
+            <td className="num mono">{fmtNum(resumo.unidades)}</td>
+            <td className="num mono cell-primary">{fmtMoney(resumo.valor)}</td>
+            <td className="num mono" style={{ color: pct ? 'var(--accent-light)' : 'var(--text-dim)' }}>{pct ? fmtMoney(comissaoTotal) : '—'}</td>
+          </tr></tfoot>
+        </table>
       </div>
 
       {filtrando && (
@@ -2478,8 +2575,27 @@ const Pedidos = ({ ctx }) => {
   const [q, setQ] = useState('');
   const [statusSel, setStatusSel] = useState(['aberto']);
   const [filtroPrazo, setFiltroPrazo] = useState('todos'); // todos, atrasado, hoje, 7d, 30d, sem_prazo
+  const [filtroVendedor, setFiltroVendedor] = useState('todos');
+  const [filtroGrupo, setFiltroGrupo] = useState('todos');
+  const [filtroCultivar, setFiltroCultivar] = useState('todos');
+  const [filtroItem, setFiltroItem] = useState('todos');
   const { sortCol, sortDir, onSort } = useSort('entrega', 'asc'); // ordenação por clique no cabeçalho
   const sortProps = { sortCol, sortDir, onSort };
+
+  // Filtros iguais aos da tela de Estoque (grupo/cultivar/item), + vendedor.
+  // Item é nível-linha; um pedido "casa" se tiver pelo menos um item que passe.
+  const temItemFiltro = filtroGrupo !== 'todos' || filtroCultivar !== 'todos' || filtroItem !== 'todos';
+  const itemMatch = (i) =>
+    (filtroGrupo === 'todos' || i.grupo_nome === filtroGrupo) &&
+    (filtroCultivar === 'todos' || (i.descricao || i.cultivar_nome) === filtroCultivar) &&
+    (filtroItem === 'todos' || i.codigo === filtroItem);
+  const filtrandoPedidos = filtroVendedor !== 'todos' || temItemFiltro;
+  const limparFiltrosPedidos = () => { setFiltroVendedor('todos'); setFiltroGrupo('todos'); setFiltroCultivar('todos'); setFiltroItem('todos'); };
+  // Opções (da carteira inteira, para sempre poder escolher qualquer valor).
+  const optVendedores = useMemo(() => Array.from(new Set((ctx.pedidos || []).map(p => p.vendedor).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [ctx.pedidos]);
+  const optGrupos = useMemo(() => Array.from(new Set((ctx.pedidos || []).flatMap(p => (p.itens || []).map(i => i.grupo_nome)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [ctx.pedidos]);
+  const optCultivares = useMemo(() => Array.from(new Set((ctx.pedidos || []).flatMap(p => (p.itens || []).map(i => i.descricao || i.cultivar_nome)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [ctx.pedidos]);
+  const optItens = useMemo(() => Array.from(new Map((ctx.pedidos || []).flatMap(p => (p.itens || [])).filter(i => i.codigo).map(i => [i.codigo, i.descricao || ''])).entries()).sort((a, b) => a[0].localeCompare(b[0])), [ctx.pedidos]);
 
   // Helpers de cálculo de urgência
   const calcUrgencia = (dataEntrega) => {
@@ -2521,6 +2637,9 @@ const Pedidos = ({ ctx }) => {
         return true;
       });
     }
+    // Filtros estilo Estoque
+    if (filtroVendedor !== 'todos') l = l.filter(p => (p.vendedor || '') === filtroVendedor);
+    if (temItemFiltro) l = l.filter(p => (p.itens || []).some(itemMatch));
     // Ordenação por clique no cabeçalho
     const getVal = (p, col) => {
       switch (col) {
@@ -2537,7 +2656,20 @@ const Pedidos = ({ ctx }) => {
       }
     };
     return sortRows(l, sortCol, sortDir, getVal);
-  }, [ctx.pedidos, q, statusSel, filtroPrazo, sortCol, sortDir]);
+  }, [ctx.pedidos, q, statusSel, filtroPrazo, filtroVendedor, filtroGrupo, filtroCultivar, filtroItem, sortCol, sortDir]);
+
+  // Totalizador — reflete o que está filtrado (lista). Com filtro de item ativo,
+  // soma só os itens que casam; senão, todos os itens dos pedidos filtrados.
+  const tot = useMemo(() => {
+    let unid = 0, valor = 0, saldoAb = 0;
+    lista.forEach(p => {
+      const its = (p.itens || []).filter(i => (temItemFiltro ? itemMatch(i) : true));
+      unid += its.reduce((a, i) => a + (i.qtd_bb || 0), 0);
+      valor += its.reduce((a, i) => a + (i.valor_total != null ? i.valor_total : (i.qtd_bb || 0) * (i.valor_unitario || 0)), 0);
+      saldoAb += its.reduce((a, i) => a + (i.saldo || 0) * (i.valor_unitario || 0), 0);
+    });
+    return { nPed: lista.length, unid, valor, saldoAb };
+  }, [lista, filtroGrupo, filtroCultivar, filtroItem]);
 
   // Stats por urgência
   const statsPrazo = useMemo(() => {
@@ -2676,6 +2808,14 @@ const Pedidos = ({ ctx }) => {
         </button>
       </div>
 
+      {/* TOTALIZADOR — reflete os filtros (status, prazo, vendedor, grupo, cultivar, item) */}
+      <div className="metrics" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+        <div className="metric"><div className="metric-label"><i className="ti ti-clipboard-list"></i> Pedidos</div><div className="metric-value">{tot.nPed}</div><div className="metric-delta">{filtrandoPedidos || statusSel.length !== 1 || statusSel[0] !== 'aberto' || q || filtroPrazo !== 'todos' ? 'no filtro atual' : `de ${ctx.pedidos.length} no SAP`}</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-package"></i> Unidades</div><div className="metric-value">{fmtNum(tot.unid)}</div><div className="metric-delta">total em pedidos</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-cash"></i> Valor total</div><div className="metric-value" style={{ fontSize: 22 }}>{fmtMoney(tot.valor)}</div><div className="metric-delta">soma dos itens</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-wallet"></i> Saldo aberto</div><div className="metric-value" style={{ color: 'var(--green)', fontSize: 22 }}>{fmtMoney(tot.saldoAb)}</div><div className="metric-delta">valor ainda a embarcar</div></div>
+      </div>
+
       <div className="panel">
         <div className="panel-header">
           <FiltroStatusSap sel={statusSel} setSel={setStatusSel} />
@@ -2686,6 +2826,31 @@ const Pedidos = ({ ctx }) => {
           <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
             <i className="ti ti-arrows-sort" style={{ fontSize: 12 }}></i> clique no cabeçalho p/ ordenar
           </span>
+        </div>
+
+        {/* Filtros estilo Estoque: Vendedor, Grupo, Cultivar, Item */}
+        <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filtroVendedor} onChange={e => setFiltroVendedor(e.target.value)}>
+            <option value="todos">Todos os representantes</option>
+            {optVendedores.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filtroGrupo} onChange={e => setFiltroGrupo(e.target.value)}>
+            <option value="todos">Todos os grupos</option>
+            {optGrupos.map(g => <option key={g} value={g}>{g}</option>)}
+          </select>
+          <select className="input" style={{ width: 'auto', maxWidth: 220, padding: '6px 10px', fontSize: 12 }} value={filtroCultivar} onChange={e => setFiltroCultivar(e.target.value)}>
+            <option value="todos">Todas as cultivares</option>
+            {optCultivares.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select className="input" style={{ width: 'auto', maxWidth: 220, padding: '6px 10px', fontSize: 12 }} value={filtroItem} onChange={e => setFiltroItem(e.target.value)}>
+            <option value="todos">Todos os itens</option>
+            {optItens.map(([cod, desc]) => <option key={cod} value={cod}>{cod}{desc ? ' — ' + desc : ''}</option>)}
+          </select>
+          {filtrandoPedidos && (
+            <button onClick={limparFiltrosPedidos} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', borderRadius: 6, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <i className="ti ti-x"></i> Limpar
+            </button>
+          )}
         </div>
 
         {filtroPrazo !== 'todos' && (
