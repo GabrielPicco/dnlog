@@ -3444,12 +3444,22 @@ const EmbarquesFornecedores = ({ ctx }) => {
                       <td className="mono" style={{ fontSize: 12 }}>{fmtDate(o.data_prevista)}</td>
                       <td><StatusChip status={o.status} /></td>
                       <td>
-                        {ctx.podeEditar && o.status !== 'CANCELADA' && (
-                          <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }}
-                            onClick={() => { if (confirm(`Cancelar a OE ${o.numero}?`)) ctx.cancelarOECompra(o.id); }}>
-                            <i className="ti ti-x"></i>
+                        <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
+                          <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} title="Imprimir"
+                            onClick={() => imprimirAgendamento({
+                              num: o.numero,
+                              campos: { fornecedor: o.fornecedor, data_prevista_do_embarque: o.data_prevista, motorista: o.motorista_nome, placa: o.veiculo_placa, local_de_retirada: o.local_retirada || '' },
+                              produtos: (o.itens || []).map(it => ({ produto: it.descricao || it.codigo, embalagem: it.embalagem || it.unidade || '', qtd: it.qtd })),
+                            }, 'OE de Retirada · Fornecedor')}>
+                            <i className="ti ti-printer"></i>
                           </button>
-                        )}
+                          {ctx.podeEditar && o.status !== 'CANCELADA' && (
+                            <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} title="Cancelar OE"
+                              onClick={() => { if (confirm(`Cancelar a OE ${o.numero}?`)) ctx.cancelarOECompra(o.id); }}>
+                              <i className="ti ti-x"></i>
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -3493,6 +3503,61 @@ const AG_SECOES = [
     { k: 'endereco', label: 'Endereço', ph: 'Rua, nº, bairro · cidade – UF', w: 2 },
   ]},
 ];
+
+// Gera um documento A4 limpo (janela própria) e manda imprimir. Independe do
+// CSS do app. Usado pelo Agendamento e pela OE de retirada (mesmo layout).
+const imprimirAgendamento = (ag, titulo) => {
+  const c = ag.campos || {};
+  const prods = ag.produtos || [];
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
+  const dataFmt = (d) => { try { return d ? new Date(d + 'T00:00:00').toLocaleDateString('pt-BR') : ''; } catch (e) { return d || ''; } };
+  const fld = (label, val) => `<div class="fld"><span class="lbl">${esc(label)}</span><span class="val">${esc(val) || '&nbsp;'}</span></div>`;
+  const secoes = AG_SECOES.map(sec => `
+    <div class="sec"><div class="sec-h"><b>${sec.num}</b> ${esc(sec.titulo)}</div>
+      <div class="grid">${sec.campos.map(f => fld(f.label, f.tipo === 'date' ? dataFmt(c[f.k]) : c[f.k])).join('')}</div>
+    </div>`).join('');
+  const prodRows = prods.length
+    ? prods.map(p => `<tr><td>${esc(p.produto)}</td><td>${esc(p.embalagem)}</td><td class="num">${esc(p.qtd)}</td></tr>`).join('')
+    : '<tr><td colspan="3" style="color:#999">—</td></tr>';
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(titulo || 'Agendamento')} ${esc(ag.num || ag.numero || '')}</title>
+  <style>
+    @page { size: A4 portrait; margin: 12mm; }
+    *{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#1a1a1a;margin:0;font-size:12px}
+    .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #1E5C3F;padding-bottom:8px;margin-bottom:14px}
+    .brand{font-size:22px;font-weight:800;color:#1E5C3F;letter-spacing:.5px}
+    .brand-sub{font-size:10px;color:#555;margin-top:2px}
+    .meta{text-align:right;font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.05em}
+    .meta b{display:block;font-size:18px;color:#1E5C3F;letter-spacing:0}
+    .sec{margin-bottom:12px}
+    .sec-h{font-size:11px;font-weight:700;color:#1E5C3F;border-bottom:1px solid #ddd;padding-bottom:3px;margin-bottom:6px}
+    .sec-h b{color:#aaa;margin-right:4px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 18px}
+    .fld{display:flex;gap:8px;font-size:12px;padding:2px 0;border-bottom:1px dotted #eee}
+    .fld .lbl{color:#666;min-width:135px}
+    .fld .val{font-weight:600}
+    table{width:100%;border-collapse:collapse;font-size:12px}
+    th,td{border:1px solid #ccc;padding:5px 7px;text-align:left}
+    th{background:#f2f0e9}
+    .num{text-align:right}
+    .obs{white-space:pre-wrap;border:1px solid #ddd;padding:8px;border-radius:4px;min-height:38px;font-size:12px}
+    .foot{margin-top:22px;font-size:10px;color:#999;text-align:center}
+  </style></head><body>
+    <div class="head">
+      <div><div class="brand">DN SEEDS</div><div class="brand-sub">DNSEEDS Agronegócios · CNPJ 62.255.734/0001-79</div></div>
+      <div class="meta">${esc(titulo || 'Agendamento de Embarque')}<b>Nº ${esc(ag.num || ag.numero || '—')}</b>${c.data_prevista_do_embarque ? dataFmt(c.data_prevista_do_embarque) : ''}</div>
+    </div>
+    ${secoes}
+    <div class="sec"><div class="sec-h"><b>04</b> Produtos a retirar</div>
+      <table><thead><tr><th>Produto</th><th style="width:180px">Embalagem</th><th class="num" style="width:110px">Qtd</th></tr></thead><tbody>${prodRows}</tbody></table>
+    </div>
+    <div class="sec"><div class="sec-h"><b>05</b> Observações</div><div class="obs">${esc(c.instrucoes_para_o_fornecedor) || '&nbsp;'}</div></div>
+    <div class="foot">Documento gerado pelo DNLog · DN Seeds</div>
+  </body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { alert('Não consegui abrir a janela de impressão. Habilite pop-ups para este site e tente de novo.'); return; }
+  w.document.open(); w.document.write(html); w.document.close(); w.focus();
+  setTimeout(() => { try { w.print(); } catch (e) {} }, 350);
+};
 
 const AgendamentosFornecedor = ({ ctx }) => {
   const [q, setQ] = useState('');
@@ -3625,6 +3690,9 @@ const LinhaAgendamento = ({ ag, ctx, onEditar }) => {
       </td>
       <td>
         <div style={{ display: 'flex', gap: 2 }}>
+          <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} onClick={() => imprimirAgendamento(ag, 'Agendamento de Embarque')} title="Imprimir">
+            <i className="ti ti-printer"></i>
+          </button>
           <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} onClick={onEditar} title="Editar">
             <i className="ti ti-edit"></i>
           </button>
@@ -3692,19 +3760,37 @@ const AgendamentoForm = ({ ctx, inicial, onFechar }) => {
                 <span style={{ opacity: 0.6 }}>{sec.num}</span> {sec.titulo}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-                {sec.campos.map(f => (
-                  <div key={f.k} style={{ gridColumn: f.w === 2 ? 'span 2' : 'span 1' }}>
-                    <label style={lbl}>{f.label}</label>
-                    <input
-                      type={f.tipo || 'text'}
-                      value={campos[f.k] || ''}
-                      maxLength={f.max}
-                      onChange={e => setCampo(f.k, f.up ? e.target.value.toUpperCase() : e.target.value)}
-                      placeholder={f.ph || ''}
-                      style={{ ...inp, ...(f.mono ? { fontFamily: 'JetBrains Mono, monospace' } : {}) }}
-                    />
-                  </div>
-                ))}
+                {sec.campos.map(f => {
+                  const isForn = f.k === 'fornecedor';
+                  const fornecedoresSap = (typeof DADOS_FORNECEDORES !== 'undefined' ? DADOS_FORNECEDORES : []);
+                  return (
+                    <div key={f.k} style={{ gridColumn: f.w === 2 ? 'span 2' : 'span 1' }}>
+                      <label style={lbl}>{f.label}{isForn && fornecedoresSap.length > 0 && <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}> · cadastrados no SAP</span>}</label>
+                      <input
+                        type={f.tipo || 'text'}
+                        list={isForn ? 'ag-fornec-sap' : undefined}
+                        value={campos[f.k] || ''}
+                        maxLength={f.max}
+                        onChange={e => {
+                          const v = f.up ? e.target.value.toUpperCase() : e.target.value;
+                          if (isForn) {
+                            const match = fornecedoresSap.find(fo => (fo.nome || '').toLowerCase() === v.toLowerCase());
+                            setCampos(c => ({ ...c, fornecedor: v, ...(match ? { cnpj_do_fornecedor: match.cnpj || c.cnpj_do_fornecedor || '', _fornecedor_codigo: match.codigo } : {}) }));
+                          } else setCampo(f.k, v);
+                        }}
+                        placeholder={isForn ? 'Digite p/ buscar no SAP ou preencha à mão' : (f.ph || '')}
+                        style={{ ...inp, ...(f.mono ? { fontFamily: 'JetBrains Mono, monospace' } : {}) }}
+                      />
+                      {isForn && (
+                        <datalist id="ag-fornec-sap">
+                          {fornecedoresSap.map(fo => (
+                            <option key={fo.codigo} value={fo.nome}>{fo.cnpj ? 'CNPJ ' + fo.cnpj : (fo.codigo || '')}</option>
+                          ))}
+                        </datalist>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -3755,11 +3841,16 @@ const AgendamentoForm = ({ ctx, inicial, onFechar }) => {
           </div>
         </div>
 
-        <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
-          <button className="btn btn-ghost" onClick={onFechar}>Cancelar</button>
-          <button className="btn btn-primary" onClick={salvar} disabled={salvando}>
-            <i className="ti ti-device-floppy"></i> {salvando ? 'Salvando...' : (editar ? 'Salvar alterações' : 'Salvar no banco')}
+        <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
+          <button className="btn btn-ghost" onClick={() => imprimirAgendamento({ num: inicial.num, campos, produtos }, 'Agendamento de Embarque')}>
+            <i className="ti ti-printer"></i> Imprimir
           </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onFechar}>Cancelar</button>
+            <button className="btn btn-primary" onClick={salvar} disabled={salvando}>
+              <i className="ti ti-device-floppy"></i> {salvando ? 'Salvando...' : (editar ? 'Salvar alterações' : 'Salvar no banco')}
+            </button>
+          </div>
         </div>
       </div>
     </div>
