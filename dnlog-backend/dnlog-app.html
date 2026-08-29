@@ -1312,6 +1312,33 @@ const App = ({ usuario, onLogout }) => {
       showToast('Falha ao remover', e.message || '');
     }
   };
+  // Importa em lote agendamentos antigos (do documento standalone: cada item é
+  // { campos, produtos, ... }). Grava cada um no banco (num novo) e mescla no estado.
+  const importarAgendamentos = async (arr) => {
+    if (!Array.isArray(arr) || arr.length === 0) { showToast('Nada para importar', 'JSON vazio ou inválido'); return 0; }
+    const salvos = []; let ok = 0;
+    for (const item of arr) {
+      try {
+        const c = { ...(item.campos || {}) };
+        // O doc antigo guardava a data em 'doc-data' — normaliza pro campo do form.
+        if (!c.data_prevista_do_embarque && c['doc-data']) c.data_prevista_do_embarque = c['doc-data'];
+        const data = item.data || c.data_prevista_do_embarque || c['doc-data'] || null;
+        const rec = {
+          campos: c,
+          produtos: Array.isArray(item.produtos) ? item.produtos : [],
+          fornecedor: (item.fornecedor || c.fornecedor || '').trim() || null,
+          data,
+          recebida: !!item.recebida,
+          valor_frete: item.valor_frete != null && item.valor_frete !== '' ? Number(item.valor_frete) : null,
+        };
+        salvos.push(await DNLOG_API.salvarAgendamento(rec));
+        ok++;
+      } catch (e) { /* pula o que falhar, segue os demais */ }
+    }
+    if (salvos.length) setState(s => ({ ...s, agendamentos: [...salvos, ...(s.agendamentos || [])] }));
+    showToast('Importação concluída', `${ok} de ${arr.length} agendamento(s) importado(s)`);
+    return ok;
+  };
 
   // Marca OE como FATURADA: move consumo da OE pra baixas permanentes (qtd_entregue)
   // O efeito visível: o pedido perde aquele saldo na lista de pedidos abertos
@@ -1431,7 +1458,7 @@ const App = ({ usuario, onLogout }) => {
     viewingPedido, setViewingPedido,
     criarOE, atualizarOE, editarOE, cancelarOE, faturarOE, desfaturarOE,
     criarOECompra, atualizarOECompra, cancelarOECompra,
-    salvarAgendamento, removerAgendamento,
+    salvarAgendamento, removerAgendamento, importarAgendamentos,
     sidebarCollapsed: effectiveCollapsed, setSidebarCollapsed,
     perfilAtivo,
     usuario, onLogout,
@@ -3575,7 +3602,22 @@ const imprimirAgendamento = (ag, titulo) => {
 const AgendamentosFornecedor = ({ ctx }) => {
   const [q, setQ] = useState('');
   const [editando, setEditando] = useState(null); // objeto do agendamento (ou {} novo) | null
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState('');
   const dados = ctx.state.agendamentos || [];
+
+  const fazerImport = async () => {
+    const raw = importText.trim();
+    if (!raw) { ctx.showToast('Cole o conteúdo primeiro', ''); return; }
+    let arr;
+    try {
+      let parsed = JSON.parse(raw);
+      if (typeof parsed === 'string') parsed = JSON.parse(parsed); // veio como string JSON
+      arr = Array.isArray(parsed) ? parsed : (parsed.agendamentos || parsed.lista || []);
+    } catch (e) { ctx.showToast('JSON inválido', 'Confira o texto colado'); return; }
+    const n = await ctx.importarAgendamentos(arr);
+    if (n > 0) { setImportOpen(false); setImportText(''); }
+  };
   const lista = useMemo(() => {
     let l = [...dados].sort((a, b) => (b.num || 0) - (a.num || 0));
     if (q) {
@@ -3624,6 +3666,9 @@ const AgendamentosFornecedor = ({ ctx }) => {
             <button className="btn btn-primary" onClick={() => setEditando({})}>
               <i className="ti ti-plus"></i> Novo agendamento
             </button>
+            <button className="btn btn-ghost" onClick={() => setImportOpen(true)}>
+              <i className="ti ti-download"></i> Importar antigos
+            </button>
             <button className="btn btn-ghost" onClick={exportarCSV} disabled={dados.length === 0}>
               <i className="ti ti-file-export"></i> CSV
             </button>
@@ -3659,6 +3704,38 @@ const AgendamentosFornecedor = ({ ctx }) => {
           inicial={editando}
           onFechar={() => setEditando(null)}
         />
+      )}
+
+      {importOpen && (
+        <div className="modal-backdrop" onClick={() => setImportOpen(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 640 }}>
+            <div className="modal-header">
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>Importar do documento antigo</div>
+                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>Trazer agendamentos salvos localmente</div>
+              </div>
+              <button className="btn btn-ghost" style={{ padding: '4px 8px' }} onClick={() => setImportOpen(false)}><i className="ti ti-x"></i></button>
+            </div>
+            <div className="modal-body" style={{ padding: 20 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 12, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px' }}>
+                Os agendamentos antigos ficam no navegador do <b>documento standalone</b> ("Agendamento de Embarque.html"), que é outro endereço — por isso precisam ser trazidos manualmente (uma vez só):
+                <ol style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+                  <li>Abra o arquivo <b>Agendamento de Embarque.html</b> antigo.</li>
+                  <li>Aperte <b>F12</b> → aba <b>Console</b>.</li>
+                  <li>Cole e dê Enter: <code style={{ background: 'var(--bg-elev)', padding: '1px 5px', borderRadius: 3, fontFamily: 'JetBrains Mono, monospace' }}>copy(localStorage.getItem('dnseeds_agendamentos_v1'))</code></li>
+                  <li>Volte aqui e cole (<b>Ctrl/Cmd+V</b>) no campo abaixo.</li>
+                </ol>
+              </div>
+              <textarea value={importText} onChange={e => setImportText(e.target.value)} rows={7}
+                placeholder='Cole aqui o conteúdo copiado (começa com [ e termina com ])'
+                style={{ width: '100%', padding: '9px 11px', background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, color: 'var(--text)', fontFamily: 'JetBrains Mono, monospace', fontSize: 12, resize: 'vertical' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
+              <button className="btn btn-ghost" onClick={() => setImportOpen(false)}>Cancelar</button>
+              <button className="btn btn-primary" onClick={fazerImport}><i className="ti ti-download"></i> Importar para o banco</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
