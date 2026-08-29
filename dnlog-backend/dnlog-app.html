@@ -3519,39 +3519,52 @@ const imprimirAgendamento = (ag, titulo) => {
   const prodRows = prods.length
     ? prods.map(p => `<tr><td>${esc(p.produto)}</td><td>${esc(p.embalagem)}</td><td class="num">${esc(p.qtd)}</td></tr>`).join('')
     : '<tr><td colspan="3" style="color:#999">—</td></tr>';
+  const logoSrc = (typeof LOGO_LIGHT_B64 !== 'undefined' && LOGO_LIGHT_B64) ? ('data:image/png;base64,' + LOGO_LIGHT_B64) : '';
+  const emitido = (() => { try { return new Date().toLocaleDateString('pt-BR'); } catch (e) { return ''; } })();
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(titulo || 'Agendamento')} ${esc(ag.num || ag.numero || '')}</title>
   <style>
-    @page { size: A4 portrait; margin: 12mm; }
-    *{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#1a1a1a;margin:0;font-size:12px}
-    .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #1E5C3F;padding-bottom:8px;margin-bottom:14px}
-    .brand{font-size:22px;font-weight:800;color:#1E5C3F;letter-spacing:.5px}
-    .brand-sub{font-size:10px;color:#555;margin-top:2px}
-    .meta{text-align:right;font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.05em}
-    .meta b{display:block;font-size:18px;color:#1E5C3F;letter-spacing:0}
-    .sec{margin-bottom:12px}
-    .sec-h{font-size:11px;font-weight:700;color:#1E5C3F;border-bottom:1px solid #ddd;padding-bottom:3px;margin-bottom:6px}
-    .sec-h b{color:#aaa;margin-right:4px}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 18px}
-    .fld{display:flex;gap:8px;font-size:12px;padding:2px 0;border-bottom:1px dotted #eee}
-    .fld .lbl{color:#666;min-width:135px}
-    .fld .val{font-weight:600}
+    @page { size: A4 portrait; margin: 13mm; }
+    *{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#1f2421;margin:0;font-size:12px;line-height:1.35}
+    .head{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:4px}
+    .head img{height:46px;width:auto}
+    .head .brand-txt{font-size:22px;font-weight:800;color:#1E5C3F;letter-spacing:.5px}
+    .brand-sub{font-size:9.5px;color:#6b7280;margin-top:3px}
+    .doc{border:1.5px solid #1E5C3F;border-radius:8px;padding:8px 14px;text-align:right;min-width:190px}
+    .doc .t{font-size:9px;color:#1E5C3F;text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+    .doc .n{font-size:22px;font-weight:800;color:#123a28;line-height:1.1;margin:1px 0}
+    .doc .d{font-size:10px;color:#6b7280}
+    .rule{height:3px;background:linear-gradient(90deg,#1E5C3F, #c9a86a);border-radius:2px;margin:10px 0 16px}
+    .sec{margin-bottom:13px;break-inside:avoid}
+    .sec-h{font-size:11px;font-weight:700;color:#1E5C3F;background:#eef3ef;border-left:3px solid #1E5C3F;padding:4px 8px;border-radius:0 4px 4px 0;margin-bottom:7px}
+    .sec-h b{color:#9bb3a5;margin-right:5px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 22px;padding:0 2px}
+    .fld{display:flex;gap:8px;font-size:12px;padding:3px 0;border-bottom:1px dotted #e5e7eb}
+    .fld .lbl{color:#6b7280;min-width:140px}
+    .fld .val{font-weight:600;color:#1f2421}
     table{width:100%;border-collapse:collapse;font-size:12px}
-    th,td{border:1px solid #ccc;padding:5px 7px;text-align:left}
-    th{background:#f2f0e9}
+    th,td{border:1px solid #d7dbd8;padding:6px 8px;text-align:left}
+    th{background:#1E5C3F;color:#fff;font-weight:600;font-size:11px}
+    tbody tr:nth-child(even){background:#f7f9f7}
     .num{text-align:right}
-    .obs{white-space:pre-wrap;border:1px solid #ddd;padding:8px;border-radius:4px;min-height:38px;font-size:12px}
-    .foot{margin-top:22px;font-size:10px;color:#999;text-align:center}
+    .obs{white-space:pre-wrap;border:1px solid #d7dbd8;background:#fafbfa;padding:9px;border-radius:5px;min-height:40px;font-size:12px}
+    .foot{margin-top:24px;padding-top:8px;border-top:1px solid #e5e7eb;font-size:9.5px;color:#9ca3af;display:flex;justify-content:space-between}
   </style></head><body>
     <div class="head">
-      <div><div class="brand">DN SEEDS</div><div class="brand-sub">DNSEEDS Agronegócios · CNPJ 62.255.734/0001-79</div></div>
-      <div class="meta">${esc(titulo || 'Agendamento de Embarque')}<b>Nº ${esc(ag.num || ag.numero || '—')}</b>${c.data_prevista_do_embarque ? dataFmt(c.data_prevista_do_embarque) : ''}</div>
+      ${logoSrc ? `<img src="${logoSrc}" alt="DN Seeds">` : `<div class="brand-txt">DN SEEDS</div>`}
+      <div class="doc">
+        <div class="t">${esc(titulo || 'Agendamento de Embarque')}</div>
+        <div class="n">Nº ${esc(ag.num || ag.numero || '—')}</div>
+        <div class="d">${c.data_prevista_do_embarque ? 'Embarque ' + dataFmt(c.data_prevista_do_embarque) : 'Sem data prevista'}</div>
+      </div>
     </div>
+    <div class="brand-sub">DNSEEDS Agronegócios · CNPJ 62.255.734/0001-79</div>
+    <div class="rule"></div>
     ${secoes}
     <div class="sec"><div class="sec-h"><b>04</b> Produtos a retirar</div>
       <table><thead><tr><th>Produto</th><th style="width:180px">Embalagem</th><th class="num" style="width:110px">Qtd</th></tr></thead><tbody>${prodRows}</tbody></table>
     </div>
     <div class="sec"><div class="sec-h"><b>05</b> Observações</div><div class="obs">${esc(c.instrucoes_para_o_fornecedor) || '&nbsp;'}</div></div>
-    <div class="foot">Documento gerado pelo DNLog · DN Seeds</div>
+    <div class="foot"><span>Documento gerado pelo DNLog · DN Seeds</span><span>Emitido em ${emitido}</span></div>
   </body></html>`;
   const w = window.open('', '_blank');
   if (!w) { alert('Não consegui abrir a janela de impressão. Habilite pop-ups para este site e tente de novo.'); return; }
@@ -3775,7 +3788,19 @@ const AgendamentoForm = ({ ctx, inicial, onFechar }) => {
                           const v = f.up ? e.target.value.toUpperCase() : e.target.value;
                           if (isForn) {
                             const match = fornecedoresSap.find(fo => (fo.nome || '').toLowerCase() === v.toLowerCase());
-                            setCampos(c => ({ ...c, fornecedor: v, ...(match ? { cnpj_do_fornecedor: match.cnpj || c.cnpj_do_fornecedor || '', _fornecedor_codigo: match.codigo } : {}) }));
+                            if (match) {
+                              // Ao escolher um fornecedor do SAP, puxa CNPJ + endereço (local de retirada).
+                              const local = match.endereco || [match.cidade, match.uf].filter(Boolean).join('/');
+                              setCampos(c => ({
+                                ...c,
+                                fornecedor: v,
+                                cnpj_do_fornecedor: match.cnpj || c.cnpj_do_fornecedor || '',
+                                local_de_retirada: local || c.local_de_retirada || '',
+                                _fornecedor_codigo: match.codigo,
+                              }));
+                            } else {
+                              setCampos(c => ({ ...c, fornecedor: v }));
+                            }
                           } else setCampo(f.k, v);
                         }}
                         placeholder={isForn ? 'Digite p/ buscar no SAP ou preencha à mão' : (f.ph || '')}
