@@ -117,21 +117,19 @@ export class ApiController {
       if (!Array.isArray(pesos)) return { erro: 'resposta não-array', pesos };
       const val = (b: any) => Number(b.U_AGRT_PesoLiquido);
       const comPeso = pesos.filter((b) => val(b) > 0);
-      const achado = lote
-        ? pesos.find((b) => b.BatchNumber === lote)
-        : null;
+      const loteDe = (b: any) => b.Batch ?? b.BatchNumber;
+      const achado = lote ? pesos.find((b) => loteDe(b) === lote) : null;
       return {
         total_batches: pesos.length,
         com_peso_udf: comPeso.length,
-        chaves_do_objeto: pesos[0] ? Object.keys(pesos[0]) : [],
         amostra: comPeso.slice(0, 3).map((b) => ({
           item: b.ItemCode,
-          lote: b.BatchNumber,
+          lote: loteDe(b),
           peso: b.U_AGRT_PesoLiquido,
         })),
         lote_consultado: lote || null,
         achado: achado
-          ? { item: achado.ItemCode, lote: achado.BatchNumber, peso: achado.U_AGRT_PesoLiquido, keys: Object.keys(achado) }
+          ? { item: achado.ItemCode, lote: loteDe(achado), peso: achado.U_AGRT_PesoLiquido }
           : null,
       };
     } catch (e: any) {
@@ -342,7 +340,8 @@ export class ApiController {
     const pesoMap: Record<string, number> = {};
     for (const b of pesos as any[]) {
       const p = Number(b.U_AGRT_PesoLiquido);
-      if (b.BatchNumber && p > 0) pesoMap[b.ItemCode + '|' + b.BatchNumber] = p;
+      const lote = b.Batch ?? b.BatchNumber; // a entidade expõe o lote como 'Batch'
+      if (lote && p > 0) pesoMap[b.ItemCode + '|' + lote] = p;
     }
     return (linhas as any[]).map((r: any) => {
       const info = itemInfo[r.CodigoItem] || { grupo_codigo: null, grupo_nome: '' };

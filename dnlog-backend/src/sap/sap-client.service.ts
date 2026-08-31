@@ -365,8 +365,7 @@ export class SapClientService implements OnModuleDestroy {
 
     const params = {
       $filter: `ItemCode eq '${this.odataLiteral(itemCode)}' and Status eq 'bdsStatus_Released'`,
-      $select:
-        'BatchNumber,ItemCode,Quantity,ExpirationDate,SystemNumber,U_AGRT_PesoLiquido',
+      $select: 'BatchNumber,ItemCode,Quantity,ExpirationDate,SystemNumber',
     };
 
     try {
