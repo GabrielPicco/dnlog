@@ -6462,11 +6462,12 @@ const DocumentoOE = ({ oe, totais }) => {
               <i className="ti ti-camera"></i> FOTOS DA CARGA · {fotosValidas.length} {fotosValidas.length === 1 ? 'foto' : 'fotos'}
             </div>
             <div style={{ padding: 10, background: 'white' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
                 {fotosValidas.map((f, idx) => (
-                  <div key={idx} style={{ border: '1px solid #CCC', borderRadius: 3, overflow: 'hidden' }}>
-                    <img src={f.dataUrl} alt={`Foto ${idx+1}`} style={{ width: '100%', height: 'auto', display: 'block', maxHeight: 200, objectFit: 'cover' }} />
-                    <div style={{ padding: '3px 6px', background: '#F5F5F2', fontSize: 8, color: '#555', display: 'flex', justifyContent: 'space-between' }}>
+                  <div key={idx} style={{ border: '1px solid #CCC', borderRadius: 3, overflow: 'hidden', display: 'inline-block' }}>
+                    {/* Proporção original preservada: não estica nem recorta. */}
+                    <img src={f.dataUrl} alt={`Foto ${idx+1}`} style={{ maxWidth: '100%', maxHeight: 420, width: 'auto', height: 'auto', display: 'block' }} />
+                    <div style={{ padding: '3px 6px', background: '#F5F5F2', fontSize: 8, color: '#555', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                       <span>Foto {idx + 1}</span>
                       {f.timestamp && <span className="mono">{fmtDateTime(f.timestamp)}</span>}
                     </div>
