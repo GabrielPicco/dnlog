@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Inject, Logger, Param, Query, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Inject, Logger, Param, HttpException, HttpStatus } from '@nestjs/common';
 import { SAP_SERVICE } from '../sap/sap.module';
 import { Public } from '../common/public.decorator';
 import { OeService } from '../oe/oe.service';
@@ -104,37 +104,6 @@ export class ApiController {
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
     return true;
-  }
-
-  // -------- DIAGNÓSTICO TEMPORÁRIO (peso por lote) — REMOVER depois --------
-  // Público só para depurar a UDF de peso do lote. Retorna contagens + amostra
-  // (item/lote/peso) e as CHAVES do objeto do lote (para achar o nome do campo).
-  @Public()
-  @Get('diag-peso')
-  async diagPeso(@Query('lote') lote?: string) {
-    try {
-      const pesos: any[] = (await this.sap.getPesosPorLote?.()) ?? [];
-      if (!Array.isArray(pesos)) return { erro: 'resposta não-array', pesos };
-      const val = (b: any) => Number(b.U_AGRT_PesoLiquido);
-      const comPeso = pesos.filter((b) => val(b) > 0);
-      const loteDe = (b: any) => b.Batch ?? b.BatchNumber;
-      const achado = lote ? pesos.find((b) => loteDe(b) === lote) : null;
-      return {
-        total_batches: pesos.length,
-        com_peso_udf: comPeso.length,
-        amostra: comPeso.slice(0, 3).map((b) => ({
-          item: b.ItemCode,
-          lote: loteDe(b),
-          peso: b.U_AGRT_PesoLiquido,
-        })),
-        lote_consultado: lote || null,
-        achado: achado
-          ? { item: achado.ItemCode, lote: loteDe(achado), peso: achado.U_AGRT_PesoLiquido }
-          : null,
-      };
-    } catch (e: any) {
-      return { erro: String(e?.message || e) };
-    }
   }
 
   // -------- PEDIDOS --------
