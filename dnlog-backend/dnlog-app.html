@@ -6449,33 +6449,6 @@ const DocumentoOE = ({ oe, totais }) => {
         <MapaCargaPrint oe={oe} mapa={oe.mapa_carga} />
       )}
 
-      {/* FOTOS DA CARGA */}
-      {oe.fotos_carga && oe.fotos_carga.length > 0 && (() => {
-        const fotosValidas = oe.fotos_carga.filter(f => typeof f !== 'string' && f.dataUrl);
-        if (fotosValidas.length === 0) return null;
-        return (
-          <div className="doc-block-wide" style={{ pageBreakInside: 'avoid' }}>
-            <div className="doc-block-header">
-              <i className="ti ti-camera"></i> FOTOS DA CARGA · {fotosValidas.length} {fotosValidas.length === 1 ? 'foto' : 'fotos'}
-            </div>
-            <div style={{ padding: 10, background: 'white' }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
-                {fotosValidas.map((f, idx) => (
-                  <div key={idx} style={{ border: '1px solid #CCC', borderRadius: 3, overflow: 'hidden', display: 'inline-block' }}>
-                    {/* Proporção original preservada: não estica nem recorta. */}
-                    <img src={f.dataUrl} alt={`Foto ${idx+1}`} style={{ maxWidth: '100%', maxHeight: 420, width: 'auto', height: 'auto', display: 'block' }} />
-                    <div style={{ padding: '3px 6px', background: '#F5F5F2', fontSize: 8, color: '#555', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                      <span>Foto {idx + 1}</span>
-                      {f.timestamp && <span className="mono">{fmtDateTime(f.timestamp)}</span>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
       {/* ASSINATURAS */}
       <div className="doc-signatures-v2">
         <div className="sig-block">
@@ -6492,8 +6465,37 @@ const DocumentoOE = ({ oe, totais }) => {
 
       <div className="doc-footer-v2">
         <div><strong>DNLog · {oe.numero}</strong> · Gerado em {fmtDateTime(oe.criado_em)} por {oe.criado_por}</div>
-        <div>Página 1 de 1</div>
+        <div>{oe.fotos_carga && oe.fotos_carga.filter(f => typeof f !== 'string' && f.dataUrl).length > 0 ? 'Página 1 de 2 · fotos no anexo' : 'Página 1 de 1'}</div>
       </div>
+
+      {/* ANEXO — FOTOS DA CARGA (segunda página na impressão) */}
+      {oe.fotos_carga && oe.fotos_carga.filter(f => typeof f !== 'string' && f.dataUrl).length > 0 && (() => {
+        const fotosValidas = oe.fotos_carga.filter(f => typeof f !== 'string' && f.dataUrl);
+        return (
+          <div className="doc-block-wide" style={{ pageBreakBefore: 'always', breakBefore: 'page', marginTop: 18 }}>
+            <div className="doc-block-header">
+              <i className="ti ti-paperclip"></i> ANEXO · FOTOS DA CARGA · {fotosValidas.length} {fotosValidas.length === 1 ? 'foto' : 'fotos'}
+            </div>
+            <div style={{ padding: 12, background: 'white' }}>
+              <div style={{ fontSize: 10, color: '#777', marginBottom: 10 }}>
+                OE <strong style={{ color: '#1A1A1A' }}>{oe.numero}</strong> · registro fotográfico da carga
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'center' }}>
+                {fotosValidas.map((f, idx) => (
+                  <div key={idx} style={{ border: '1px solid #CCC', borderRadius: 3, overflow: 'hidden', display: 'inline-block', pageBreakInside: 'avoid' }}>
+                    {/* Proporção original preservada: não estica nem recorta. */}
+                    <img src={f.dataUrl} alt={`Foto ${idx+1}`} style={{ maxWidth: '100%', maxHeight: 640, width: 'auto', height: 'auto', display: 'block' }} />
+                    <div style={{ padding: '3px 6px', background: '#F5F5F2', fontSize: 8, color: '#555', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                      <span>Foto {idx + 1}</span>
+                      {f.timestamp && <span className="mono">{fmtDateTime(f.timestamp)}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
