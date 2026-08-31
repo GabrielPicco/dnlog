@@ -1098,6 +1098,7 @@ const loadState = () => {
 };
 
 let _syncTimer = null;
+let _pendingOrdens = null; // último snapshot ainda não confirmado no banco
 const saveState = (state) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -1106,10 +1107,35 @@ const saveState = (state) => {
   // Espelha as OEs no banco (debounce 800ms para agrupar mudanças rápidas).
   if (window.__DNLOG_BACKEND_ON && state && Array.isArray(state.ordens)) {
     if (_syncTimer) clearTimeout(_syncTimer);
-    const snapshot = state.ordens;
-    _syncTimer = setTimeout(() => DNLOG_API.sincronizarOEs(snapshot), 800);
+    _pendingOrdens = state.ordens;
+    _syncTimer = setTimeout(() => {
+      DNLOG_API.sincronizarOEs(_pendingOrdens);
+      _pendingOrdens = null;
+    }, 800);
   }
 };
+
+// Flush SÍNCRONO ao sair/recarregar a página: garante que a última mudança de
+// OE (ex.: finalizar conferência, faturar) chegue ao banco ANTES do reload —
+// senão, ao recarregar, o app puxa o status antigo do banco e a OE "volta".
+// XHR síncrono é uma das poucas formas confiáveis de enviar (com header de auth)
+// durante o unload; sendBeacon não permite o Authorization exigido pela API.
+if (typeof window !== 'undefined') {
+  const flushOEs = () => {
+    if (!_pendingOrdens || !window.__DNLOG_BACKEND_ON) return;
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${DNLOG_API_BASE}/oe/sync`, false); // síncrono
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      const t = localStorage.getItem('dnlog_token') || '';
+      if (t) xhr.setRequestHeader('Authorization', 'Bearer ' + t);
+      xhr.send(JSON.stringify({ ordens: _pendingOrdens }));
+      _pendingOrdens = null;
+    } catch (e) { /* melhor esforço */ }
+  };
+  window.addEventListener('pagehide', flushOEs);
+  window.addEventListener('beforeunload', flushOEs);
+}
 
 // ============================================================
 // APP PRINCIPAL
