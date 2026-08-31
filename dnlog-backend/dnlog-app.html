@@ -4510,27 +4510,27 @@ const NovaOE = ({ ctx, editMode }) => {
             <div className="panel-header">
               <div className="panel-title">1. Modalidade de operação</div>
             </div>
-            <div style={{ padding: '14px 18px' }}>
+            <div style={{ padding: '12px 18px' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div className={`modality-card ${modalidade === 'ESTOQUE_PROPRIO' ? 'selected' : ''}`} onClick={() => setModalidade('ESTOQUE_PROPRIO')}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <i className="ti ti-building-warehouse" style={{ fontSize: 24, color: 'var(--accent-light)' }}></i>
-                    <div className="modality-check"><i className="ti ti-check"></i></div>
+                <div className={`modality-card ${modalidade === 'ESTOQUE_PROPRIO' ? 'selected' : ''}`} onClick={() => setModalidade('ESTOQUE_PROPRIO')} style={{ padding: '11px 13px', display: 'flex', alignItems: 'center', gap: 11 }}>
+                  <i className="ti ti-building-warehouse" style={{ fontSize: 22, color: 'var(--accent-light)', flexShrink: 0 }}></i>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>Estoque próprio</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                      Sai do nosso armazém. Baixa via <span className="mono" style={{ color: 'var(--text)' }}>Delivery Note</span> do SAP.
+                    </div>
                   </div>
-                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Estoque próprio</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                    Mercadoria sai do nosso armazém. Baixa direta no estoque via <span className="mono" style={{color:'var(--text)'}}>Delivery Note</span> do SAP.
-                  </div>
+                  <div className="modality-check" style={{ flexShrink: 0 }}><i className="ti ti-check"></i></div>
                 </div>
-                <div className={`modality-card ${modalidade === 'TRIANGULAR' ? 'selected' : ''}`} onClick={() => setModalidade('TRIANGULAR')}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <i className="ti ti-arrows-shuffle" style={{ fontSize: 24, color: 'var(--blue)' }}></i>
-                    <div className="modality-check"><i className="ti ti-check"></i></div>
+                <div className={`modality-card ${modalidade === 'TRIANGULAR' ? 'selected' : ''}`} onClick={() => setModalidade('TRIANGULAR')} style={{ padding: '11px 13px', display: 'flex', alignItems: 'center', gap: 11 }}>
+                  <i className="ti ti-arrows-shuffle" style={{ fontSize: 22, color: 'var(--blue)', flexShrink: 0 }}></i>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>Triangular</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                      Carrega no fornecedor, entrega ao cliente. <strong style={{ color: 'var(--orange)' }}>Não movimenta estoque do SAP.</strong>
+                    </div>
                   </div>
-                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Triangular</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                    Carrega no fornecedor, entrega ao cliente. <strong style={{ color: 'var(--orange)' }}>NÃO movimenta estoque do SAP.</strong>
-                  </div>
+                  <div className="modality-check" style={{ flexShrink: 0 }}><i className="ti ti-check"></i></div>
                 </div>
               </div>
 
@@ -4763,7 +4763,7 @@ const NovaOE = ({ ctx, editMode }) => {
                             key={p.numero}
                             onClick={() => !desabilitado && togglePedidoParadaAtiva(p.numero)}
                             style={{
-                              padding: '10px 14px',
+                              padding: '7px 14px',
                               borderBottom: '1px solid var(--border)',
                               cursor: desabilitado ? 'not-allowed' : 'pointer',
                               background: estaSelecionado ? 'var(--accent-glow)' : 'transparent',
@@ -4772,20 +4772,17 @@ const NovaOE = ({ ctx, editMode }) => {
                             onMouseEnter={e => { if (!estaSelecionado && !desabilitado) e.currentTarget.style.background = 'var(--bg-hover)'; }}
                             onMouseLeave={e => { if (!estaSelecionado && !desabilitado) e.currentTarget.style.background = 'transparent'; }}
                           >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                              <div className="checkbox" style={{ background: estaSelecionado ? 'var(--accent)' : 'transparent', borderColor: estaSelecionado ? 'var(--accent)' : 'var(--border-strong)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <div className="checkbox" style={{ flexShrink: 0, background: estaSelecionado ? 'var(--accent)' : 'transparent', borderColor: estaSelecionado ? 'var(--accent)' : 'var(--border-strong)' }}>
                                 {estaSelecionado && <i className="ti ti-check" style={{ display: 'block', color: 'white' }}></i>}
                               </div>
-                              <div style={{ flex: 1 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                  <span className="mono cell-primary" style={{ fontSize: 12 }}>{p.numero}</span>
-                                  <span style={{ fontSize: 13, fontWeight: 600 }}>{p.cliente}</span>
-                                  {jaUsado && <span className="chip chip-neutral" style={{ fontSize: 9 }}>Já em uso em outra parada</span>}
-                                  {bloqueadoPorCliente && <span className="chip chip-neutral" style={{ fontSize: 9 }}>Cliente diferente</span>}
-                                </div>
-                                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                                  {p.vendedor || '—'} · {p.qtd_saldo_bb} de {p.qtd_total_bb} un. · {fmtMoney(p.saldo_aberto)}
-                                </div>
+                              <span className="mono cell-primary" style={{ fontSize: 12, flexShrink: 0 }}>{p.numero}</span>
+                              <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{p.cliente}</span>
+                              {jaUsado && <span className="chip chip-neutral" style={{ fontSize: 9, flexShrink: 0 }}>Já em uso</span>}
+                              {bloqueadoPorCliente && <span className="chip chip-neutral" style={{ fontSize: 9, flexShrink: 0 }}>Cliente diferente</span>}
+                              <div style={{ flex: 1 }} />
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                                {p.qtd_saldo_bb} un · {fmtMoney(p.saldo_aberto)}
                               </div>
                             </div>
                           </div>
