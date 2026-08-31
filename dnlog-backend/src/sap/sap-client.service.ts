@@ -383,17 +383,24 @@ export class SapClientService implements OnModuleDestroy {
    */
   async getPesosPorLote(): Promise<any[]> {
     await this.ensureSession();
+    // Sem $select: o objeto completo do lote inclui os UDFs (U_AGRT_PesoLiquido)
+    // sem risco de a Service Layer rejeitar um $select de campo do usuário.
     try {
       return await this.getAllPages('/BatchNumberDetails', {
-        $select: 'ItemCode,BatchNumber,U_AGRT_PesoLiquido',
         $filter: "Status eq 'bdsStatus_Released'",
       });
     } catch (err) {
       this.logger?.warn?.(
-        'getPesosPorLote falhou — seguindo sem peso de lote: ' +
-          (err?.message || err),
+        'getPesosPorLote (com filtro) falhou: ' + (err?.message || err),
       );
-      return [];
+      try {
+        return await this.getAllPages('/BatchNumberDetails', {});
+      } catch (e2) {
+        this.logger?.warn?.(
+          'getPesosPorLote (sem filtro) falhou: ' + (e2?.message || e2),
+        );
+        return [];
+      }
     }
   }
 
