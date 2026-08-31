@@ -342,12 +342,19 @@ export class ApiController {
       // Fonte: CALCULOSALDOITENS (a mesma dos lotes) — agora que há saldo nos
       // armazéns de terceiros, ela traz LOTE e validade deles também. Filtramos
       // os depósitos DN_EMTER (nosso, guardado fora) e DN_DETER (de terceiros).
-      const [linhas, itens, grupos] = await Promise.all([
+      const [linhas, itens, grupos, pesos] = await Promise.all([
         this.sap.getSaldoPorLote?.() ?? [],
         this.sap.getItems?.().catch(() => []) ?? [],
         this.sap.getItemGroups?.().catch(() => []) ?? [],
+        this.sap.getPesosPorLote?.().catch(() => []) ?? [],
       ]);
       const itemInfo = construirItemInfo(itens, grupos);
+      const pesoMap: Record<string, number> = {};
+      for (const b of pesos as any[]) {
+        const p = Number(b.U_AGRT_PesoLiquido);
+        const lote = b.Batch ?? b.BatchNumber;
+        if (lote && p > 0) pesoMap[b.ItemCode + '|' + lote] = p;
+      }
       const TIPO: Record<string, string> = { DN_EMTER: 'em', DN_DETER: 'de' };
       const terc = (linhas as any[]).filter((r: any) => TIPO[r.CodigoDeposito]);
       // Dedup: se um item tem linha COM lote num depósito, descarta a agregada
@@ -373,6 +380,7 @@ export class ApiController {
             comprometido,
             validade: r.ExpDate || null,
             disponivel: saldo - comprometido,
+            peso_bb: r.Lote ? (pesoMap[r.CodigoItem + '|' + r.Lote] ?? null) : null,
           };
         });
     }, 600000); // 10 min — muda pouco

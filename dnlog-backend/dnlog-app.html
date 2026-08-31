@@ -3341,6 +3341,7 @@ const Estoque = ({ ctx }) => {
               <th style={thSort} onClick={() => toggleSort('descricao')}>Descrição <SortArrow col="descricao" /></th>
               <th>Armazém</th><th>Validade</th>
               <th className="num" style={thSort} onClick={() => toggleSort('saldo')}>Saldo físico <SortArrow col="saldo" /></th>
+              <th className="num">Peso/BB</th><th className="num">Peso total</th>
             </tr></thead>
             <tbody>{lista.map((l, i) => {
               const sv = statusValidade(l.validade);
@@ -3352,6 +3353,8 @@ const Estoque = ({ ctx }) => {
                   <td style={{ fontSize: 12 }}>{l.armazem_nome || l.armazem}</td>
                   <td className="mono" style={{ fontSize: 12, color: sv === 'vencido' ? 'var(--red)' : sv === 'avencer' ? 'var(--orange)' : 'var(--text-muted)' }}>{fmtDate(l.validade)}{sv === 'vencido' ? ' ⚠' : ''}</td>
                   <td className="num mono cell-primary" style={{ fontWeight: 700, color: 'var(--green)' }}>{fmtNum(l.saldo || 0)}</td>
+                  <td className="num mono" style={{ fontSize: 12, color: l.peso_bb != null ? 'var(--text)' : 'var(--text-dim)' }}>{l.peso_bb != null ? fmtNum(l.peso_bb) + ' kg' : '—'}</td>
+                  <td className="num mono cell-primary" style={{ fontWeight: 700 }}>{l.peso_bb != null ? fmtNum(Math.round((l.saldo || 0) * l.peso_bb)) + ' kg' : '—'}</td>
                 </tr>
               );
             })}</tbody>
@@ -3393,6 +3396,7 @@ const Estoque = ({ ctx }) => {
               <th>Armazém</th><th>Validade</th>
               <th className="num" style={thSort} onClick={() => toggleSort('saldo')}>Saldo <SortArrow col="saldo" /></th>
               <th className="num">Compr.</th><th className="num">Disp.</th>
+              <th className="num">Peso/BB</th><th className="num">Peso total</th>
             </tr></thead>
             <tbody>{lista.map((l, i) => {
               const sv = statusValidade(l.validade);
@@ -3411,6 +3415,8 @@ const Estoque = ({ ctx }) => {
                   <td className="num mono cell-primary" style={{ fontWeight: 700 }}>{fmtNum(l.saldo || 0)}</td>
                   <td className="num mono" style={{ color: (l.comprometido || 0) > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{(l.comprometido || 0) > 0 ? fmtNum(l.comprometido) : '—'}</td>
                   <td className="num mono cell-primary" style={{ color: l.disponivel < 0 ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>{fmtNum(l.disponivel)}</td>
+                  <td className="num mono" style={{ fontSize: 12, color: l.peso_bb != null ? 'var(--text)' : 'var(--text-dim)' }}>{l.peso_bb != null ? fmtNum(l.peso_bb) + ' kg' : '—'}</td>
+                  <td className="num mono cell-primary" style={{ fontWeight: 700 }}>{l.peso_bb != null ? fmtNum(Math.round((l.saldo || 0) * l.peso_bb)) + ' kg' : '—'}</td>
                 </tr>
               );
             })}</tbody>
