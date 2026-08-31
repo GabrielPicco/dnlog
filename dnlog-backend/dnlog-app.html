@@ -1417,6 +1417,10 @@ const App = ({ usuario, onLogout }) => {
           faturada_por: perfilAtivo,
           nf_numero: nfNumero || '',
           nf_data: nfData || new Date().toISOString().slice(0, 10),
+          // BLINDAGEM: uma OE faturada nunca pode ficar em status de conferência
+          // (senão reaparece na fila de conferência). Garante ao menos EMBARCADA.
+          status: ['PROGRAMADA', 'EM_CONFERENCIA', 'RASCUNHO'].includes(o.status) ? 'EMBARCADA' : o.status,
+          embarcada_em: o.embarcada_em || new Date().toISOString(),
         } : o)
       };
     });
@@ -6704,8 +6708,9 @@ const Conferencia = ({ ctx }) => {
 
   // Listas base — exclui triangulares (são auto-conferidas pelo fornecedor)
   const todasOrdens = ctx.state.ordens.filter(o => o.modalidade !== 'TRIANGULAR');
-  const ordensAguardando = todasOrdens.filter(o => o.status === 'PROGRAMADA');
-  const ordensEmConf = todasOrdens.filter(o => o.status === 'EM_CONFERENCIA');
+  // Faturada nunca fica na fila de conferência (já passou do ponto).
+  const ordensAguardando = todasOrdens.filter(o => o.status === 'PROGRAMADA' && !o.faturada);
+  const ordensEmConf = todasOrdens.filter(o => o.status === 'EM_CONFERENCIA' && !o.faturada);
   const ordensConferidasHoje = todasOrdens.filter(o =>
     ['EMBARCADA', 'EM_TRANSITO', 'ENTREGUE'].includes(o.status) && ehHoje(o.embarcada_em)
   );
