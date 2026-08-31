@@ -5978,9 +5978,16 @@ const DetalheOE = ({ ctx }) => {
               ctx.setScreen('editar-oe');
             }}><i className="ti ti-edit"></i> Editar OE</button>
           )}
-          {ctx.podeEditar && oeAtual.status !== 'CANCELADA' && oeAtual.status !== 'ENTREGUE' && proxStatus && (
+          {/* Triangular NÃO passa por conferência/embarque aqui — o fluxo dela
+              (troca de nota → liberação) é feito na tela Triangulares. */}
+          {ctx.podeEditar && oeAtual.modalidade !== 'TRIANGULAR' && oeAtual.status !== 'CANCELADA' && oeAtual.status !== 'ENTREGUE' && proxStatus && (
             <button className="btn btn-primary" onClick={() => avancarStatus(proxStatus)}>
               <i className="ti ti-arrow-right"></i> {labelProx[proxStatus]}
+            </button>
+          )}
+          {ctx.podeEditar && oeAtual.modalidade === 'TRIANGULAR' && ['PROGRAMADA', 'NOTA_TROCADA'].includes(oeAtual.status) && (
+            <button className="btn btn-primary" onClick={() => ctx.setScreen('triangulares')}>
+              <i className="ti ti-arrows-shuffle"></i> Gerenciar em Triangulares
             </button>
           )}
           {/* FATURAR — disponível quando OE já foi embarcada (ou além) e ainda não faturada */}
@@ -6300,7 +6307,7 @@ const DocumentoOE = ({ oe, totais }) => {
                               <strong>{it.descricao}</strong>
                               {it.obtentor && <div style={{ fontSize: 9, color: '#777' }}>{it.obtentor}{it.tsi ? ` · ${it.tsi}` : ''}</div>}
                             </td>
-                            <td style={{ fontSize: 9 }}>
+                            <td style={{ fontSize: 12 }}>
                               {it.lotes_alocados && it.lotes_alocados.length > 0 ? (
                                 (() => {
                                   const isSemLotes = it.lotes_alocados.length === 1 && it.lotes_alocados[0].sem_lotes_triangular;
@@ -6317,10 +6324,11 @@ const DocumentoOE = ({ oe, totais }) => {
                                   return (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                       {it.lotes_alocados.map(la => (
-                                        <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A' }}>
+                                        <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A', fontSize: 13, lineHeight: 1.55 }}>
                                           <strong>{la.lote_codigo}</strong>
                                           <span style={{ color: '#777' }}> · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span>
-                                          {la.controle_paralelo && <span style={{ color: '#B85A1A', fontSize: 8, marginLeft: 4, fontWeight: 700 }}>(CTRL PAR.)</span>}
+                                          {la.origem_fornecedor && <span style={{ color: '#555' }}> · orig: {la.origem_fornecedor}</span>}
+                                          {la.controle_paralelo && <span style={{ color: '#B85A1A', fontSize: 10, marginLeft: 4, fontWeight: 700 }}>(CTRL PAR.)</span>}
                                         </div>
                                       ))}
                                     </div>
@@ -6410,7 +6418,7 @@ const DocumentoOE = ({ oe, totais }) => {
                                 </div>
                               ))}
                               {it.lotes_alocados.some(la => la.controle_paralelo) && (
-                                <div style={{ fontSize: 8, color: '#B85A1A', fontWeight: 700, fontStyle: 'italic', marginTop: 2 }}>
+                                <div style={{ fontSize: 10, color: '#B85A1A', fontWeight: 700, fontStyle: 'italic', marginTop: 2 }}>
                                   ⚠ Não vinculado ao SAP
                                 </div>
                               )}
@@ -7029,8 +7037,17 @@ const ConferenciaDetalhe = ({ ctx }) => {
       obs_conferencia: obs,
       mapa_carga: mapaCarga
     });
-    ctx.showToast('Conferência finalizada!', `${oe.numero} liberada para embarque. Delivery Note criada no SAP.`);
-    ctx.setScreen('conferencia');
+    ctx.showToast('Conferência finalizada!', `${oe.numero} embarcada. Prossiga para o faturamento.`);
+    // Fluxo: Ordem → Conferência → Faturamento → Trânsito → Entrega.
+    // Ao concluir a conferência, o GESTOR segue no DETALHE da OE (para faturar
+    // e avançar). O CONFERENTE volta para a fila de conferência (próxima OE).
+    if (ctx.perfilAtivo === 'CONFERENTE') {
+      ctx.setScreen('conferencia');
+    } else {
+      ctx.setConferenceOE(null);
+      ctx.setViewingOE(oe);
+      ctx.setScreen('detalhe-oe');
+    }
   };
 
   return (
