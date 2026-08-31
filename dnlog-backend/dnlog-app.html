@@ -860,21 +860,40 @@ const addDays = (iso, days) => {
 // há peso real do lote — triangular, terceiros, sem lote).
 const PESO_BB_KG = 900;
 
-// Peso BRUTO (kg) de um item da OE.
-// Lotes do estoque próprio (DN_EST) têm o saldo já em KG — então o peso da parte
-// alocada em lote é a PRÓPRIA quantidade alocada (sem multiplicar). O que sobrar
-// sem lote (triangular/terceiros) usa a estimativa média por BB.
+// Peso líquido POR BIG BAG do lote (kg), vindo do SAP (UDF U_AGRT_PesoLiquido,
+// anexado ao /estoque-lotes como peso_bb). null = lote sem peso cadastrado.
+const pesoBBdoLote = (itemCodigo, loteCodigo) => {
+  const arr = DADOS_ESTOQUE_LOTES || [];
+  const row = arr.find(l => l.item_codigo === itemCodigo && l.lote === loteCodigo);
+  return row && row.peso_bb != null ? Number(row.peso_bb) : null;
+};
+// Peso BRUTO (kg) de um item da OE = Σ (qtd alocada do lote × peso/BB do lote).
+// Lote sem peso cadastrado (ou quantidade sem lote: triangular/terceiros) cai
+// na estimativa média por BB.
 const pesoBrutoItem = (it) => {
   if (!it) return 0;
   const alocs = (it.lotes_alocados || []).filter(l => l && l.lote_codigo && !l.sem_lotes_triangular && (Number(l.qtd_bb) || 0) > 0);
-  const kgLotes = alocs.reduce((a, l) => a + (Number(l.qtd_bb) || 0), 0); // DN_EST: saldo já em KG
-  const restante = Math.max(0, (Number(it.qtd_bb) || 0) - kgLotes); // parte sem lote
-  return kgLotes + restante * PESO_BB_KG;
+  let peso = 0, qtdEmLote = 0;
+  for (const la of alocs) {
+    const q = Number(la.qtd_bb) || 0;
+    const pbb = pesoBBdoLote(it.codigo, la.lote_codigo);
+    peso += q * (pbb != null ? pbb : PESO_BB_KG);
+    qtdEmLote += q;
+  }
+  const restante = Math.max(0, (Number(it.qtd_bb) || 0) - qtdEmLote);
+  return peso + restante * PESO_BB_KG;
 };
 // Soma o peso bruto de uma lista de itens (kg).
 const pesoBrutoLista = (itens) => (itens || []).reduce((a, it) => a + pesoBrutoItem(it), 0);
-// Item tem peso REAL (lote DN_EST alocado, saldo em KG) x estimativa.
-const itemTemPesoReal = (it) => (it?.lotes_alocados || []).some(l => l && l.lote_codigo && !l.sem_lotes_triangular && (Number(l.qtd_bb) || 0) > 0);
+// "peso real" = todos os BBs do item cobertos por lotes COM peso cadastrado.
+const itemTemPesoReal = (it) => {
+  const alocs = (it?.lotes_alocados || []).filter(l => l && l.lote_codigo && !l.sem_lotes_triangular && (Number(l.qtd_bb) || 0) > 0);
+  if (!alocs.length) return false;
+  const qtdEmLote = alocs.reduce((a, l) => a + (Number(l.qtd_bb) || 0), 0);
+  const cobreTudo = qtdEmLote >= (Number(it.qtd_bb) || 0);
+  const todosComPeso = alocs.every(la => pesoBBdoLote(it.codigo, la.lote_codigo) != null);
+  return cobreTudo && todosComPeso;
+};
 // Rótulo de peso: "1.234 kg" (real) ou "~ 1.234 kg" (estimado por BB).
 const pesoBrutoLabel = (it) => (itemTemPesoReal(it) ? '' : '~ ') + fmtNum(pesoBrutoItem(it)) + ' kg';
 

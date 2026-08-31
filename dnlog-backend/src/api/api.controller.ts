@@ -298,12 +298,19 @@ export class ApiController {
   @Get('estoque-lotes')
   async getEstoqueLotes() {
    return this.cache.wrap('estoque-lotes', async () => {
-    const [linhas, itens, grupos] = await Promise.all([
+    const [linhas, itens, grupos, pesos] = await Promise.all([
       this.sap.getSaldoPorLote?.() ?? [],
       this.sap.getItems?.().catch(() => []) ?? [],
       this.sap.getItemGroups?.().catch(() => []) ?? [],
+      this.sap.getPesosPorLote?.().catch(() => []) ?? [],
     ]);
     const itemInfo = construirItemInfo(itens, grupos);
+    // Peso líquido por big bag (UDF U_AGRT_PesoLiquido) indexado por item|lote.
+    const pesoMap: Record<string, number> = {};
+    for (const b of pesos as any[]) {
+      const p = Number(b.U_AGRT_PesoLiquido);
+      if (b.BatchNumber && p > 0) pesoMap[b.ItemCode + '|' + b.BatchNumber] = p;
+    }
     return (linhas as any[]).map((r: any) => {
       const info = itemInfo[r.CodigoItem] || { grupo_codigo: null, grupo_nome: '' };
       return {
@@ -320,6 +327,8 @@ export class ApiController {
         a_receber_compra: Number(r.SaldoPedidoCompra) || 0,
         validade: r.ExpDate || null,
         custo_medio: Number(r.CustoMedio) || 0,
+        // Peso líquido por big bag do lote (kg). null = sem peso cadastrado.
+        peso_bb: r.Lote ? (pesoMap[r.CodigoItem + '|' + r.Lote] ?? null) : null,
       };
     });
    });

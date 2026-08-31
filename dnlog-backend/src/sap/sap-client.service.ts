@@ -365,13 +365,35 @@ export class SapClientService implements OnModuleDestroy {
 
     const params = {
       $filter: `ItemCode eq '${this.odataLiteral(itemCode)}' and Status eq 'bdsStatus_Released'`,
-      $select: 'BatchNumber,ItemCode,Quantity,ExpirationDate,SystemNumber',
+      $select:
+        'BatchNumber,ItemCode,Quantity,ExpirationDate,SystemNumber,U_AGRT_PesoLiquido',
     };
 
     try {
       return await this.getAllPages('/BatchNumberDetails', params);
     } catch (err) {
       this.handleError(err, `buscar lotes do item ${itemCode}`);
+    }
+  }
+
+  /**
+   * Peso LÍQUIDO por big bag de cada lote (UDF U_AGRT_PesoLiquido na OBTN).
+   * Traz todos os lotes liberados de uma vez — usado para anexar o peso real
+   * ao saldo por lote. Não-fatal: em erro devolve [] (a OE cai na estimativa).
+   */
+  async getPesosPorLote(): Promise<any[]> {
+    await this.ensureSession();
+    try {
+      return await this.getAllPages('/BatchNumberDetails', {
+        $select: 'ItemCode,BatchNumber,U_AGRT_PesoLiquido',
+        $filter: "Status eq 'bdsStatus_Released'",
+      });
+    } catch (err) {
+      this.logger?.warn?.(
+        'getPesosPorLote falhou — seguindo sem peso de lote: ' +
+          (err?.message || err),
+      );
+      return [];
     }
   }
 
