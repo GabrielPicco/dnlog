@@ -66,13 +66,27 @@ export class OeService {
     return this.toApp(registro);
   }
 
-  /** Substitui muitas OEs de uma vez (usado na sincronizacao do app). */
-  async upsertMany(ordens: any[]): Promise<any[]> {
-    const out: any[] = [];
+  /**
+   * Salva muitas OEs de uma vez (sincronizacao do app). RESILIENTE: se uma OE
+   * falhar, as demais continuam sendo salvas — assim um registro problematico
+   * nao derruba o sync inteiro (o que faria o app "perder" o salvamento e a OE
+   * voltar ao status antigo no reload).
+   */
+  async upsertMany(ordens: any[]): Promise<any> {
+    let salvos = 0;
+    const erros: any[] = [];
     for (const oe of ordens || []) {
-      out.push(await this.upsert(oe));
+      try {
+        await this.upsert(oe);
+        salvos++;
+      } catch (e: any) {
+        this.logger.warn(
+          `Falha ao salvar OE ${oe?.numero || oe?.id}: ${e?.message || e}`,
+        );
+        erros.push({ id: oe?.id, numero: oe?.numero, erro: String(e?.message || e) });
+      }
     }
-    return out;
+    return { sucesso: erros.length === 0, salvos, total: (ordens || []).length, erros };
   }
 
   async remove(id: string): Promise<void> {

@@ -976,16 +976,24 @@ const DNLOG_API = {
   },
 
   // Envia o conjunto de OEs para o banco (upsert em lote). Idempotente.
+  // Retorna { ok, status } — o chamador SÓ considera salvo se ok===true, para
+  // não perder dados quando a resposta é 401 (sessão expirada) ou 5xx.
   async sincronizarOEs(ordens) {
-    if (!window.__DNLOG_BACKEND_ON) return; // sem backend → só localStorage
+    if (!window.__DNLOG_BACKEND_ON) return { ok: false, status: 0, motivo: 'backend-off' };
     try {
-      await fetch(`${DNLOG_API_BASE}/oe/sync`, {
+      const r = await fetch(`${DNLOG_API_BASE}/oe/sync`, {
         method: 'POST',
         headers: dnlogAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ ordens }),
       });
+      if (!r.ok) {
+        console.warn('[DNLog API] Sync de OEs NÃO salvo — HTTP ' + r.status);
+        return { ok: false, status: r.status, motivo: r.status === 401 ? 'sessao' : 'http' };
+      }
+      return { ok: true, status: r.status };
     } catch (e) {
-      console.warn('[DNLog API] Falha ao sincronizar OEs (seguindo offline):', e.message);
+      console.warn('[DNLog API] Falha ao sincronizar OEs (offline?):', e.message);
+      return { ok: false, status: 0, motivo: 'rede' };
     }
   },
 
@@ -1098,20 +1106,38 @@ const loadState = () => {
 };
 
 let _syncTimer = null;
-let _pendingOrdens = null; // último snapshot ainda não confirmado no banco
+let _retryTimer = null;
+let _pendingOrdens = null; // último snapshot ainda não CONFIRMADO no banco
+// Avisa a UI sobre o estado do sync (o App registra o setter em window).
+const _notifySync = (st) => { try { if (window.__DNLOG_setSyncStatus) window.__DNLOG_setSyncStatus(st); } catch (e) {} };
+// Envia o snapshot pendente e SÓ limpa se o banco confirmar (r.ok). Se falhar,
+// mantém o pendente e reprograma um retry — nada de perder dados em silêncio.
+const _fazerSyncOEs = async () => {
+  if (!_pendingOrdens || !window.__DNLOG_BACKEND_ON) return;
+  const snap = _pendingOrdens;
+  _notifySync({ estado: 'salvando' });
+  const res = await DNLOG_API.sincronizarOEs(snap);
+  if (res && res.ok) {
+    if (_pendingOrdens === snap) _pendingOrdens = null; // nada novo entrou nesse meio
+    if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+    _notifySync({ estado: 'salvo', em: new Date().toISOString() });
+  } else {
+    _notifySync({ estado: 'falha', motivo: (res && res.motivo) || 'rede' });
+    if (_retryTimer) clearTimeout(_retryTimer);
+    _retryTimer = setTimeout(_fazerSyncOEs, 8000); // tenta de novo até salvar
+  }
+};
 const saveState = (state) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch(e) { console.error('Erro salvando:', e); }
 
-  // Espelha as OEs no banco (debounce 800ms para agrupar mudanças rápidas).
+  // Espelha as OEs no banco. Debounce curto só para agrupar a rajada de setState
+  // de uma mesma ação; a persistência em si é confirmada (retry se falhar).
   if (window.__DNLOG_BACKEND_ON && state && Array.isArray(state.ordens)) {
-    if (_syncTimer) clearTimeout(_syncTimer);
     _pendingOrdens = state.ordens;
-    _syncTimer = setTimeout(() => {
-      DNLOG_API.sincronizarOEs(_pendingOrdens);
-      _pendingOrdens = null;
-    }, 800);
+    if (_syncTimer) clearTimeout(_syncTimer);
+    _syncTimer = setTimeout(_fazerSyncOEs, 400);
   }
 };
 
@@ -1169,6 +1195,13 @@ const App = ({ usuario, onLogout }) => {
   const [tema, setTema] = useState(() => localStorage.getItem('dnlog_tema') || 'dark');
 
   useEffect(() => { saveState(state); }, [state]);
+
+  // Estado da sincronização com o banco (para avisar quando NÃO salvou).
+  const [syncStatus, setSyncStatus] = useState(null);
+  useEffect(() => {
+    window.__DNLOG_setSyncStatus = setSyncStatus;
+    return () => { window.__DNLOG_setSyncStatus = null; };
+  }, []);
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', tema);
     localStorage.setItem('dnlog_tema', tema);
@@ -1572,6 +1605,27 @@ const App = ({ usuario, onLogout }) => {
         )}
       </main>
       {toast && <Toast {...toast} />}
+      {syncStatus && syncStatus.estado === 'falha' && (
+        <div style={{
+          position: 'fixed', bottom: 16, right: 16, zIndex: 9999, maxWidth: 340,
+          background: 'var(--red-bg)', border: '1px solid var(--red)', color: 'var(--text)',
+          borderRadius: 8, padding: '12px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.3)', fontSize: 12
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, color: 'var(--red)', marginBottom: 4 }}>
+            <i className="ti ti-cloud-off"></i> Alterações não salvas no banco
+          </div>
+          <div style={{ color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            {syncStatus.motivo === 'sessao'
+              ? 'Sua sessão expirou. Recarregue e faça login de novo — SEM recarregar, tentando salvar…'
+              : 'Sem conexão com o servidor. Tentando salvar automaticamente… NÃO feche antes de aparecer "salvo".'}
+          </div>
+        </div>
+      )}
+      {syncStatus && syncStatus.estado === 'salvando' && (
+        <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 9998, fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <i className="ti ti-loader-2"></i> Salvando no banco…
+        </div>
+      )}
     </div>
   );
 };
