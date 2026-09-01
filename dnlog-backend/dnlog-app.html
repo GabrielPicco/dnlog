@@ -9255,11 +9255,13 @@ const Embarques = ({ ctx }) => {
 
   // Stats agregadas
   const stats = useMemo(() => {
-    const total = filtradas.length;
-    const valorTotal = filtradas.reduce((a, oe) => a + totalValor(oe), 0);
-    const bbsTotal = filtradas.reduce((a, oe) => a + totalBBs(oe), 0);
-    const entregues = filtradas.filter(oe => oe.status === 'ENTREGUE').length;
-    const faturadas = filtradas.filter(oe => oe.faturada).length;
+    // Métricas NÃO contam OEs canceladas (elas seguem visíveis na lista).
+    const ativas = filtradas.filter(oe => oe.status !== 'CANCELADA');
+    const total = ativas.length;
+    const valorTotal = ativas.reduce((a, oe) => a + totalValor(oe), 0);
+    const bbsTotal = ativas.reduce((a, oe) => a + totalBBs(oe), 0);
+    const entregues = ativas.filter(oe => oe.status === 'ENTREGUE').length;
+    const faturadas = ativas.filter(oe => oe.faturada).length;
     return { total, valorTotal, bbsTotal, entregues, faturadas };
   }, [filtradas]);
 
