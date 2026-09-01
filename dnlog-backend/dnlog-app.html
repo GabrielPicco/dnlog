@@ -981,11 +981,15 @@ const DNLOG_API = {
   async sincronizarOEs(ordens) {
     if (!window.__DNLOG_BACKEND_ON) return { ok: false, status: 0, motivo: 'backend-off' };
     try {
-      const r = await fetch(`${DNLOG_API_BASE}/oe/sync`, {
-        method: 'POST',
-        headers: dnlogAuthHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ ordens }),
-      });
+      // Timeout para não travar o "salvando" (e o bloqueio de tela) se a rede pendurar.
+      const r = await Promise.race([
+        fetch(`${DNLOG_API_BASE}/oe/sync`, {
+          method: 'POST',
+          headers: dnlogAuthHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ ordens }),
+        }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000)),
+      ]);
       if (!r.ok) {
         console.warn('[DNLog API] Sync de OEs NÃO salvo — HTTP ' + r.status);
         return { ok: false, status: r.status, motivo: r.status === 401 ? 'sessao' : 'http' };
@@ -1138,11 +1142,18 @@ const _fazerSyncOEs = async () => {
   if (res && res.ok) {
     if (_pendingOrdens === snap) _pendingOrdens = null; // nada novo entrou nesse meio
     if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+    try { localStorage.removeItem('dnlog_pending_sync'); } catch (e) {}
     _notifySync({ estado: 'salvo', em: new Date().toISOString() });
   } else {
-    _notifySync({ estado: 'falha', motivo: (res && res.motivo) || 'rede' });
-    if (_retryTimer) clearTimeout(_retryTimer);
-    _retryTimer = setTimeout(_fazerSyncOEs, 8000); // tenta de novo até salvar
+    const motivo = (res && res.motivo) || 'rede';
+    // Marca que há mudança local não confirmada. No próximo login o bootstrap
+    // empurra as OEs locais ao banco ANTES de baixar as do banco — nada se perde.
+    try { localStorage.setItem('dnlog_pending_sync', '1'); } catch (e) {}
+    _notifySync({ estado: 'falha', motivo });
+    if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+    // Sessão expirada: repetir só dá 401 → NÃO fica em loop; espera novo login.
+    // Rede/servidor: tenta de novo automaticamente até salvar.
+    if (motivo !== 'sessao') _retryTimer = setTimeout(_fazerSyncOEs, 8000);
   }
 };
 const saveState = (state) => {
@@ -1651,9 +1662,24 @@ const App = ({ usuario, onLogout }) => {
         )}
       </main>
       {toast && <Toast {...toast} />}
+      {/* SALVANDO: barra no topo + bloqueio de cliques até confirmar no banco */}
+      {syncStatus && syncStatus.estado === 'salvando' && (
+        <>
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, height: 3, zIndex: 10001, background: 'var(--accent-glow)', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: '35%', background: 'var(--accent-light)', animation: 'dnlogbar 1s ease-in-out infinite' }} />
+          </div>
+          {/* Camada transparente que impede clicar em outras funções antes de salvar */}
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9998, background: 'transparent', cursor: 'progress' }} />
+          <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 10002, fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <i className="ti ti-loader-2"></i> Salvando no banco…
+          </div>
+          <style>{`@keyframes dnlogbar{0%{transform:translateX(-120%)}100%{transform:translateX(400%)}}`}</style>
+        </>
+      )}
+      {/* FALHA: aviso fixo (não fica em loop); sessão expirada tem botão de re-login */}
       {syncStatus && syncStatus.estado === 'falha' && (
         <div style={{
-          position: 'fixed', bottom: 16, right: 16, zIndex: 9999, maxWidth: 340,
+          position: 'fixed', bottom: 16, right: 16, zIndex: 10001, maxWidth: 360,
           background: 'var(--red-bg)', border: '1px solid var(--red)', color: 'var(--text)',
           borderRadius: 8, padding: '12px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.3)', fontSize: 12
         }}>
@@ -1662,14 +1688,14 @@ const App = ({ usuario, onLogout }) => {
           </div>
           <div style={{ color: 'var(--text-muted)', lineHeight: 1.5 }}>
             {syncStatus.motivo === 'sessao'
-              ? 'Sua sessão expirou. Recarregue e faça login de novo — SEM recarregar, tentando salvar…'
-              : 'Sem conexão com o servidor. Tentando salvar automaticamente… NÃO feche antes de aparecer "salvo".'}
+              ? 'Sua sessão expirou. Suas alterações estão guardadas e serão enviadas ao banco assim que você entrar de novo.'
+              : 'Sem conexão com o servidor. Tentando salvar automaticamente… não feche antes de aparecer "salvo".'}
           </div>
-        </div>
-      )}
-      {syncStatus && syncStatus.estado === 'salvando' && (
-        <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 9998, fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <i className="ti ti-loader-2"></i> Salvando no banco…
+          {syncStatus.motivo === 'sessao' && (
+            <button className="btn btn-primary" style={{ marginTop: 10, fontSize: 12 }} onClick={() => window.location.reload()}>
+              <i className="ti ti-login-2"></i> Entrar de novo (salva o pendente)
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -8044,6 +8070,27 @@ const AdminUsuarios = ({ ctx }) => {
     // este bootstrap roda de novo com o token, aí os dados entram.
     const _logado = !!localStorage.getItem('dnlog_token');
     if (_logado) {
+
+    // Se havia mudança local não confirmada (sync falhou antes por sessão
+    // expirada/rede), EMPURRA as OEs locais ao banco AGORA (token novo) ANTES de
+    // baixar — senão a baixa do banco sobrescreveria a alteração e ela se perderia.
+    try {
+      if (localStorage.getItem('dnlog_pending_sync')) {
+        const atual = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        if (Array.isArray(atual.ordens) && atual.ordens.length) {
+          const r = await fetch(`${API_BASE}/oe/sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...(localStorage.getItem('dnlog_token') ? { Authorization: 'Bearer ' + localStorage.getItem('dnlog_token') } : {}) },
+            body: JSON.stringify({ ordens: atual.ordens }),
+          });
+          if (r.ok) { localStorage.removeItem('dnlog_pending_sync'); console.log('[DNLog API] Mudanças locais pendentes enviadas ao banco.'); }
+        } else {
+          localStorage.removeItem('dnlog_pending_sync');
+        }
+      }
+    } catch (e) {
+      console.warn('[DNLog API] Falha ao enviar pendências no login:', e.message);
+    }
 
     // Hidrata as OEs do banco no localStorage ANTES do React montar.
     // O servidor é a fonte da verdade; mantém lotes/baixas locais como estão.

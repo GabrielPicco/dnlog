@@ -16,7 +16,9 @@ import { JwtAuthGuard, GestorGuard } from './jwt-auth.guard';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.get<string>('JWT_SECRET') || 'dnlog-dev-secret-trocar',
-        signOptions: { expiresIn: '12h' },
+        // Sessão longa: evita expirar no meio do uso (com o app aberto por horas)
+        // e o consequente loop de "sessão expirada" ao salvar. Configurável por env.
+        signOptions: { expiresIn: config.get<string>('JWT_EXPIRES_IN') || '30d' },
       }),
     }),
   ],
