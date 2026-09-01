@@ -1070,6 +1070,24 @@ const DNLOG_API = {
     if (!r.ok) throw new Error('DELETE /agendamento ' + r.status);
     return r.json();
   },
+
+  // ---- Log de auditoria (ações/edições) ----
+  async registrarLog(entry) {
+    if (!window.__DNLOG_BACKEND_ON) return { ok: false };
+    try {
+      const r = await fetch(`${DNLOG_API_BASE}/log`, {
+        method: 'POST',
+        headers: dnlogAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(entry),
+      });
+      return r.ok ? r.json() : { ok: false, status: r.status };
+    } catch (e) { return { ok: false }; }
+  },
+  async listarLogs(limit) {
+    const r = await fetch(`${DNLOG_API_BASE}/log?limit=${limit || 500}`, { headers: dnlogAuthHeaders() });
+    if (!r.ok) throw new Error('GET /log ' + r.status);
+    return r.json();
+  },
 };
 window.DNLOG_API = DNLOG_API;
 
@@ -1322,6 +1340,19 @@ const App = ({ usuario, onLogout }) => {
     setTimeout(() => setToast(null), 4000);
   };
 
+  // Log de auditoria: registra a ação no banco (best-effort, não trava nada).
+  const logAcao = (acao, detalhe, extra) => {
+    try {
+      DNLOG_API.registrarLog({
+        usuario: (usuario && (usuario.nome || usuario.email)) || perfilAtivo || 'Sistema',
+        tela: screen,
+        acao,
+        detalhe: detalhe || '',
+        ...(extra || {}),
+      });
+    } catch (e) { /* auditoria nunca pode quebrar o fluxo */ }
+  };
+
   const criarOE = (oe) => {
     setState(s => {
       const numero = `OE-2026-${String(s.proxNumero).padStart(5, '0')}`;
@@ -1334,6 +1365,7 @@ const App = ({ usuario, onLogout }) => {
         status: 'PROGRAMADA'
       };
       showToast('OE criada com sucesso!', `${numero} foi adicionada à fila de embarques`);
+      logAcao('OE criada', `${numero} · ${novaOE.cliente || ''} · ${totalBBs(novaOE)} un`, { entidade_tipo: 'OE', entidade_id: numero });
       return { ...s, ordens: [...s.ordens, novaOE], proxNumero: s.proxNumero + 1 };
     });
   };
@@ -1353,6 +1385,8 @@ const App = ({ usuario, onLogout }) => {
       } : o)
     }));
     showToast('OE atualizada', 'Alterações salvas com sucesso');
+    const oeEd = state.ordens.find(o => o.id === id);
+    logAcao('OE editada', `${(oeEd && oeEd.numero) || id}`, { entidade_tipo: 'OE', entidade_id: (oeEd && oeEd.numero) || id });
   };
 
   const atualizarOE = (id, updates) => {
@@ -1376,6 +1410,7 @@ const App = ({ usuario, onLogout }) => {
         status: 'PROGRAMADA',
       };
       showToast('OE de retirada criada!', `${numero} · ${oe.fornecedor || ''}`);
+      logAcao('OE de retirada criada', `${numero} · ${oe.fornecedor || ''}`, { entidade_tipo: 'OE_RETIRADA', entidade_id: numero });
       return { ...s, ordensCompra: [...(s.ordensCompra || []), nova], proxNumeroCompra: (s.proxNumeroCompra || 1) + 1 };
     });
   };
@@ -1400,6 +1435,7 @@ const App = ({ usuario, onLogout }) => {
         return { ...s, agendamentos: nova };
       });
       showToast(ag.id ? 'Agendamento atualizado' : 'Agendamento salvo', `#${salvo.num} · ${salvo.fornecedor || ''}`);
+      logAcao(ag.id ? 'Agendamento editado' : 'Agendamento criado', `#${salvo.num} · ${salvo.fornecedor || ''}`, { entidade_tipo: 'AGENDAMENTO', entidade_id: String(salvo.num) });
       return salvo;
     } catch (e) {
       showToast('Falha ao salvar no banco', e.message || 'tente de novo');
@@ -1412,6 +1448,7 @@ const App = ({ usuario, onLogout }) => {
       await DNLOG_API.removerAgendamento(id);
       setState(s => ({ ...s, agendamentos: (s.agendamentos || []).filter(a => a.id !== id) }));
       showToast('Agendamento removido', '');
+      logAcao('Agendamento removido', String(id), { entidade_tipo: 'AGENDAMENTO', entidade_id: String(id) });
     } catch (e) {
       showToast('Falha ao remover', e.message || '');
     }
@@ -1488,6 +1525,7 @@ const App = ({ usuario, onLogout }) => {
       };
     });
     showToast('OE faturada', `Saldo do pedido baixado`);
+    { const oeF = state.ordens.find(o => o.id === id); logAcao('OE faturada', `${(oeF && oeF.numero) || id}${nfNumero ? ' · NF ' + nfNumero : ''}`, { entidade_tipo: 'OE', entidade_id: (oeF && oeF.numero) || id }); }
 
     // Vincula ao SAP via API: cria a Delivery Note e grava o documento na OE
     // do banco. Best-effort — se o backend/SAP estiver fora, a baixa local
@@ -1548,12 +1586,14 @@ const App = ({ usuario, onLogout }) => {
       };
     });
     showToast('OE desfaturada', 'Saldo retornado ao pedido');
+    { const oeD = state.ordens.find(o => o.id === id); logAcao('OE desfaturada', `${(oeD && oeD.numero) || id}`, { entidade_tipo: 'OE', entidade_id: (oeD && oeD.numero) || id }); }
   };
 
   const cancelarOE = (id) => {
     if (!confirm('Confirma cancelamento desta OE? O saldo dos itens será restituído ao pedido.')) return;
     atualizarOE(id, { status: 'CANCELADA', cancelado_em: new Date().toISOString() });
     showToast('OE cancelada', 'Saldo restituído ao pedido');
+    { const oeC = state.ordens.find(o => o.id === id); logAcao('OE cancelada', `${(oeC && oeC.numero) || id}`, { entidade_tipo: 'OE', entidade_id: (oeC && oeC.numero) || id }); }
   };
 
   const ctx = {
@@ -1567,6 +1607,7 @@ const App = ({ usuario, onLogout }) => {
     criarOE, atualizarOE, editarOE, cancelarOE, faturarOE, desfaturarOE,
     criarOECompra, atualizarOECompra, cancelarOECompra,
     salvarAgendamento, removerAgendamento, importarAgendamentos,
+    logAcao,
     sidebarCollapsed: effectiveCollapsed, setSidebarCollapsed,
     perfilAtivo,
     usuario, onLogout,
@@ -1595,6 +1636,7 @@ const App = ({ usuario, onLogout }) => {
             {screen === 'pedidos' && <Pedidos ctx={ctx} />}
             {screen === 'pedidos-compra' && <PedidosCompra ctx={ctx} />}
             {screen === 'usuarios' && <AdminUsuarios ctx={ctx} />}
+            {screen === 'logs' && <LogsView ctx={ctx} />}
             {screen === 'detalhe-pedido' && <DetalhePedido ctx={ctx} />}
             {screen === 'estoque' && <Estoque ctx={ctx} />}
             {screen === 'conferencia' && <Conferencia ctx={ctx} />}
@@ -1776,6 +1818,37 @@ const Relatorios = ({ ctx }) => {
   const pct = parseFloat(String(comissaoPct).replace(',', '.')) || 0;
   const comissaoTotal = resumo.valor * pct / 100;
 
+  // ---- Divergências de entrega: SAP (qtd_entregue) x DNLog (OEs faturadas) ----
+  // Confronta as duas fontes por pedido+item e lista onde NÃO batem, para
+  // conferência com o financeiro. Não altera nada — é só leitura.
+  const divergencias = useMemo(() => {
+    const qtdNaOE = (oe, pedidoNumero, itemCodigo) => {
+      if (oe.paradas && Array.isArray(oe.paradas)) {
+        let total = 0;
+        oe.paradas.forEach(parada => (parada.itens || []).forEach(linha => {
+          const pn = linha.pedido_numero || parada.pedido_numero;
+          if (pn === pedidoNumero && linha.codigo === itemCodigo) total += (linha.qtd_bb || 0);
+        }));
+        return total;
+      }
+      if (oe.pedido_numero === pedidoNumero) {
+        const linha = (oe.itens || []).find(i => i.codigo === itemCodigo);
+        return linha ? (linha.qtd_bb || 0) : 0;
+      }
+      return 0;
+    };
+    const faturadas = (ctx.state.ordens || []).filter(o => o.status !== 'CANCELADA' && o.faturada);
+    const out = [];
+    (ctx.pedidos || []).forEach(p => (p.itens || []).forEach(it => {
+      const sap = it.qtd_entregue || 0;
+      const dnlog = faturadas.reduce((a, oe) => a + qtdNaOE(oe, p.numero, it.codigo), 0);
+      if (sap !== dnlog && (sap > 0 || dnlog > 0)) {
+        out.push({ pedido: p.numero, cliente: p.cliente, item: it.codigo, descricao: it.descricao, sap, dnlog, dif: dnlog - sap });
+      }
+    }));
+    return out.sort((a, b) => Math.abs(b.dif) - Math.abs(a.dif));
+  }, [ctx.pedidos, ctx.state.ordens]);
+
   const exportarResumo = () => {
     const linhas = ['Representante;Pedidos;Abertos;Unidades;Valor total;Comissao (' + pct + '%)'];
     resumo.representantes.forEach(r => {
@@ -1852,6 +1925,46 @@ const Relatorios = ({ ctx }) => {
             <td className="num mono" style={{ color: pct ? 'var(--accent-light)' : 'var(--text-dim)' }}>{pct ? fmtMoney(comissaoTotal) : '—'}</td>
           </tr></tfoot>
         </table>
+      </div>
+
+      {/* ===== DIVERGÊNCIAS DE ENTREGA (SAP × DNLog) ===== */}
+      <div className="panel" style={{ marginBottom: 16 }}>
+        <div className="panel-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <i className="ti ti-scale" style={{ color: divergencias.length ? 'var(--orange)' : 'var(--green)' }}></i>
+            <strong style={{ fontSize: 14 }}>Divergências de entrega (SAP × DNLog)</strong>
+            <span className={'chip ' + (divergencias.length ? 'chip-orange' : 'chip-green')} style={{ fontSize: 10 }}>{divergencias.length ? `${divergencias.length} divergência(s)` : 'tudo batendo'}</span>
+          </div>
+        </div>
+        {divergencias.length === 0 ? (
+          <div className="empty"><i className="ti ti-checks" style={{ color: 'var(--green)' }}></i><div>SAP e DNLog batem em todos os itens</div><div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Nada a reconciliar no momento.</div></div>
+        ) : (
+          <table>
+            <thead><tr>
+              <th>Pedido</th><th>Cliente</th><th>Item</th><th>Descrição</th>
+              <th className="num">SAP entregue</th><th className="num">DNLog faturado</th><th className="num">Dif.</th><th>Situação</th>
+            </tr></thead>
+            <tbody>{divergencias.map((d, i) => (
+              <tr key={d.pedido + '|' + d.item + '|' + i}>
+                <td className="cell-primary mono" style={{ fontSize: 12 }}>{d.pedido}</td>
+                <td style={{ fontSize: 12 }}>{d.cliente}</td>
+                <td className="mono cell-muted" style={{ fontSize: 11 }}>{d.item}</td>
+                <td style={{ fontSize: 12 }}>{d.descricao}</td>
+                <td className="num mono">{fmtNum(d.sap)}</td>
+                <td className="num mono">{fmtNum(d.dnlog)}</td>
+                <td className="num mono" style={{ fontWeight: 700, color: d.dif > 0 ? 'var(--blue)' : 'var(--orange)' }}>{d.dif > 0 ? '+' : ''}{fmtNum(d.dif)}</td>
+                <td style={{ fontSize: 11 }}>
+                  {d.dif > 0
+                    ? <span style={{ color: 'var(--blue)' }}>DNLog embarcou · SAP ainda não baixou</span>
+                    : <span style={{ color: 'var(--orange)' }}>SAP baixou · sem OE faturada no DNLog</span>}
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+        )}
+        <div style={{ padding: '8px 16px', fontSize: 11, color: 'var(--text-muted)', borderTop: '1px solid var(--border)' }}>
+          A exibição do saldo usa a MAIOR das duas fontes (nunca soma), então isto aqui é só o mapa das diferenças para conferência — não afeta o saldo. Read-only no SAP.
+        </div>
       </div>
 
       {filtrando && (
@@ -2044,6 +2157,7 @@ const Sidebar = ({ ctx }) => {
     { id: 'pedidos', icon: 'ti-clipboard-list', label: 'Pedidos', perfis: ['OPERADOR','GESTOR'] },
     { id: 'estoque', icon: 'ti-building-warehouse', label: 'Estoque', perfis: ['OPERADOR','GESTOR'] },
     { id: 'usuarios', icon: 'ti-users', label: 'Usuários', perfis: ['GESTOR'] },
+    { id: 'logs', icon: 'ti-history', label: 'Logs', perfis: ['GESTOR'] },
   ];
 
   const items = todosItems.filter(it => it.perfis.includes(ctx.perfilAtivo));
@@ -6033,6 +6147,7 @@ const DetalheOE = ({ ctx }) => {
   const avancarStatus = (novoStatus) => {
     ctx.atualizarOE(oeAtual.id, { status: novoStatus, [`${novoStatus.toLowerCase()}_em`]: new Date().toISOString() });
     ctx.showToast(`Status atualizado para ${novoStatus.replace('_',' ')}`, oeAtual.numero);
+    ctx.logAcao && ctx.logAcao('Status alterado', `${oeAtual.numero} → ${novoStatus.replace('_',' ')}`, { entidade_tipo: 'OE', entidade_id: oeAtual.numero });
   };
 
   const proxStatus = {
@@ -7136,6 +7251,7 @@ const ConferenciaDetalhe = ({ ctx }) => {
       mapa_carga: mapaCarga
     });
     ctx.showToast('Conferência finalizada!', `${oe.numero} embarcada. Prossiga para o faturamento.`);
+    ctx.logAcao && ctx.logAcao('Conferência finalizada', `${oe.numero} · embarcada`, { entidade_tipo: 'OE', entidade_id: oe.numero });
     // Fluxo: Ordem → Conferência → Faturamento → Trânsito → Entrega.
     // Ao concluir a conferência, o GESTOR segue no DETALHE da OE (para faturar
     // e avançar). O CONFERENTE volta para a fila de conferência (próxima OE).
@@ -7712,6 +7828,93 @@ const AuthGate = () => {
 };
 
 // Tela de administração de usuários (somente GESTOR)
+// ============================================================
+// LOGS DE AUDITORIA (ações/edições de todas as telas)
+// ============================================================
+const LogsView = ({ ctx }) => {
+  const [logs, setLogs] = useState(null); // null = carregando
+  const [erro, setErro] = useState(null);
+  const [q, setQ] = useState('');
+  const [filtroAcao, setFiltroAcao] = useState('todas');
+
+  const carregar = () => {
+    setLogs(null); setErro(null);
+    DNLOG_API.listarLogs(1000)
+      .then(rows => setLogs(Array.isArray(rows) ? rows : []))
+      .catch(e => { setErro(e.message || 'falha ao carregar'); setLogs([]); });
+  };
+  useEffect(() => { carregar(); }, []);
+
+  const acoes = useMemo(() => Array.from(new Set((logs || []).map(l => l.acao).filter(Boolean))).sort(), [logs]);
+  const lista = useMemo(() => {
+    let l = logs || [];
+    if (filtroAcao !== 'todas') l = l.filter(x => x.acao === filtroAcao);
+    if (q) {
+      const ql = q.toLowerCase();
+      l = l.filter(x => (x.acao || '').toLowerCase().includes(ql) || (x.detalhe || '').toLowerCase().includes(ql) || (x.usuario || '').toLowerCase().includes(ql) || (x.tela || '').toLowerCase().includes(ql));
+    }
+    return l;
+  }, [logs, q, filtroAcao]);
+
+  const exportarCSV = () => {
+    const linhas = ['Quando;Usuario;Tela;Acao;Detalhe'];
+    (lista || []).forEach(l => linhas.push([fmtDateTime(l.quando), l.usuario || '', l.tela || '', l.acao || '', l.detalhe || ''].map(c => String(c).replace(/;/g, ',')).join(';')));
+    const blob = new Blob(['﻿' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `logs_dnlog_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="crumb"><i className="ti ti-home"></i> Gestão · Logs</div>
+          <h1 className="page-title">Logs de auditoria</h1>
+          <p className="page-subtitle">Quem fez o quê e quando · {logs ? logs.length : '…'} registro(s) · trilha interna do DNLog (não é SAP)</p>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button className="btn btn-ghost" onClick={carregar}><i className="ti ti-refresh"></i> Atualizar</button>
+          <button className="btn btn-ghost" onClick={exportarCSV} disabled={!lista || lista.length === 0}><i className="ti ti-file-export"></i> CSV</button>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-header">
+          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filtroAcao} onChange={e => setFiltroAcao(e.target.value)}>
+            <option value="todas">Todas as ações</option>
+            {acoes.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <div className="search-box"><i className="ti ti-search"></i>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar ação, detalhe, usuário, tela..." /></div>
+        </div>
+        {logs === null ? (
+          <div className="empty"><i className="ti ti-loader-2"></i><div>Carregando logs…</div></div>
+        ) : erro ? (
+          <div className="empty"><i className="ti ti-alert-circle"></i><div>Não foi possível carregar</div><div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{erro}</div></div>
+        ) : lista.length === 0 ? (
+          <div className="empty"><i className="ti ti-history"></i><div>{(logs.length === 0) ? 'Nenhuma ação registrada ainda' : 'Nada com esse filtro'}</div></div>
+        ) : (
+          <table>
+            <thead><tr>
+              <th style={{ width: 150 }}>Quando</th><th style={{ width: 140 }}>Usuário</th><th style={{ width: 110 }}>Tela</th><th style={{ width: 150 }}>Ação</th><th>Detalhe</th>
+            </tr></thead>
+            <tbody>{lista.map(l => (
+              <tr key={l.id}>
+                <td className="mono cell-muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDateTime(l.quando)}</td>
+                <td style={{ fontSize: 12 }}>{l.usuario || '—'}</td>
+                <td className="mono cell-muted" style={{ fontSize: 11 }}>{l.tela || '—'}</td>
+                <td><span className="chip chip-neutral" style={{ fontSize: 10 }}>{l.acao}</span></td>
+                <td style={{ fontSize: 12 }}>{l.detalhe || '—'}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const AdminUsuarios = ({ ctx }) => {
   const [usuarios, setUsuarios] = useState(null);
   const [erro, setErro] = useState('');

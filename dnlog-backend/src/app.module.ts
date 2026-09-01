@@ -8,6 +8,7 @@ import { ApiModule } from './api/api.module';
 import { DatabaseModule } from './database/database.module';
 import { OeModule } from './oe/oe.module';
 import { AgendamentoModule } from './agendamento/agendamento.module';
+import { LogModule } from './log/log.module';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 
@@ -27,6 +28,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
     SapModule,
     OeModule,
     AgendamentoModule,
+    LogModule,
     AuthModule,
     ApiModule,
   ],
