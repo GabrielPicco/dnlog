@@ -1220,39 +1220,40 @@ const App = ({ usuario, onLogout }) => {
   // Calcula saldo real considerando OEs criadas (suporta paradas multi-cliente)
   // E também considera baixas faturadas (vendas concluídas)
   const pedidosComSaldo = useMemo(() => {
-    const baixas = state.baixasFaturadas || {};
+    // Quanto uma OE consome de um item de um pedido (cobre paradas multi-pedido:
+    // cada linha carrega seu próprio pedido_numero; cai no da parada se faltar).
+    const qtdNaOE = (oe, pedidoNumero, itemCodigo) => {
+      if (oe.paradas && Array.isArray(oe.paradas)) {
+        let total = 0;
+        oe.paradas.forEach(parada => {
+          (parada.itens || []).forEach(linha => {
+            const pn = linha.pedido_numero || parada.pedido_numero;
+            if (pn === pedidoNumero && linha.codigo === itemCodigo) total += (linha.qtd_bb || 0);
+          });
+        });
+        return total;
+      }
+      if (oe.pedido_numero === pedidoNumero) {
+        const linha = (oe.itens || []).find(i => i.codigo === itemCodigo);
+        return linha ? (linha.qtd_bb || 0) : 0;
+      }
+      return 0;
+    };
     return DADOS_PEDIDOS.map(p => {
       const itens = p.itens.map(it => {
-        // qtd_entregue base + baixas faturadas posteriores (deste app)
-        const chaveBaixa = `${p.numero}|${it.codigo}`;
-        const baixaExtra = baixas[chaveBaixa] || 0;
-        const qtdEntregueTotal = it.qtd_entregue + baixaExtra;
+        // BAIXA (faturado) derivada das OEs FATURADAS — fonte da verdade (no banco),
+        // em vez de um acumulador local que pode desalinhar em fatura/desfatura.
+        const baixaFaturada = state.ordens
+          .filter(o => o.status !== 'CANCELADA' && o.faturada)
+          .reduce((acc, oe) => acc + qtdNaOE(oe, p.numero, it.codigo), 0);
+        const qtdEntregueTotal = it.qtd_entregue + baixaFaturada;
 
-        // Conta consumo em OEs ativas NÃO FATURADAS (reserva temporária)
-        // OEs faturadas já tiveram suas qtds movidas para baixasFaturadas, então não contam aqui
-        // Ao EDITAR uma OE, ela é ignorada aqui — assim os pedidos dela voltam a
-        // ficar disponíveis (com saldo) para serem alterados durante a edição.
+        // Reserva em OEs ATIVAS não faturadas (temporária). A OE em edição é
+        // ignorada para o saldo dela voltar a ficar disponível durante a edição.
         const consumido = state.ordens
           .filter(o => o.status !== 'CANCELADA' && o.status !== 'RASCUNHO' && !o.faturada && o.id !== (editingOE && editingOE.id))
-          .reduce((acc, oe) => {
-            // Se OE tem paradas (formato novo)
-            if (oe.paradas && Array.isArray(oe.paradas)) {
-              let total = 0;
-              oe.paradas.forEach(parada => {
-                if (parada.pedido_numero === p.numero) {
-                  const linha = parada.itens.find(i => i.codigo === it.codigo);
-                  if (linha) total += linha.qtd_bb;
-                }
-              });
-              return acc + total;
-            }
-            // Formato antigo (uma parada só)
-            if (oe.pedido_numero === p.numero) {
-              const linha = (oe.itens || []).find(i => i.codigo === it.codigo);
-              return acc + (linha ? linha.qtd_bb : 0);
-            }
-            return acc;
-          }, 0);
+          .reduce((acc, oe) => acc + qtdNaOE(oe, p.numero, it.codigo), 0);
+
         const saldoOriginal = it.qtd_bb - qtdEntregueTotal;
         return {
           ...it,
@@ -1264,7 +1265,7 @@ const App = ({ usuario, onLogout }) => {
       const valorAberto = itens.reduce((a, i) => a + (i.saldo * i.valor_unitario), 0);
       return { ...p, itens, qtd_saldo_bb: qtdSaldoBB, saldo_aberto: valorAberto, tem_saldo: qtdSaldoBB > 0 };
     });
-  }, [state.ordens, state.baixasFaturadas, editingOE]);
+  }, [state.ordens, editingOE]);
 
   // Lotes com saldo real (descontando o que está reservado em OEs ativas)
   // IMPORTANTE: OEs triangulares não tocam no estoque do SAP — são ignoradas aqui
