@@ -5487,12 +5487,21 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
             setShowManualModal(true);
           }}
           onSkip={() => {
-            // Continuar sem lotes: marca item com a qtd total do saldo, sem lotes alocados.
-            // O flag sem_lotes_triangular sinaliza que isso foi intencional (não falta de informação)
+            // Continuar sem lotes: pergunta QUANTOS BB vão nesta carga (default =
+            // saldo), em vez de baixar o saldo cheio automaticamente. O flag
+            // sem_lotes_triangular sinaliza que foi intencional (não falta de info).
             setShowTriangularConfirm(false);
+            const resp = prompt(
+              `Quantos ${item.unidade || 'BB'} deste item vão nesta carga?\n` +
+              `(saldo disponível: ${item.saldo})`,
+              String(item.saldo)
+            );
+            if (resp === null) return; // cancelou
+            const qtd = Math.max(0, Math.min(item.saldo, Math.floor(Number(String(resp).replace(',', '.')) || 0)));
+            if (qtd <= 0) { onSetLotes([]); return; }
             onSetLotes([{
               lote_codigo: 'SEM_LOTE',
-              qtd_bb: item.saldo,
+              qtd_bb: qtd,
               sem_lotes_triangular: true,
               controle_paralelo: true,
               origem_fornecedor: 'A definir pelo fornecedor'
