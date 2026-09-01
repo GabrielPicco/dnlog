@@ -1241,12 +1241,15 @@ const App = ({ usuario, onLogout }) => {
     };
     return DADOS_PEDIDOS.map(p => {
       const itens = p.itens.map(it => {
-        // BAIXA (faturado) derivada das OEs FATURADAS — fonte da verdade (no banco),
-        // em vez de um acumulador local que pode desalinhar em fatura/desfatura.
+        // BAIXA (faturado) das OEs FATURADAS do DNLog (fonte no banco).
         const baixaFaturada = state.ordens
           .filter(o => o.status !== 'CANCELADA' && o.faturada)
           .reduce((acc, oe) => acc + qtdNaOE(oe, p.numero, it.codigo), 0);
-        const qtdEntregueTotal = it.qtd_entregue + baixaFaturada;
+        // CONFRONTA com o SAP: a entrega faturada no DNLog e a qtd já baixada no
+        // SAP (qtd_entregue) são a MESMA entrega — então usamos a MAIOR das duas,
+        // nunca a soma (senão conta em dobro quando o SAP já registrou). Assim o
+        // número acompanha quem estiver mais atualizado (SAP ou DNLog).
+        const qtdEntregueTotal = Math.max(it.qtd_entregue || 0, baixaFaturada);
 
         // Reserva em OEs ATIVAS não faturadas (temporária). A OE em edição é
         // ignorada para o saldo dela voltar a ficar disponível durante a edição.
