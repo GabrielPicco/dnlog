@@ -3969,6 +3969,13 @@ const AgendamentosFornecedor = ({ ctx }) => {
             <tbody>{lista.map(a => (
               <LinhaAgendamento key={a.id} ag={a} ctx={ctx} onEditar={() => setEditando(a)} />
             ))}</tbody>
+            <tfoot><tr style={{ borderTop: '2px solid var(--border-strong)', fontWeight: 700, background: 'var(--bg-elev)' }}>
+              <td colSpan={5} style={{ textAlign: 'right' }}>TOTAL · {lista.length} agendamento(s)</td>
+              <td className="num mono">{fmtNum(lista.reduce((s, a) => s + (a.produtos || []).reduce((x, p) => x + (Number(p.qtd) || 0), 0), 0))}</td>
+              <td></td>
+              <td className="num mono cell-primary" style={{ whiteSpace: 'nowrap' }}>{fmtMoney(lista.reduce((s, a) => s + (Number(a.valor_frete) || 0), 0))}</td>
+              <td></td>
+            </tr></tfoot>
           </table>
         )}
       </div>
@@ -4021,13 +4028,21 @@ const AgendamentosFornecedor = ({ ctx }) => {
 const LinhaAgendamento = ({ ag, ctx, onEditar }) => {
   const c = ag.campos || {};
   const vol = (ag.produtos || []).reduce((s, p) => s + (Number(p.qtd) || 0), 0);
-  const [frete, setFrete] = useState(ag.valor_frete == null ? '' : String(ag.valor_frete));
-  useEffect(() => { setFrete(ag.valor_frete == null ? '' : String(ag.valor_frete)); }, [ag.valor_frete]);
+  const [frete, setFrete] = useState('');
+  const [editandoFrete, setEditandoFrete] = useState(false);
+  // Formata em BR com 2 casas (ex.: 10.880,00) quando NÃO está editando.
+  const fmtFrete = (n) => n == null ? '' : Number(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Ao editar, mostra o número cru com vírgula decimal (ex.: 11054,08).
+  const freteEdit = () => ag.valor_frete == null ? '' : String(ag.valor_frete).replace('.', ',');
 
   const salvarFrete = () => {
-    const novo = frete === '' ? null : Number(String(frete).replace(',', '.'));
-    if ((novo == null ? null : novo) === (ag.valor_frete == null ? null : ag.valor_frete)) return; // sem mudança
-    ctx.salvarAgendamento({ ...ag, valor_frete: novo });
+    setEditandoFrete(false);
+    const t = String(frete).trim();
+    // Aceita "11.880,00", "11880", "11880,50" — tira separador de milhar e usa ponto decimal.
+    const novo = t === '' ? null : Number(t.replace(/\./g, '').replace(',', '.'));
+    const norm = (novo == null || isNaN(novo)) ? null : novo;
+    if (norm === (ag.valor_frete == null ? null : ag.valor_frete)) return; // sem mudança
+    ctx.salvarAgendamento({ ...ag, valor_frete: norm });
   };
   const toggleRecebida = () => ctx.salvarAgendamento({ ...ag, recebida: !ag.recebida });
 
@@ -4047,10 +4062,14 @@ const LinhaAgendamento = ({ ag, ctx, onEditar }) => {
       <td className="num">
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
           <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>R$</span>
-          <input value={frete} onChange={e => setFrete(e.target.value)} onBlur={salvarFrete}
+          <input
+            value={editandoFrete ? frete : fmtFrete(ag.valor_frete)}
+            onFocus={() => { setEditandoFrete(true); setFrete(freteEdit()); }}
+            onChange={e => setFrete(e.target.value)}
+            onBlur={salvarFrete}
             onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
             inputMode="decimal" placeholder="0,00"
-            style={{ width: 90, padding: '4px 6px', textAlign: 'right', background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 4, color: 'var(--text)', fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }} />
+            style={{ width: 100, padding: '4px 6px', textAlign: 'right', background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 4, color: 'var(--text)', fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }} />
         </div>
       </td>
       <td>
