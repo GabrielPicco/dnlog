@@ -1241,8 +1241,8 @@ const App = ({ usuario, onLogout }) => {
   // Quando troca perfil, redireciona se necessário
   useEffect(() => {
     if (perfilAtivo === 'CONFERENTE') {
-      // Conferente só acessa: conferencia, conferencia-detalhe, detalhe-oe (read-only/print)
-      if (!['conferencia', 'conferencia-detalhe', 'detalhe-oe'].includes(screen)) {
+      // Conferente acessa: conferencia, conferencia-detalhe, detalhe-oe e o Resumo de estoque.
+      if (!['conferencia', 'conferencia-detalhe', 'detalhe-oe', 'resumo-estoque'].includes(screen)) {
         setScreen('conferencia');
       }
     } else if (perfilAtivo === 'VISUALIZACAO') {
@@ -1642,7 +1642,8 @@ const App = ({ usuario, onLogout }) => {
             {screen === 'conferencia' && <Conferencia ctx={ctx} />}
             {screen === 'conferencia-detalhe' && <ConferenciaDetalhe ctx={ctx} />}
             {screen === 'detalhe-oe' && <DetalheOE ctx={ctx} />}
-            {!['conferencia','conferencia-detalhe','detalhe-oe'].includes(screen) && <Conferencia ctx={ctx} />}
+            {screen === 'resumo-estoque' && <ResumoEstoque ctx={ctx} />}
+            {!['conferencia','conferencia-detalhe','detalhe-oe','resumo-estoque'].includes(screen) && <Conferencia ctx={ctx} />}
           </>
         ) : (
           <>
@@ -2190,7 +2191,7 @@ const Sidebar = ({ ctx }) => {
       perfis: ['OPERADOR','GESTOR'] },
     { id: 'pedidos', icon: 'ti-clipboard-list', label: 'Pedidos', perfis: ['OPERADOR','GESTOR'] },
     { id: 'estoque', icon: 'ti-building-warehouse', label: 'Estoque', perfis: ['OPERADOR','GESTOR'] },
-    { id: 'resumo-estoque', icon: 'ti-device-mobile', label: 'Resumo de estoque', perfis: ['OPERADOR','GESTOR','VISUALIZACAO'] },
+    { id: 'resumo-estoque', icon: 'ti-device-mobile', label: 'Resumo de estoque', perfis: ['OPERADOR','GESTOR','VISUALIZACAO','CONFERENTE'] },
     { id: 'usuarios', icon: 'ti-users', label: 'Usuários', perfis: ['GESTOR'] },
     { id: 'logs', icon: 'ti-history', label: 'Logs', perfis: ['GESTOR'] },
   ];
