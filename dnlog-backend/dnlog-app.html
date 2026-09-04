@@ -3373,6 +3373,11 @@ const EstoqueSAP = () => {
 const ResumoEstoque = ({ ctx }) => {
   const [cat, setCat] = useState('fisico');
   const [q, setQ] = useState('');
+  const [filtroGrupo, setFiltroGrupo] = useState('todos');
+  const [filtroCultivar, setFiltroCultivar] = useState('todos');
+  const [filtroItem, setFiltroItem] = useState('todos');
+  const limparFiltros = () => { setFiltroGrupo('todos'); setFiltroCultivar('todos'); setFiltroItem('todos'); setQ(''); };
+  const trocarCat = (id) => { setCat(id); limparFiltros(); };
 
   const lotes = DADOS_ESTOQUE_LOTES || [];
   const terc = DADOS_ESTOQUE_TERCEIROS || [];
@@ -3393,14 +3398,25 @@ const ResumoEstoque = ({ ctx }) => {
   ];
   const ativo = cats.find(c => c.id === cat) || cats[0];
 
+  // Opções de filtro (da categoria ativa) — grupo, cultivar (descrição), item (código).
+  const grupos = useMemo(() => Array.from(new Set(ativo.arr.map(l => l.grupo_nome).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [ativo.arr]);
+  const cultivares = useMemo(() => Array.from(new Set(ativo.arr.map(l => l.descricao).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [ativo.arr]);
+  const itens = useMemo(() => Array.from(new Map(ativo.arr.filter(l => l.item_codigo).map(l => [l.item_codigo, l.descricao || ''])).entries()).sort((a, b) => a[0].localeCompare(b[0])), [ativo.arr]);
+  const filtrando = filtroGrupo !== 'todos' || filtroCultivar !== 'todos' || filtroItem !== 'todos' || !!q;
+
   const lista = useMemo(() => {
     let l = ativo.arr;
+    if (filtroGrupo !== 'todos') l = l.filter(x => x.grupo_nome === filtroGrupo);
+    if (filtroCultivar !== 'todos') l = l.filter(x => x.descricao === filtroCultivar);
+    if (filtroItem !== 'todos') l = l.filter(x => x.item_codigo === filtroItem);
     if (q) {
       const ql = q.toLowerCase();
       l = l.filter(x => (x.descricao || '').toLowerCase().includes(ql) || (x.lote || '').toLowerCase().includes(ql) || (x.item_codigo || '').toLowerCase().includes(ql));
     }
     return [...l].sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
-  }, [ativo.arr, q]);
+  }, [ativo.arr, q, filtroGrupo, filtroCultivar, filtroItem]);
+  // Totais do que está filtrado (reflete os filtros).
+  const totFiltrado = { un: lista.reduce((a, l) => a + (l.saldo || 0), 0), kg: lista.reduce((a, l) => a + (l.saldo || 0) * (l.peso_bb || 0), 0) };
 
   const hoje = todayISO();
   const vencido = (v) => v && String(v).slice(0, 10) < hoje;
@@ -3423,7 +3439,7 @@ const ResumoEstoque = ({ ctx }) => {
           const t = totCat(c.arr);
           const sel = cat === c.id;
           return (
-            <button key={c.id} onClick={() => setCat(c.id)} style={{
+            <button key={c.id} onClick={() => trocarCat(c.id)} style={{
               textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
               background: sel ? 'var(--bg-hover)' : 'var(--bg-card)',
               border: '1.5px solid ' + (sel ? c.cor : 'var(--border)'),
@@ -3443,9 +3459,29 @@ const ResumoEstoque = ({ ctx }) => {
 
       <div className="panel">
         <div className="panel-header" style={{ flexWrap: 'wrap', gap: 8 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: ativo.cor }}><i className={'ti ' + ativo.icon}></i> {ativo.label} · {lista.length} lote(s)</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: ativo.cor }}><i className={'ti ' + ativo.icon}></i> {ativo.label} · {lista.length} lote(s) · {fmtNum(totFiltrado.un)} un · {fmtNum(Math.round(totFiltrado.kg))} kg</div>
           <div className="search-box" style={{ flex: 1, minWidth: 160 }}><i className="ti ti-search"></i>
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar cultivar, lote, item..." /></div>
+        </div>
+        {/* Filtros por item (empilham no celular) */}
+        <div style={{ padding: '8px 14px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select className="input" style={{ width: 'auto', flex: '1 1 130px', minWidth: 120, padding: '7px 10px', fontSize: 12 }} value={filtroGrupo} onChange={e => setFiltroGrupo(e.target.value)}>
+            <option value="todos">Todos os grupos</option>
+            {grupos.map(g => <option key={g} value={g}>{g}</option>)}
+          </select>
+          <select className="input" style={{ width: 'auto', flex: '1 1 150px', minWidth: 120, padding: '7px 10px', fontSize: 12 }} value={filtroCultivar} onChange={e => setFiltroCultivar(e.target.value)}>
+            <option value="todos">Todas as cultivares</option>
+            {cultivares.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select className="input" style={{ width: 'auto', flex: '1 1 150px', minWidth: 120, padding: '7px 10px', fontSize: 12 }} value={filtroItem} onChange={e => setFiltroItem(e.target.value)}>
+            <option value="todos">Todos os itens</option>
+            {itens.map(([cod, desc]) => <option key={cod} value={cod}>{cod}{desc ? ' — ' + desc : ''}</option>)}
+          </select>
+          {filtrando && (
+            <button onClick={limparFiltros} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', borderRadius: 6, padding: '7px 10px', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <i className="ti ti-x"></i> Limpar
+            </button>
+          )}
         </div>
         {semDados ? (
           <div className="empty"><i className="ti ti-building-warehouse"></i><div>Estoque não carregado</div><div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Precisa do backend no ar (consulta o SAP).</div></div>
