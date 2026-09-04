@@ -3432,14 +3432,42 @@ const ResumoEstoque = ({ ctx }) => {
   const [filtroGrupo, setFiltroGrupo] = useState('todos');
   const [filtroCultivar, setFiltroCultivar] = useState('todos');
   const [filtroItem, setFiltroItem] = useState('todos');
-  const limparFiltros = () => { setFiltroGrupo('todos'); setFiltroCultivar('todos'); setFiltroItem('todos'); setQ(''); };
+  const [filtroEmbalagem, setFiltroEmbalagem] = useState('todos');
+  const limparFiltros = () => { setFiltroGrupo('todos'); setFiltroCultivar('todos'); setFiltroItem('todos'); setFiltroEmbalagem('todos'); setQ(''); };
   const trocarCat = (id) => { setCat(id); limparFiltros(); };
+
+  // Embalagem por item (código → embalagem) — vem das linhas dos pedidos do SAP,
+  // que é onde a unidade/embalagem aparece de verdade. Os lotes do estoque não
+  // trazem embalagem, então cruzamos pelo código do item.
+  const embalagemPorItem = useMemo(() => {
+    const m = {};
+    (DADOS_PEDIDOS || []).forEach(p => (p.itens || []).forEach(it => {
+      if (it.codigo && it.embalagem && !m[it.codigo]) m[it.codigo] = it.embalagem;
+    }));
+    return m;
+  }, []);
+  const embDe = (l) => l.embalagem || embalagemPorItem[l.item_codigo] || '';
 
   const lotes = DADOS_ESTOQUE_LOTES || [];
   const terc = DADOS_ESTOQUE_TERCEIROS || [];
   const fisico = lotes.filter(l => l.armazem === 'DN_EST' && l.lote && (l.saldo || 0) > 0);
   const emTerc = terc.filter(l => l.tipo === 'em' && (l.saldo || 0) > 0);
   const deTerc = terc.filter(l => l.tipo === 'de' && (l.saldo || 0) > 0);
+
+  // Aplica os filtros ativos a QUALQUER array de lotes (usado tanto na lista
+  // quanto nos cards do topo — assim os cards refletem o filtro).
+  const aplicarFiltros = (arr) => {
+    let l = arr;
+    if (filtroGrupo !== 'todos') l = l.filter(x => x.grupo_nome === filtroGrupo);
+    if (filtroCultivar !== 'todos') l = l.filter(x => x.descricao === filtroCultivar);
+    if (filtroItem !== 'todos') l = l.filter(x => x.item_codigo === filtroItem);
+    if (filtroEmbalagem !== 'todos') l = l.filter(x => embDe(x) === filtroEmbalagem);
+    if (q) {
+      const ql = q.toLowerCase();
+      l = l.filter(x => (x.descricao || '').toLowerCase().includes(ql) || (x.lote || '').toLowerCase().includes(ql) || (x.item_codigo || '').toLowerCase().includes(ql));
+    }
+    return l;
+  };
 
   const totCat = (arr) => ({
     un: arr.reduce((a, l) => a + (l.saldo || 0), 0),
@@ -3454,23 +3482,16 @@ const ResumoEstoque = ({ ctx }) => {
   ];
   const ativo = cats.find(c => c.id === cat) || cats[0];
 
-  // Opções de filtro (da categoria ativa) — grupo, cultivar (descrição), item (código).
+  // Opções de filtro (da categoria ativa) — grupo, cultivar (descrição), item (código), embalagem.
   const grupos = useMemo(() => Array.from(new Set(ativo.arr.map(l => l.grupo_nome).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [ativo.arr]);
   const cultivares = useMemo(() => Array.from(new Set(ativo.arr.map(l => l.descricao).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [ativo.arr]);
   const itens = useMemo(() => Array.from(new Map(ativo.arr.filter(l => l.item_codigo).map(l => [l.item_codigo, l.descricao || ''])).entries()).sort((a, b) => a[0].localeCompare(b[0])), [ativo.arr]);
-  const filtrando = filtroGrupo !== 'todos' || filtroCultivar !== 'todos' || filtroItem !== 'todos' || !!q;
+  const embalagens = useMemo(() => Array.from(new Set(ativo.arr.map(l => embDe(l)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [ativo.arr, embalagemPorItem]);
+  const filtrando = filtroGrupo !== 'todos' || filtroCultivar !== 'todos' || filtroItem !== 'todos' || filtroEmbalagem !== 'todos' || !!q;
 
-  const lista = useMemo(() => {
-    let l = ativo.arr;
-    if (filtroGrupo !== 'todos') l = l.filter(x => x.grupo_nome === filtroGrupo);
-    if (filtroCultivar !== 'todos') l = l.filter(x => x.descricao === filtroCultivar);
-    if (filtroItem !== 'todos') l = l.filter(x => x.item_codigo === filtroItem);
-    if (q) {
-      const ql = q.toLowerCase();
-      l = l.filter(x => (x.descricao || '').toLowerCase().includes(ql) || (x.lote || '').toLowerCase().includes(ql) || (x.item_codigo || '').toLowerCase().includes(ql));
-    }
-    return [...l].sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
-  }, [ativo.arr, q, filtroGrupo, filtroCultivar, filtroItem]);
+  const lista = useMemo(() =>
+    [...aplicarFiltros(ativo.arr)].sort((a, b) => (b.saldo || 0) - (a.saldo || 0)),
+  [ativo.arr, q, filtroGrupo, filtroCultivar, filtroItem, filtroEmbalagem, embalagemPorItem]);
   // Totais do que está filtrado (reflete os filtros).
   const totFiltrado = { un: lista.reduce((a, l) => a + (l.saldo || 0), 0), kg: lista.reduce((a, l) => a + (l.saldo || 0) * (l.peso_bb || 0), 0) };
 
@@ -3485,7 +3506,8 @@ const ResumoEstoque = ({ ctx }) => {
       {/* Cards compactos, sempre 3 lado a lado */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 10 }}>
         {cats.map(c => {
-          const t = totCat(c.arr);
+          // Card reflete os filtros ativos (grupo/cultivar/item/embalagem/busca).
+          const t = totCat(aplicarFiltros(c.arr));
           const sel = cat === c.id;
           return (
             <button key={c.id} onClick={() => trocarCat(c.id)} style={{
@@ -3525,6 +3547,12 @@ const ResumoEstoque = ({ ctx }) => {
             <option value="todos">Todos os itens</option>
             {itens.map(([cod, desc]) => <option key={cod} value={cod}>{cod}{desc ? ' — ' + desc : ''}</option>)}
           </select>
+          {embalagens.length > 0 && (
+            <select className="input" style={{ width: 'auto', flex: '1 1 120px', minWidth: 110, padding: '7px 10px', fontSize: 12 }} value={filtroEmbalagem} onChange={e => setFiltroEmbalagem(e.target.value)}>
+              <option value="todos">Todas embalagens</option>
+              {embalagens.map(e => <option key={e} value={e}>{e}</option>)}
+            </select>
+          )}
           {filtrando && (
             <button onClick={limparFiltros} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', borderRadius: 6, padding: '7px 10px', display: 'flex', alignItems: 'center', gap: 4 }}>
               <i className="ti ti-x"></i> Limpar
@@ -3543,7 +3571,10 @@ const ResumoEstoque = ({ ctx }) => {
                   {/* LOTE em destaque (fonte grande) */}
                   <div className="mono" style={{ fontSize: 19, fontWeight: 800, color: 'var(--accent-light)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.15 }}>{l.lote || '—'}</div>
                   <div style={{ fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 3 }}>{l.descricao || l.item_codigo}</div>
-                  <div className="mono" style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 1 }}>{l.item_codigo}</div>
+                  <div className="mono" style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 1 }}>
+                    {l.item_codigo}
+                    {embDe(l) && <span style={{ fontSize: 11, color: 'var(--text-dim)' }}> · {embDe(l)}</span>}
+                  </div>
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
                   <div style={{ fontSize: 19, fontWeight: 800, fontFamily: 'JetBrains Mono, monospace', color: ativo.cor }}>{fmtNum(l.saldo || 0)} <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}>un</span></div>
