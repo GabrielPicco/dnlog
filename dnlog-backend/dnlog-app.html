@@ -3434,17 +3434,10 @@ const ResumoEstoque = ({ ctx }) => {
 
   return (
     <div>
-      <div className="page-header">
-        <div>
-          <div className="crumb"><i className="ti ti-home"></i> Operação · Estoque</div>
-          <h1 className="page-title">Resumo de estoque</h1>
-          <p className="page-subtitle">Físico · em terceiros · de terceiros — saldo por lote (SAP)</p>
-        </div>
-        <span className="chip chip-green"><span className="status-dot"></span> SAP</span>
-      </div>
+      <h1 className="page-title" style={{ fontSize: 20, marginBottom: 10 }}>Resumo de estoque</h1>
 
-      {/* Cards tocáveis, responsivos: empilham no celular */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 14 }}>
+      {/* Cards compactos, sempre 3 lado a lado */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 10 }}>
         {cats.map(c => {
           const t = totCat(c.arr);
           const sel = cat === c.id;
@@ -3453,15 +3446,14 @@ const ResumoEstoque = ({ ctx }) => {
               textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
               background: sel ? 'var(--bg-hover)' : 'var(--bg-card)',
               border: '1.5px solid ' + (sel ? c.cor : 'var(--border)'),
-              borderRadius: 10, padding: '12px 14px',
+              borderRadius: 8, padding: '7px 8px', minWidth: 0,
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <i className={'ti ' + c.icon} style={{ fontSize: 20, color: c.cor }}></i>
-                <div style={{ fontSize: 12, fontWeight: 700 }}>{c.label}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <i className={'ti ' + c.icon} style={{ fontSize: 14, color: c.cor, flexShrink: 0 }}></i>
+                <div style={{ fontSize: 10.5, fontWeight: 700, lineHeight: 1.1, minWidth: 0 }}>{c.label}</div>
               </div>
-              <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'JetBrains Mono, monospace' }}>{fmtNum(t.un)} <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 400 }}>un</span></div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{fmtNum(Math.round(t.kg))} kg · {t.n} lote(s)</div>
-              <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2 }}>{c.sub}</div>
+              <div style={{ fontSize: 17, fontWeight: 800, fontFamily: 'JetBrains Mono, monospace', marginTop: 2 }}>{fmtNum(t.un)} <span style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 400 }}>un</span></div>
+              <div style={{ fontSize: 9.5, color: 'var(--text-dim)' }}>{t.n} lote(s)</div>
             </button>
           );
         })}
