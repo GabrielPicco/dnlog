@@ -1232,9 +1232,11 @@ const App = ({ usuario, onLogout }) => {
     return () => { window.__DNLOG_setSyncStatus = null; };
   }, []);
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', tema);
+    // Perfil VISUALIZACAO é SEMPRE claro (não tem modo escuro).
+    const efetivo = perfilAtivo === 'VISUALIZACAO' ? 'light' : tema;
+    document.documentElement.setAttribute('data-theme', efetivo);
     localStorage.setItem('dnlog_tema', tema);
-  }, [tema]);
+  }, [tema, perfilAtivo]);
 
   // Quando troca perfil, redireciona se necessário
   useEffect(() => {
@@ -1243,6 +1245,9 @@ const App = ({ usuario, onLogout }) => {
       if (!['conferencia', 'conferencia-detalhe', 'detalhe-oe'].includes(screen)) {
         setScreen('conferencia');
       }
+    } else if (perfilAtivo === 'VISUALIZACAO') {
+      // Visualização só vê o Resumo de estoque.
+      if (screen !== 'resumo-estoque') setScreen('resumo-estoque');
     }
   }, [perfilAtivo]);
 
@@ -1623,14 +1628,16 @@ const App = ({ usuario, onLogout }) => {
     perfilAtivo,
     usuario, onLogout,
     tema, setTema,
-    podeEditar: perfilAtivo !== 'CONFERENTE'
+    podeEditar: !['CONFERENTE', 'VISUALIZACAO'].includes(perfilAtivo)
   };
 
   return (
     <div className="app" style={{ gridTemplateColumns: effectiveCollapsed ? '64px 1fr' : '240px 1fr' }}>
       <Sidebar ctx={ctx} />
       <main className="main">
-        {ctx.perfilAtivo === 'CONFERENTE' ? (
+        {ctx.perfilAtivo === 'VISUALIZACAO' ? (
+          <ResumoEstoque ctx={ctx} />
+        ) : ctx.perfilAtivo === 'CONFERENTE' ? (
           <>
             {screen === 'conferencia' && <Conferencia ctx={ctx} />}
             {screen === 'conferencia-detalhe' && <ConferenciaDetalhe ctx={ctx} />}
@@ -2183,7 +2190,7 @@ const Sidebar = ({ ctx }) => {
       perfis: ['OPERADOR','GESTOR'] },
     { id: 'pedidos', icon: 'ti-clipboard-list', label: 'Pedidos', perfis: ['OPERADOR','GESTOR'] },
     { id: 'estoque', icon: 'ti-building-warehouse', label: 'Estoque', perfis: ['OPERADOR','GESTOR'] },
-    { id: 'resumo-estoque', icon: 'ti-device-mobile', label: 'Resumo de estoque', perfis: ['OPERADOR','GESTOR'] },
+    { id: 'resumo-estoque', icon: 'ti-device-mobile', label: 'Resumo de estoque', perfis: ['OPERADOR','GESTOR','VISUALIZACAO'] },
     { id: 'usuarios', icon: 'ti-users', label: 'Usuários', perfis: ['GESTOR'] },
     { id: 'logs', icon: 'ti-history', label: 'Logs', perfis: ['GESTOR'] },
   ];
@@ -2194,6 +2201,7 @@ const Sidebar = ({ ctx }) => {
     'OPERADOR': { nome: 'Operador logístico', cor: 'var(--accent-light)', iniciais: 'OP', nomeUsuario: 'Operador' },
     'CONFERENTE': { nome: 'Conferente', cor: 'var(--orange)', iniciais: 'CF', nomeUsuario: 'Conferente' },
     'GESTOR': { nome: 'Gestor', cor: 'var(--purple)', iniciais: 'GE', nomeUsuario: 'Gestor' },
+    'VISUALIZACAO': { nome: 'Visualização', cor: 'var(--green)', iniciais: 'VZ', nomeUsuario: 'Visualização' },
   };
   const perfil = perfilInfo[ctx.perfilAtivo];
 
@@ -2278,7 +2286,8 @@ const Sidebar = ({ ctx }) => {
       </div>
 
       <div className="sidebar-footer" style={{ padding: collapsed ? '12px 6px' : '16px 20px' }}>
-        {/* ALTERNAR TEMA CLARO/ESCURO */}
+        {/* ALTERNAR TEMA CLARO/ESCURO — oculto no perfil Visualização (sempre claro) */}
+        {ctx.perfilAtivo !== 'VISUALIZACAO' && (
         <button
           onClick={() => ctx.setTema(ctx.tema === 'dark' ? 'light' : 'dark')}
           title={ctx.tema === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
@@ -2294,6 +2303,7 @@ const Sidebar = ({ ctx }) => {
           <i className={'ti ' + (ctx.tema === 'dark' ? 'ti-sun' : 'ti-moon')} style={{ fontSize: 16 }}></i>
           {!collapsed && <span>{ctx.tema === 'dark' ? 'Modo claro' : 'Modo escuro'}</span>}
         </button>
+        )}
 
         <div style={{ display: 'flex', alignItems: 'center', gap: collapsed ? 0 : 10, marginBottom: collapsed ? 0 : 12, flexDirection: collapsed ? 'column' : 'row' }}>
           <div className="avatar" style={{ background: `linear-gradient(135deg, ${perfil.cor}, ${perfil.cor})`, opacity: 0.95 }}>
@@ -3490,18 +3500,16 @@ const ResumoEstoque = ({ ctx }) => {
         ) : (
           <div>
             {lista.map((l, i) => (
-              <div key={(l.item_codigo || '') + '|' + (l.lote || '') + '|' + i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '11px 14px', borderBottom: '1px solid var(--border)' }}>
+              <div key={(l.item_codigo || '') + '|' + (l.lote || '') + '|' + i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '13px 14px', borderBottom: '1px solid var(--border)' }}>
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.descricao || l.item_codigo}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
-                    <span className="mono" style={{ color: 'var(--accent-light)' }}>{l.lote || '—'}</span>
-                    <span className="mono">{l.item_codigo}</span>
-                    {l.validade && <span className="mono" style={{ color: vencido(l.validade) ? 'var(--red)' : 'var(--text-dim)' }}>val {fmtDate(l.validade)}{vencido(l.validade) ? ' ⚠' : ''}</span>}
-                  </div>
+                  {/* LOTE em destaque (fonte grande) */}
+                  <div className="mono" style={{ fontSize: 19, fontWeight: 800, color: 'var(--accent-light)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.15 }}>{l.lote || '—'}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 3 }}>{l.descricao || l.item_codigo}</div>
+                  <div className="mono" style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 1 }}>{l.item_codigo}</div>
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div style={{ fontSize: 15, fontWeight: 800, fontFamily: 'JetBrains Mono, monospace', color: ativo.cor }}>{fmtNum(l.saldo || 0)} <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>un</span></div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{l.peso_bb ? fmtNum(Math.round((l.saldo || 0) * l.peso_bb)) + ' kg' : '—'}</div>
+                  <div style={{ fontSize: 19, fontWeight: 800, fontFamily: 'JetBrains Mono, monospace', color: ativo.cor }}>{fmtNum(l.saldo || 0)} <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}>un</span></div>
+                  <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>{l.peso_bb ? fmtNum(Math.round((l.saldo || 0) * l.peso_bb)) + ' kg' : '—'}</div>
                 </div>
               </div>
             ))}
@@ -8152,7 +8160,7 @@ const AdminUsuarios = ({ ctx }) => {
                   </td>
                   <td>
                     <select className="input" style={{ width: 'auto', padding: '4px 8px', fontSize: 12 }} value={u.perfil} disabled={ehVoce} onChange={e => acao(u, { perfil: e.target.value })}>
-                      {['OPERADOR', 'CONFERENTE', 'GESTOR'].map(p => <option key={p} value={p}>{p}</option>)}
+                      {['OPERADOR', 'CONFERENTE', 'GESTOR', 'VISUALIZACAO'].map(p => <option key={p} value={p}>{p}</option>)}
                     </select>
                   </td>
                   <td><span style={{ color: STATUS_COR[u.status] || 'var(--text)', fontWeight: 700, fontSize: 12 }}>{u.status}</span></td>
