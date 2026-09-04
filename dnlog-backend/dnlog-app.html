@@ -1650,6 +1650,7 @@ const App = ({ usuario, onLogout }) => {
             {screen === 'logs' && <LogsView ctx={ctx} />}
             {screen === 'detalhe-pedido' && <DetalhePedido ctx={ctx} />}
             {screen === 'estoque' && <Estoque ctx={ctx} />}
+            {screen === 'resumo-estoque' && <ResumoEstoque ctx={ctx} />}
             {screen === 'conferencia' && <Conferencia ctx={ctx} />}
             {screen === 'triangulares' && <Triangulares ctx={ctx} />}
             {screen === 'nova-oe' && <NovaOE ctx={ctx} />}
@@ -2182,6 +2183,7 @@ const Sidebar = ({ ctx }) => {
       perfis: ['OPERADOR','GESTOR'] },
     { id: 'pedidos', icon: 'ti-clipboard-list', label: 'Pedidos', perfis: ['OPERADOR','GESTOR'] },
     { id: 'estoque', icon: 'ti-building-warehouse', label: 'Estoque', perfis: ['OPERADOR','GESTOR'] },
+    { id: 'resumo-estoque', icon: 'ti-device-mobile', label: 'Resumo de estoque', perfis: ['OPERADOR','GESTOR'] },
     { id: 'usuarios', icon: 'ti-users', label: 'Usuários', perfis: ['GESTOR'] },
     { id: 'logs', icon: 'ti-history', label: 'Logs', perfis: ['GESTOR'] },
   ];
@@ -3361,6 +3363,115 @@ const EstoqueSAP = () => {
           ))}</tbody>
         </table>
       )}
+    </div>
+  );
+};
+
+// ============================================================
+// RESUMO DE ESTOQUE (visão mobile: físico / em terceiros / de terceiros)
+// ============================================================
+const ResumoEstoque = ({ ctx }) => {
+  const [cat, setCat] = useState('fisico');
+  const [q, setQ] = useState('');
+
+  const lotes = DADOS_ESTOQUE_LOTES || [];
+  const terc = DADOS_ESTOQUE_TERCEIROS || [];
+  const fisico = lotes.filter(l => l.armazem === 'DN_EST' && l.lote && (l.saldo || 0) > 0);
+  const emTerc = terc.filter(l => l.tipo === 'em' && (l.saldo || 0) > 0);
+  const deTerc = terc.filter(l => l.tipo === 'de' && (l.saldo || 0) > 0);
+
+  const totCat = (arr) => ({
+    un: arr.reduce((a, l) => a + (l.saldo || 0), 0),
+    kg: arr.reduce((a, l) => a + (l.saldo || 0) * (l.peso_bb || 0), 0),
+    n: arr.length,
+  });
+
+  const cats = [
+    { id: 'fisico', label: 'Estoque físico', sub: 'no nosso armazém', icon: 'ti-building-warehouse', cor: 'var(--green)', arr: fisico },
+    { id: 'em', label: 'Em terceiros', sub: 'nosso, guardado fora', icon: 'ti-package-export', cor: 'var(--blue)', arr: emTerc },
+    { id: 'de', label: 'De terceiros', sub: 'de clientes, conosco', icon: 'ti-package-import', cor: 'var(--orange)', arr: deTerc },
+  ];
+  const ativo = cats.find(c => c.id === cat) || cats[0];
+
+  const lista = useMemo(() => {
+    let l = ativo.arr;
+    if (q) {
+      const ql = q.toLowerCase();
+      l = l.filter(x => (x.descricao || '').toLowerCase().includes(ql) || (x.lote || '').toLowerCase().includes(ql) || (x.item_codigo || '').toLowerCase().includes(ql));
+    }
+    return [...l].sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
+  }, [ativo.arr, q]);
+
+  const hoje = todayISO();
+  const vencido = (v) => v && String(v).slice(0, 10) < hoje;
+  const semDados = lotes.length === 0 && terc.length === 0;
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="crumb"><i className="ti ti-home"></i> Operação · Estoque</div>
+          <h1 className="page-title">Resumo de estoque</h1>
+          <p className="page-subtitle">Físico · em terceiros · de terceiros — saldo por lote (SAP)</p>
+        </div>
+        <span className="chip chip-green"><span className="status-dot"></span> SAP</span>
+      </div>
+
+      {/* Cards tocáveis, responsivos: empilham no celular */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 14 }}>
+        {cats.map(c => {
+          const t = totCat(c.arr);
+          const sel = cat === c.id;
+          return (
+            <button key={c.id} onClick={() => setCat(c.id)} style={{
+              textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
+              background: sel ? 'var(--bg-hover)' : 'var(--bg-card)',
+              border: '1.5px solid ' + (sel ? c.cor : 'var(--border)'),
+              borderRadius: 10, padding: '12px 14px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <i className={'ti ' + c.icon} style={{ fontSize: 20, color: c.cor }}></i>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>{c.label}</div>
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'JetBrains Mono, monospace' }}>{fmtNum(t.un)} <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 400 }}>un</span></div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{fmtNum(Math.round(t.kg))} kg · {t.n} lote(s)</div>
+              <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2 }}>{c.sub}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="panel">
+        <div className="panel-header" style={{ flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: ativo.cor }}><i className={'ti ' + ativo.icon}></i> {ativo.label} · {lista.length} lote(s)</div>
+          <div className="search-box" style={{ flex: 1, minWidth: 160 }}><i className="ti ti-search"></i>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar cultivar, lote, item..." /></div>
+        </div>
+        {semDados ? (
+          <div className="empty"><i className="ti ti-building-warehouse"></i><div>Estoque não carregado</div><div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Precisa do backend no ar (consulta o SAP).</div></div>
+        ) : lista.length === 0 ? (
+          <div className="empty"><i className="ti ti-package-off"></i><div>{ativo.arr.length === 0 ? 'Sem estoque nesta categoria' : 'Nada com essa busca'}</div></div>
+        ) : (
+          <div>
+            {lista.map((l, i) => (
+              <div key={(l.item_codigo || '') + '|' + (l.lote || '') + '|' + i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '11px 14px', borderBottom: '1px solid var(--border)' }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.descricao || l.item_codigo}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+                    <span className="mono" style={{ color: 'var(--accent-light)' }}>{l.lote || '—'}</span>
+                    <span className="mono">{l.item_codigo}</span>
+                    {l.validade && <span className="mono" style={{ color: vencido(l.validade) ? 'var(--red)' : 'var(--text-dim)' }}>val {fmtDate(l.validade)}{vencido(l.validade) ? ' ⚠' : ''}</span>}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, fontFamily: 'JetBrains Mono, monospace', color: ativo.cor }}>{fmtNum(l.saldo || 0)} <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>un</span></div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{l.peso_bb ? fmtNum(Math.round((l.saldo || 0) * l.peso_bb)) + ' kg' : '—'}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
