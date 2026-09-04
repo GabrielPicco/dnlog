@@ -806,6 +806,10 @@ let DADOS_FORNECEDORES = [];
 // Resumo de entregas (gráfico do painel): pedidos entregues x não entregues (safra).
 let DADOS_ENTREGAS = { entregues: 0, nao_entregues: 0 };
 
+// Configuração global do DNLog (menu oculto, etc.). Carregada no bootstrap a
+// partir de /api/config; editável na tela Configurações (só GESTOR).
+let DADOS_CONFIG = {};
+
 // DADOS_PEDIDOS é mutável (let) para permitir substituição pelo backend
 // antes do React renderizar. Veja o bootstrap no final do app_part3.js.
 // Pedidos mock removidos — vêm do SAP no bootstrap (vazio se backend offline).
@@ -1092,6 +1096,22 @@ const DNLOG_API = {
     if (!r.ok) throw new Error('GET /log ' + r.status);
     return r.json();
   },
+
+  // ---- Configuração global (menu, etc.) ----
+  async getConfig() {
+    const r = await fetch(`${DNLOG_API_BASE}/config`, { headers: dnlogAuthHeaders() });
+    if (!r.ok) throw new Error('GET /config ' + r.status);
+    return r.json();
+  },
+  async salvarConfig(dados) {
+    const r = await fetch(`${DNLOG_API_BASE}/config`, {
+      method: 'POST',
+      headers: dnlogAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(dados || {}),
+    });
+    if (!r.ok) throw new Error('POST /config ' + r.status);
+    return r.json();
+  },
 };
 window.DNLOG_API = DNLOG_API;
 
@@ -1222,6 +1242,23 @@ const App = ({ usuario, onLogout }) => {
   const perfilAtivo = (usuario && usuario.perfil) || 'OPERADOR';
   // Tema claro/escuro (padrão: escuro). Aplica data-theme no <html> e persiste.
   const [tema, setTema] = useState(() => localStorage.getItem('dnlog_tema') || 'dark');
+
+  // Config global (menu oculto, etc.) — carregada no bootstrap em DADOS_CONFIG.
+  const [config, setConfig] = useState(() => (typeof DADOS_CONFIG !== 'undefined' && DADOS_CONFIG) || {});
+  const salvarConfig = async (novo) => {
+    const anterior = config;
+    setConfig(novo);
+    try { DADOS_CONFIG = novo; } catch (e) {}
+    try {
+      await DNLOG_API.salvarConfig(novo);
+      showToast('Configurações salvas', '');
+      logAcao('Configurações alteradas', JSON.stringify(novo).slice(0, 200));
+    } catch (e) {
+      setConfig(anterior);
+      try { DADOS_CONFIG = anterior; } catch (er) {}
+      showToast('Falha ao salvar configurações', (e && e.message) || '');
+    }
+  };
 
   useEffect(() => { saveState(state); }, [state]);
 
@@ -1628,6 +1665,7 @@ const App = ({ usuario, onLogout }) => {
     perfilAtivo,
     usuario, onLogout,
     tema, setTema,
+    config, salvarConfig,
     podeEditar: !['CONFERENTE', 'VISUALIZACAO'].includes(perfilAtivo)
   };
 
@@ -1655,6 +1693,7 @@ const App = ({ usuario, onLogout }) => {
             {screen === 'pedidos' && <Pedidos ctx={ctx} />}
             {screen === 'pedidos-compra' && <PedidosCompra ctx={ctx} />}
             {screen === 'usuarios' && <AdminUsuarios ctx={ctx} />}
+            {screen === 'configuracoes' && <Configuracoes ctx={ctx} />}
             {screen === 'logs' && <LogsView ctx={ctx} />}
             {screen === 'detalhe-pedido' && <DetalhePedido ctx={ctx} />}
             {screen === 'estoque' && <Estoque ctx={ctx} />}
@@ -2192,11 +2231,17 @@ const Sidebar = ({ ctx }) => {
     { id: 'pedidos', icon: 'ti-clipboard-list', label: 'Pedidos', perfis: ['OPERADOR','GESTOR'] },
     { id: 'estoque', icon: 'ti-building-warehouse', label: 'Estoque', perfis: ['OPERADOR','GESTOR'] },
     { id: 'resumo-estoque', icon: 'ti-device-mobile', label: 'Resumo de estoque', perfis: ['OPERADOR','GESTOR','VISUALIZACAO','CONFERENTE'] },
-    { id: 'usuarios', icon: 'ti-users', label: 'Usuários', perfis: ['GESTOR'] },
     { id: 'logs', icon: 'ti-history', label: 'Logs', perfis: ['GESTOR'] },
+    { id: 'configuracoes', icon: 'ti-settings', label: 'Configurações', perfis: ['GESTOR'] },
   ];
 
-  const items = todosItems.filter(it => it.perfis.includes(ctx.perfilAtivo));
+  // Itens ocultados pelo gestor na tela Configurações (nunca esconde a própria
+  // tela de Configurações, para o gestor sempre conseguir voltar).
+  const menuOculto = (ctx.config && ctx.config.menuOculto) || [];
+  const items = todosItems.filter(it =>
+    it.perfis.includes(ctx.perfilAtivo) &&
+    (it.id === 'configuracoes' || !menuOculto.includes(it.id))
+  );
 
   const perfilInfo = {
     'OPERADOR': { nome: 'Operador logístico', cor: 'var(--accent-light)', iniciais: 'OP', nomeUsuario: 'Operador' },
@@ -8175,6 +8220,106 @@ const AdminUsuarios = ({ ctx }) => {
   );
 };
 
+// Tela de Configurações (só GESTOR). Duas abas: preferências do menu lateral
+// (mostrar/ocultar itens como Painel e Relatórios) e a gestão de Usuários.
+const Configuracoes = ({ ctx }) => {
+  const [aba, setAba] = useState('menu');
+
+  // Itens do menu que o gestor pode ocultar. NÃO inclui a própria tela de
+  // Configurações (para nunca perder o acesso) nem itens de perfis restritos.
+  const ITENS_OCULTAVEIS = [
+    { id: 'dashboard', label: 'Painel', icon: 'ti-layout-dashboard' },
+    { id: 'relatorios', label: 'Relatórios', icon: 'ti-chart-bar' },
+    { id: 'embarques', label: 'Embarques', icon: 'ti-truck-delivery' },
+    { id: 'embarque-fornecedores', label: 'Embarque - Fornecedores', icon: 'ti-truck-loading' },
+    { id: 'conferencia', label: 'Conferência', icon: 'ti-device-tablet' },
+    { id: 'triangulares', label: 'Triangulares', icon: 'ti-arrows-shuffle' },
+    { id: 'pedidos', label: 'Pedidos', icon: 'ti-clipboard-list' },
+    { id: 'estoque', label: 'Estoque', icon: 'ti-building-warehouse' },
+    { id: 'resumo-estoque', label: 'Resumo de estoque', icon: 'ti-device-mobile' },
+    { id: 'logs', label: 'Logs', icon: 'ti-history' },
+  ];
+
+  const menuOculto = (ctx.config && ctx.config.menuOculto) || [];
+  const estaVisivel = (id) => !menuOculto.includes(id);
+
+  const toggle = (id) => {
+    const oculto = menuOculto.includes(id);
+    const novoOculto = oculto ? menuOculto.filter(x => x !== id) : [...menuOculto, id];
+    ctx.salvarConfig({ ...(ctx.config || {}), menuOculto: novoOculto });
+  };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="crumb"><i className="ti ti-home"></i> Gestão · Configurações</div>
+          <h1 className="page-title">Configurações</h1>
+          <p className="page-subtitle">Preferências do sistema e gestão de usuários</p>
+        </div>
+      </div>
+
+      {/* Abas */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid var(--border)' }}>
+        {[
+          { id: 'menu', label: 'Menu lateral', icon: 'ti-menu-2' },
+          { id: 'usuarios', label: 'Usuários', icon: 'ti-users' },
+        ].map(t => (
+          <button key={t.id} onClick={() => setAba(t.id)} style={{
+            padding: '8px 16px', background: 'none', border: 'none', cursor: 'pointer',
+            fontSize: 13, fontWeight: 600,
+            color: aba === t.id ? 'var(--accent-light)' : 'var(--text-muted)',
+            borderBottom: aba === t.id ? '2px solid var(--accent-light)' : '2px solid transparent',
+            marginBottom: -1,
+          }}><i className={'ti ' + t.icon} style={{ marginRight: 6 }}></i>{t.label}</button>
+        ))}
+      </div>
+
+      {aba === 'menu' ? (
+        <div className="panel" style={{ padding: 0 }}>
+          <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>Itens do menu lateral</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+              Desative um item para removê-lo da barra lateral de todos os usuários.
+            </div>
+          </div>
+          {ITENS_OCULTAVEIS.map(it => {
+            const visivel = estaVisivel(it.id);
+            return (
+              <div key={it.id} style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                padding: '12px 18px', borderBottom: '1px solid var(--border)',
+              }}>
+                <i className={'ti ' + it.icon} style={{ fontSize: 18, color: 'var(--text-muted)', width: 20, textAlign: 'center' }}></i>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{it.label}</div>
+                  <div style={{ fontSize: 11, color: visivel ? 'var(--green)' : 'var(--text-muted)' }}>
+                    {visivel ? 'Visível no menu' : 'Oculto'}
+                  </div>
+                </div>
+                {/* Interruptor */}
+                <button onClick={() => toggle(it.id)} title={visivel ? 'Ocultar' : 'Mostrar'} style={{
+                  position: 'relative', width: 42, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer',
+                  background: visivel ? 'var(--accent-light)' : 'var(--border)', transition: 'background .15s',
+                  flexShrink: 0,
+                }}>
+                  <span style={{
+                    position: 'absolute', top: 3, left: visivel ? 21 : 3, width: 18, height: 18,
+                    borderRadius: '50%', background: '#fff', transition: 'left .15s',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                  }} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <AdminUsuarios ctx={ctx} />
+      )}
+    </div>
+  );
+};
+
 // ============================================================
 // RENDER + BOOTSTRAP DO BACKEND
 // ============================================================
@@ -8285,6 +8430,17 @@ const AdminUsuarios = ({ ctx }) => {
       }
     } catch (e) {
       console.warn('[DNLog API] Não foi possível carregar agendamentos do banco:', e.message);
+    }
+
+    // Config global (menu oculto etc.) — não-fatal.
+    try {
+      const cfg = await fetchTimeout(`${API_BASE}/config`, TIMEOUT_MS);
+      if (cfg && typeof cfg === 'object' && !Array.isArray(cfg)) {
+        DADOS_CONFIG = cfg;
+        console.log('[DNLog API] Config global carregada:', cfg);
+      }
+    } catch (e) {
+      console.warn('[DNLog API] Config global não carregada:', e.message);
     }
 
     // Puxa os pedidos (NÃO-FATAL: se o SAP falhar, o app continua conectado ao
@@ -10229,19 +10385,25 @@ const Triangulares = ({ ctx }) => {
   const liberadasHoje = triangulares.filter(o =>
     ['EMBARCADA', 'EM_TRANSITO', 'ENTREGUE'].includes(o.status) && ehHoje(o.embarcada_em)
   );
+  // Já liberadas/faturadas (histórico completo, não só as de hoje).
+  const faturadas = triangulares.filter(o =>
+    ['EMBARCADA', 'EM_TRANSITO', 'ENTREGUE', 'FATURADA'].includes(o.status)
+  );
 
   const lista = useMemo(() => {
     if (filtroAba === 'NOTA_PENDENTE') return aguardandoNF;
     if (filtroAba === 'AGUARDA_LIB') return aguardandoLib;
     if (filtroAba === 'LIBERADAS_HOJE') return liberadasHoje;
+    if (filtroAba === 'FATURADAS') return faturadas;
     return [...aguardandoNF, ...aguardandoLib];
-  }, [filtroAba, aguardandoNF.length, aguardandoLib.length, liberadasHoje.length]);
+  }, [filtroAba, aguardandoNF.length, aguardandoLib.length, liberadasHoje.length, faturadas.length]);
 
   const cnt = {
     ativas: aguardandoNF.length + aguardandoLib.length,
     notaPendente: aguardandoNF.length,
     aguardaLib: aguardandoLib.length,
-    liberadasHoje: liberadasHoje.length
+    liberadasHoje: liberadasHoje.length,
+    faturadas: faturadas.length
   };
 
   // CNPJ do fornecedor selecionado (cruza com o CNPJ embutido na chave da NF-e)
@@ -10413,6 +10575,10 @@ const Triangulares = ({ ctx }) => {
               <i className="ti ti-check"></i> Liberadas hoje
               <Badge active={filtroAba === 'LIBERADAS_HOJE'} cor="var(--green)">{cnt.liberadasHoje}</Badge>
             </button>
+            <button onClick={() => setFiltroAba('FATURADAS')} style={abaStyle('FATURADAS', 'var(--purple)')}>
+              <i className="ti ti-file-check"></i> Faturadas
+              <Badge active={filtroAba === 'FATURADAS'} cor="var(--purple)">{cnt.faturadas}</Badge>
+            </button>
           </div>
         </div>
 
@@ -10423,6 +10589,7 @@ const Triangulares = ({ ctx }) => {
               {filtroAba === 'NOTA_PENDENTE' && 'Nenhuma triangular aguardando NF'}
               {filtroAba === 'AGUARDA_LIB' && 'Nenhuma triangular aguardando liberação'}
               {filtroAba === 'LIBERADAS_HOJE' && 'Nenhuma triangular liberada hoje'}
+              {filtroAba === 'FATURADAS' && 'Nenhuma triangular faturada'}
               {filtroAba === 'ATIVAS' && 'Nenhuma triangular ativa'}
             </div>
             <div style={{ fontSize: 12 }}>Quando uma OE triangular for criada, ela aparece aqui.</div>
