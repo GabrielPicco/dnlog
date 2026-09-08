@@ -936,6 +936,17 @@ const getParadas = (oe) => {
   }];
 };
 
+// CardCode (código do cliente no SAP) a partir do número do pedido — usado na
+// integração com o QCDN, que casa as reservas pelo CardCode do cliente.
+const cardCodeDoPedido = (pedidoNumero) => {
+  if (!pedidoNumero) return '';
+  const p = (DADOS_PEDIDOS || []).find(x => String(x.numero) === String(pedidoNumero));
+  return p ? (p._sap_cliente_codigo || '') : '';
+};
+
+// Normaliza número de lote para casar entre DNLog e QCDN (igual ao backend).
+const normLote = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+
 // Total de BBs de uma OE
 const totalBBs = (oe) => getAllItens(oe).reduce((a, i) => a + (i.qtd_bb || 0), 0);
 // Total em valor da OE
@@ -1110,6 +1121,26 @@ const DNLOG_API = {
       body: JSON.stringify(dados || {}),
     });
     if (!r.ok) throw new Error('POST /config ' + r.status);
+    return r.json();
+  },
+
+  // ---- Integração QCDN (reservas de qualidade) ----
+  async qcdnReservas(cardCode, nome, lotes) {
+    const p = new URLSearchParams();
+    if (cardCode) p.set('cardCode', cardCode);
+    if (nome) p.set('nome', nome);
+    if (lotes && lotes.length) p.set('lotes', lotes.join(','));
+    const r = await fetch(`${DNLOG_API_BASE}/qcdn/reservas?${p.toString()}`, { headers: dnlogAuthHeaders() });
+    if (!r.ok) throw new Error('GET /qcdn/reservas ' + r.status);
+    return r.json();
+  },
+  async qcdnBaixa(payload) {
+    const r = await fetch(`${DNLOG_API_BASE}/qcdn/baixa`, {
+      method: 'POST',
+      headers: dnlogAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload || {}),
+    });
+    if (!r.ok) throw new Error('POST /qcdn/baixa ' + r.status);
     return r.json();
   },
 };
@@ -6398,6 +6429,186 @@ const LotesManual = ({ item, lotesAlocadosAtual, onClose, onConfirm }) => {
 // ============================================================
 // DETALHE DA OE (com impressão)
 // ============================================================
+// ============================================================
+// RESERVAS DE QUALIDADE (QCDN) — mostra os lotes reservados de cada cliente
+// casados com os lotes que estão embarcando, e permite dar baixa (parcial) na
+// reserva do QCDN com um toque. Casamento por CardCode do cliente + nº do lote.
+// ============================================================
+const ReservasQcdn = ({ ctx, oe }) => {
+  // Junta os lotes embarcados (com lote real, do estoque DN) agrupados por cliente.
+  const grupos = useMemo(() => {
+    const map = new Map(); // chave: cardCode||nome -> { cardCode, nome, pedidos:Set, lotes: Map(loteNorm -> {lote, qtd, cultivar, item, pedido}) }
+    getParadas(oe).forEach(parada => {
+      const pedido = parada.pedido_numero;
+      const nome = parada.cliente || oe.cliente || '';
+      const cardCode = cardCodeDoPedido(pedido);
+      const chave = cardCode || ('nome:' + nome);
+      (parada.itens || []).forEach(it => {
+        const pedItem = it.pedido_numero || pedido;
+        const cc = cardCodeDoPedido(pedItem) || cardCode;
+        const ch = cc || ('nome:' + nome);
+        (it.lotes_alocados || []).forEach(la => {
+          if (!la || !la.lote_codigo || la.sem_lotes_triangular) return;
+          const qtd = Number(la.qtd_bb) || 0;
+          if (qtd <= 0) return;
+          if (!map.has(ch)) map.set(ch, { cardCode: cc, nome, pedidos: new Set(), lotes: new Map() });
+          const g = map.get(ch);
+          if (pedItem) g.pedidos.add(pedItem);
+          const k = normLote(la.lote_codigo);
+          const ex = g.lotes.get(k);
+          if (ex) ex.qtd += qtd;
+          else g.lotes.set(k, { lote: la.lote_codigo, qtd, cultivar: it.cultivar_nome || it.descricao || '', item: it.codigo, pedido: pedItem });
+        });
+      });
+    });
+    return Array.from(map.values());
+  }, [oe]);
+
+  const [dados, setDados] = useState(null); // { [chaveGrupo]: {reservas, erro, configurado} }
+  const [loading, setLoading] = useState(false);
+  const [baixando, setBaixando] = useState({}); // loteNorm -> true
+  const baixas = oe.qcdn_baixas || {}; // loteNorm -> { saidaId, bags, quando, reservaId }
+
+  const carregar = async () => {
+    if (grupos.length === 0) return;
+    setLoading(true);
+    const out = {};
+    for (const g of grupos) {
+      const chave = g.cardCode || ('nome:' + g.nome);
+      try {
+        const r = await DNLOG_API.qcdnReservas(g.cardCode, g.nome, Array.from(g.lotes.values()).map(x => x.lote));
+        out[chave] = { reservas: (r && r.reservas) || [], erro: r && r.ok === false ? (r.erro || 'falha') : null, configurado: r ? r.configurado !== false : true };
+      } catch (e) {
+        out[chave] = { reservas: [], erro: (e && e.message) || 'falha', configurado: true };
+      }
+    }
+    setDados(out);
+    setLoading(false);
+  };
+
+  useEffect(() => { carregar(); }, [oe.id]);
+
+  const darBaixa = async (g, linha, reserva) => {
+    const k = normLote(linha.lote);
+    const bags = Math.min(linha.qtd, reserva.saldo);
+    if (bags <= 0) { ctx.showToast('Reserva sem saldo', linha.lote); return; }
+    setBaixando(b => ({ ...b, [k]: true }));
+    try {
+      const r = await DNLOG_API.qcdnBaixa({
+        reservaId: reserva.reservaId,
+        quantidadeBags: bags,
+        pedidoSap: linha.pedido || oe.pedido_numero || '',
+        oeNumero: oe.numero,
+        loteNumero: linha.lote,
+      });
+      if (r && r.ok) {
+        const novasBaixas = { ...(oe.qcdn_baixas || {}), [k]: { saidaId: r.saidaId, bags: r.quantidadeBags != null ? r.quantidadeBags : bags, reservaId: reserva.reservaId, quando: new Date().toISOString() } };
+        ctx.atualizarOE(oe.id, { qcdn_baixas: novasBaixas });
+        ctx.showToast(r.jaExistia ? 'Baixa já registrada' : 'Baixa registrada no QCDN', `${linha.lote} · ${r.quantidadeBags != null ? r.quantidadeBags : bags} bag(s)`);
+        ctx.logAcao && ctx.logAcao('Baixa QCDN', `${oe.numero} · lote ${linha.lote} · ${r.quantidadeBags != null ? r.quantidadeBags : bags} bag(s)`, { entidade_tipo: 'OE', entidade_id: oe.numero });
+        await carregar();
+      } else {
+        ctx.showToast('Falha ao dar baixa', (r && r.erro) || 'erro');
+      }
+    } catch (e) {
+      ctx.showToast('Falha ao dar baixa', (e && e.message) || 'erro');
+    } finally {
+      setBaixando(b => ({ ...b, [k]: false }));
+    }
+  };
+
+  if (grupos.length === 0) return null;
+
+  const naoConfig = dados && Object.values(dados).some(d => d && d.configurado === false);
+
+  return (
+    <div className="no-print" style={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 8, marginBottom: 20, overflow: 'hidden' }}>
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <i className="ti ti-clipboard-check" style={{ color: 'var(--accent-light)', fontSize: 18 }}></i>
+        <div style={{ fontWeight: 700, fontSize: 13 }}>Reservas de qualidade (QCDN)</div>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>casadas por cliente + nº do lote</span>
+        <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: '4px 10px', fontSize: 12 }} onClick={carregar} disabled={loading}>
+          <i className={'ti ' + (loading ? 'ti-loader-2' : 'ti-refresh')}></i> {loading ? 'Buscando…' : 'Atualizar'}
+        </button>
+      </div>
+
+      {naoConfig ? (
+        <div style={{ padding: 16, fontSize: 12, color: 'var(--text-muted)' }}>
+          <i className="ti ti-plug-connected-x" style={{ color: 'var(--orange)' }}></i> Integração com o QCDN ainda não configurada (defina QCDN_BASE_URL e QCDN_API_TOKEN no servidor).
+        </div>
+      ) : loading && !dados ? (
+        <div style={{ padding: 16, fontSize: 13, color: 'var(--text-muted)' }}><i className="ti ti-loader-2"></i> Consultando reservas…</div>
+      ) : (
+        <div style={{ padding: '4px 0' }}>
+          {grupos.map((g, gi) => {
+            const chave = g.cardCode || ('nome:' + g.nome);
+            const d = (dados && dados[chave]) || { reservas: [], erro: null };
+            const reservasPorLote = new Map();
+            (d.reservas || []).forEach(r => { if (r.loteNumero) reservasPorLote.set(normLote(r.loteNumero), r); });
+            return (
+              <div key={gi} style={{ padding: '8px 16px 14px' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <i className="ti ti-user" style={{ color: 'var(--text-muted)' }}></i> {g.nome || '(sem nome)'}
+                  {g.cardCode && <span className="mono" style={{ fontSize: 10, color: 'var(--text-dim)' }}>{g.cardCode}</span>}
+                  {g.pedidos.size > 0 && <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>pedido {Array.from(g.pedidos).join(', ')}</span>}
+                </div>
+                {d.erro && <div style={{ fontSize: 11, color: 'var(--red)', marginBottom: 6 }}><i className="ti ti-alert-triangle"></i> {d.erro}</div>}
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', fontSize: 12, minWidth: 620 }}>
+                    <thead><tr>
+                      <th style={{ textAlign: 'left' }}>Lote</th>
+                      <th style={{ textAlign: 'left' }}>Cultivar</th>
+                      <th className="num">Embarcado</th>
+                      <th className="num">Reservado</th>
+                      <th className="num">Saldo</th>
+                      <th style={{ width: 150 }}>Baixa QCDN</th>
+                    </tr></thead>
+                    <tbody>
+                      {Array.from(g.lotes.values()).map((linha, li) => {
+                        const k = normLote(linha.lote);
+                        const reserva = reservasPorLote.get(k);
+                        const jaBaixado = baixas[k];
+                        return (
+                          <tr key={li}>
+                            <td className="mono cell-primary" style={{ color: 'var(--accent-light)', fontWeight: 700 }}>{linha.lote}</td>
+                            <td style={{ color: 'var(--text-muted)' }}>{linha.cultivar || linha.item}</td>
+                            <td className="num mono" style={{ fontWeight: 700 }}>{fmtNum(linha.qtd)}</td>
+                            <td className="num mono">{reserva ? fmtNum(reserva.reservado) : '—'}</td>
+                            <td className="num mono" style={{ color: reserva && reserva.saldo > 0 ? 'var(--green)' : 'var(--text-dim)' }}>{reserva ? fmtNum(reserva.saldo) : '—'}</td>
+                            <td>
+                              {jaBaixado ? (
+                                <span className="chip" style={{ background: 'var(--green-bg)', color: 'var(--green)', fontSize: 10, fontWeight: 700 }}>
+                                  <i className="ti ti-check"></i> Baixado {fmtNum(jaBaixado.bags)}
+                                </span>
+                              ) : !reserva ? (
+                                <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>sem reserva</span>
+                              ) : reserva.saldo <= 0 ? (
+                                <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>saldo 0</span>
+                              ) : ctx.podeEditar ? (
+                                <button className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 11 }} disabled={!!baixando[k]}
+                                  onClick={() => darBaixa(g, linha, reserva)}>
+                                  <i className={'ti ' + (baixando[k] ? 'ti-loader-2' : 'ti-arrow-down-circle')}></i> Dar baixa
+                                </button>
+                              ) : <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>—</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
+          <div style={{ padding: '0 16px 12px', fontSize: 10.5, color: 'var(--text-dim)' }}>
+            A baixa registra uma saída parcial na reserva do QCDN (só as bags embarcadas). Idempotente: não baixa em dobro.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const DetalheOE = ({ ctx }) => {
   const oe = ctx.viewingOE;
   if (!oe) return <div className="empty"><i className="ti ti-alert-circle"></i><div>OE não encontrada</div></div>;
@@ -6560,6 +6771,11 @@ const DetalheOE = ({ ctx }) => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* RESERVAS DE QUALIDADE (QCDN) — só operação normal (triangular não tem reserva DN) */}
+      {oeAtual.modalidade !== 'TRIANGULAR' && oeAtual.status !== 'CANCELADA' && (
+        <ReservasQcdn ctx={ctx} oe={oeAtual} />
       )}
 
       {/* DOCUMENTO IMPRIMÍVEL */}

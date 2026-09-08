@@ -10,6 +10,7 @@ import { OeModule } from './oe/oe.module';
 import { AgendamentoModule } from './agendamento/agendamento.module';
 import { LogModule } from './log/log.module';
 import { ConfigAppModule } from './config/config.module';
+import { QcdnModule } from './qcdn/qcdn.module';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 
@@ -31,6 +32,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
     AgendamentoModule,
     LogModule,
     ConfigAppModule,
+    QcdnModule,
     AuthModule,
     ApiModule,
   ],
