@@ -3797,6 +3797,7 @@ const ResumoEstoque = ({ ctx }) => {
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
                   <div style={{ fontSize: 19, fontWeight: 800, fontFamily: 'JetBrains Mono, monospace', color: ativo.cor }}>{fmtNum(l.saldo || 0)} <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}>un</span></div>
                   <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>{l.peso_bb ? fmtNum(Math.round((l.saldo || 0) * l.peso_bb)) + ' kg' : '—'}</div>
+                  {l.peso_bb ? <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>{l.peso_bb.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} kg/bag</div> : null}
                 </div>
               </div>
             ))}
