@@ -1368,6 +1368,9 @@ const loadState = () => {
 let _syncTimer = null;
 let _retryTimer = null;
 let _pendingOrdens = null; // último snapshot ainda não CONFIRMADO no banco
+// true enquanto aplicamos dados VINDOS do banco (polling). Evita reenviar de
+// volta ao banco o que acabou de chegar (não é uma mudança local do usuário).
+let _aplicandoRemoto = false;
 // Avisa a UI sobre o estado do sync (o App registra o setter em window).
 const _notifySync = (st) => { try { if (window.__DNLOG_setSyncStatus) window.__DNLOG_setSyncStatus(st); } catch (e) {} };
 // Envia o snapshot pendente e SÓ limpa se o banco confirmar (r.ok). Se falhar,
@@ -1401,7 +1404,10 @@ const saveState = (state) => {
 
   // Espelha as OEs no banco. Debounce curto só para agrupar a rajada de setState
   // de uma mesma ação; a persistência em si é confirmada (retry se falhar).
-  if (window.__DNLOG_BACKEND_ON && state && Array.isArray(state.ordens)) {
+  if (_aplicandoRemoto) {
+    // Esta mudança veio do próprio banco (polling): consome a flag e NÃO reenvia.
+    _aplicandoRemoto = false;
+  } else if (window.__DNLOG_BACKEND_ON && state && Array.isArray(state.ordens)) {
     _pendingOrdens = state.ordens;
     if (_syncTimer) clearTimeout(_syncTimer);
     _syncTimer = setTimeout(_fazerSyncOEs, 400);
@@ -1479,6 +1485,56 @@ const App = ({ usuario, onLogout }) => {
   };
 
   useEffect(() => { saveState(state); }, [state]);
+
+  // ATUALIZAÇÃO AUTOMÁTICA — puxa ordens e agendamentos do banco a cada ~15s
+  // (e ao voltar o foco/aba), para que uma OE criada por OUTRA pessoa apareça
+  // SEM recarregar a página. Não puxa enquanto houver mudança local ainda não
+  // confirmada (evita sobrescrever o que o usuário acabou de fazer).
+  useEffect(() => {
+    if (!window.__DNLOG_BACKEND_ON) return;
+    let vivo = true, buscando = false;
+    const puxar = async () => {
+      if (!vivo || buscando) return;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (!window.__DNLOG_BACKEND_ON) return;
+      // Há mudança local pendente? Não sobrescreve — espera o sync confirmar.
+      if (_pendingOrdens) return;
+      try { if (localStorage.getItem('dnlog_pending_sync')) return; } catch (e) {}
+      buscando = true;
+      try {
+        const [ordens, ags] = await Promise.all([
+          DNLOG_API.listarOEs().catch(() => null),
+          DNLOG_API.listarAgendamentos().catch(() => null),
+        ]);
+        if (!vivo) return;
+        if (_pendingOrdens) return; // surgiu mudança local nesse meio
+        try { if (localStorage.getItem('dnlog_pending_sync')) return; } catch (e) {}
+        setState(prev => {
+          let novo = prev, mudou = false;
+          if (Array.isArray(ordens) && JSON.stringify(ordens) !== JSON.stringify(prev.ordens || [])) {
+            novo = { ...novo, ordens }; mudou = true;
+          }
+          if (Array.isArray(ags) && JSON.stringify(ags) !== JSON.stringify(prev.agendamentos || [])) {
+            novo = { ...novo, agendamentos: ags }; mudou = true;
+          }
+          // Marca que esta atualização veio do banco: o próximo saveState consome
+          // a flag e NÃO reenvia ao banco (não é mudança local do usuário).
+          if (mudou) _aplicandoRemoto = true;
+          return mudou ? novo : prev;
+        });
+      } catch (e) { /* silencioso: tenta de novo no próximo ciclo */ }
+      finally { buscando = false; }
+    };
+    const id = setInterval(puxar, 15000);
+    const onVis = () => { if (document.visibilityState === 'visible') puxar(); };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('focus', puxar);
+    return () => {
+      vivo = false; clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('focus', puxar);
+    };
+  }, []);
 
   // Estado da sincronização com o banco (para avisar quando NÃO salvou).
   const [syncStatus, setSyncStatus] = useState(null);
