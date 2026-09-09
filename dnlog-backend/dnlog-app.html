@@ -7909,7 +7909,8 @@ const ConferenciaDetalhe = ({ ctx }) => {
   const itensQueExigemConferencia = allItensComKey.filter(i => !i.isControleParalelo).length;
   const conferidosCount = allItensComKey.filter(i => lotesConferidos[i.key]).length;
   const progressoPct = totalItens > 0 ? (conferidosCount / totalItens) * 100 : 0;
-  const podeFinalizar = conferidosCount === totalItens && foto && amostra;
+  // Foto NÃO é mais obrigatória para finalizar (continua opcional/recomendada).
+  const podeFinalizar = conferidosCount === totalItens && amostra;
 
   const finalizar = () => {
     ctx.atualizarOE(oe.id, {
@@ -8204,13 +8205,13 @@ const ConferenciaDetalhe = ({ ctx }) => {
               <div className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <i className="ti ti-camera" style={{ color: 'var(--accent-light)' }}></i> Fotos da carga
               </div>
-              <span className={`chip ${fotos.length > 0 ? 'chip-green' : 'chip-orange'}`} style={{ fontSize: 10 }}>
-                {fotos.length > 0 ? `${fotos.length} ${fotos.length === 1 ? 'foto' : 'fotos'}` : 'Pendente'}
+              <span className={`chip ${fotos.length > 0 ? 'chip-green' : 'chip-neutral'}`} style={{ fontSize: 10 }}>
+                {fotos.length > 0 ? `${fotos.length} ${fotos.length === 1 ? 'foto' : 'fotos'}` : 'Opcional'}
               </span>
             </div>
             <div style={{ padding: 14 }}>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
-                Tire foto da carga total no veículo antes de liberar. Pode adicionar quantas precisar.
+                Foto da carga é opcional (recomendada). Pode adicionar quantas precisar.
               </div>
               {/* Input oculto que abre câmera (mobile) ou seleção de arquivo (desktop) */}
               <input
@@ -8328,7 +8329,6 @@ const ConferenciaDetalhe = ({ ctx }) => {
                 <i className="ti ti-check"></i>
                 {podeFinalizar ? ' Finalizar e liberar' : ` Faltam: ${[
                   conferidosCount < totalItens && `${totalItens - conferidosCount} lote(s)`,
-                  !foto && 'foto',
                   !amostra && 'amostra'
                 ].filter(Boolean).join(', ')}`}
               </button>
