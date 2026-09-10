@@ -10023,7 +10023,7 @@ const Embarques = ({ ctx }) => {
   const [filtroFaturado, setFiltroFaturado] = useState('TODOS'); // TODOS, FATURADAS, NAO_FATURADAS
   const [filtroPeriodo, setFiltroPeriodo] = useState('30d');
   const [busca, setBusca] = useState('');
-  const [ordenacao, setOrdenacao] = useState('data_desc');
+  const [ordenacao, setOrdenacao] = useState('criacao_desc');
   const [oeExpandida, setOeExpandida] = useState(null);
 
   const ordens = ctx.state.ordens;
@@ -10065,7 +10065,12 @@ const Embarques = ({ ctx }) => {
 
     // Ordenação
     const copia = [...resultado];
-    if (ordenacao === 'data_desc') copia.sort((a, b) => (b.data_prevista || '').localeCompare(a.data_prevista || ''));
+    if (ordenacao === 'criacao_desc') copia.sort((a, b) => {
+      // Última criada no topo: por criado_em desc; desempate pelo número da OE.
+      const d = (b.criado_em || '').localeCompare(a.criado_em || '');
+      return d !== 0 ? d : (b.numero || '').localeCompare(a.numero || '');
+    });
+    else if (ordenacao === 'data_desc') copia.sort((a, b) => (b.data_prevista || '').localeCompare(a.data_prevista || ''));
     else if (ordenacao === 'data_asc') copia.sort((a, b) => (a.data_prevista || '').localeCompare(b.data_prevista || ''));
     else if (ordenacao === 'status') {
       const ordemStatus = ['PROGRAMADA', 'EM_CONFERENCIA', 'EMBARCADA', 'EM_TRANSITO', 'ENTREGUE', 'CANCELADA'];
@@ -10217,8 +10222,9 @@ const Embarques = ({ ctx }) => {
             <option value="NAO_FATURADAS">Não faturadas</option>
           </select>
           <select value={ordenacao} onChange={e => setOrdenacao(e.target.value)} className="input" style={{ width: 'auto', padding: '5px 8px', fontSize: 12 }}>
-            <option value="data_desc">Data ↓ (mais recente)</option>
-            <option value="data_asc">Data ↑ (mais antiga)</option>
+            <option value="criacao_desc">Criadas recentemente (última no topo)</option>
+            <option value="data_desc">Data prevista ↓ (mais recente)</option>
+            <option value="data_asc">Data prevista ↑ (mais antiga)</option>
             <option value="status">Por status</option>
             <option value="valor_desc">Maior valor</option>
           </select>
