@@ -510,6 +510,40 @@ export class SapClientService implements OnModuleDestroy {
   }
 
   /**
+   * [LEITURA] Notas Fiscais de Saída (Invoices/OINV) recentes — só campos-chave.
+   * Usado para localizar a Invoice a partir do número da NF/DocNum.
+   */
+  async getInvoicesRecentes(top = 5): Promise<any[]> {
+    await this.ensureSession();
+    try {
+      const resp = await this.axios.get('/Invoices', {
+        params: {
+          $select: 'DocEntry,DocNum,CardCode,CardName,DocDate,DocumentStatus',
+          $orderby: 'DocEntry desc',
+          $top: top,
+        },
+      });
+      return resp.data?.value || [];
+    } catch (err) {
+      this.handleError(err, 'buscar invoices recentes');
+    }
+  }
+
+  /**
+   * [LEITURA] Invoice completa (com DocumentLines e BatchNumbers de cada linha).
+   * É aqui que vive a ligação lote↔nota fiscal.
+   */
+  async getInvoiceFull(docEntry: number | string): Promise<any> {
+    await this.ensureSession();
+    try {
+      const resp = await this.axios.get(`/Invoices(${docEntry})`);
+      return resp.data;
+    } catch (err) {
+      this.handleError(err, 'buscar invoice completa');
+    }
+  }
+
+  /**
    * Cria uma Delivery Note (Nota de Saida) baseada em uma OE faturada.
    *
    * Esse e o passo critico: quando a OE eh marcada como faturada no DNLog,

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Inject, Logger, Param, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Inject, Logger, Param, Query, HttpException, HttpStatus } from '@nestjs/common';
 import { SAP_SERVICE } from '../sap/sap.module';
 import { Public } from '../common/public.decorator';
 import { OeService } from '../oe/oe.service';
@@ -104,6 +104,58 @@ export class ApiController {
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
     return true;
+  }
+
+  // -------- DIAG NF (TEMPORÁRIO / SOMENTE LEITURA) --------
+  // Inspeciona uma Nota Fiscal de Saída (Invoice) para descobrir qual campo
+  // guarda o número da NFe e como vêm os lotes (DocumentLines.BatchNumbers).
+  // REMOVER depois de confirmar a ligação lote↔NFe.
+  @Public()
+  @Get('diag-nf')
+  async diagNf(@Query('docentry') docentry?: string, @Query('nf') nf?: string) {
+    const recentes = await this.sap.getInvoicesRecentes(6);
+    let entry: any = docentry ? Number(docentry) : null;
+    if (!entry && recentes.length) entry = recentes[0].DocEntry;
+    const full = entry != null ? await this.sap.getInvoiceFull(entry) : null;
+
+    // Linhas com os lotes efetivamente faturados.
+    const linhas = (full?.DocumentLines || []).map((l: any) => ({
+      LineNum: l.LineNum,
+      ItemCode: l.ItemCode,
+      Quantity: l.Quantity,
+      WarehouseCode: l.WarehouseCode,
+      BatchNumbers: (l.BatchNumbers || []).map((b: any) => ({
+        BatchNumber: b.BatchNumber,
+        Quantity: b.Quantity,
+      })),
+    }));
+
+    // Campos escalares do cabeçalho cujo VALOR bate com os números candidatos
+    // (o que você digita: 119 = NFe, 34 = DocNum/NFS, etc.).
+    const alvo = [nf, '119', '34', '1', '55', '9'].filter(Boolean).map(String);
+    const camposComValorAlvo: Record<string, any> = {};
+    const camposFiscais: Record<string, any> = {};
+    if (full) {
+      for (const k of Object.keys(full)) {
+        const v = (full as any)[k];
+        if ((typeof v === 'string' || typeof v === 'number') && alvo.includes(String(v))) {
+          camposComValorAlvo[k] = v;
+        }
+        if (/nf|nota|fisc|serie|serial|folio|federal|dfe|nfe|seq|numberatcard/i.test(k)) {
+          camposFiscais[k] = v;
+        }
+      }
+    }
+
+    return {
+      recentes,
+      docEntryUsado: entry,
+      DocNum: full?.DocNum,
+      CardCode: full?.CardCode,
+      camposComValorAlvo,
+      camposFiscais,
+      linhas,
+    };
   }
 
   // -------- PEDIDOS --------
