@@ -2102,7 +2102,7 @@ const FaturamentoNFs = ({ ctx }) => {
   const [clienteSel, setClienteSel] = useState('todos'); // cardCode | 'todos'
   const [q, setQ] = useState('');
   const [incluirCanceladas, setIncluirCanceladas] = useState(false);
-  const [tipoNota, setTipoNota] = useState('vendas'); // 'vendas' | 'todas' | 'outras'
+  const [cfopSel, setCfopSel] = useState('todos'); // código da utilização (CFOP) ou 'todos'
   const [abertos, setAbertos] = useState(() => new Set()); // docNums expandidos (várias NFs juntas)
   const [detalhes, setDetalhes] = useState({}); // docNum -> { loading, linhas, erro }
   const [exportando, setExportando] = useState(false);
@@ -2132,7 +2132,7 @@ const FaturamentoNFs = ({ ctx }) => {
     const pend = lista.filter(n => !(detalhes[n.docNum] && detalhes[n.docNum].linhas));
     let idx = 0;
     const worker = async () => { while (idx < pend.length) { await carregarDetalhe(pend[idx++]); } };
-    await Promise.all(Array.from({ length: 5 }, () => worker()));
+    await Promise.all(Array.from({ length: 3 }, () => worker()));
   };
 
   // Export DETALHADO de TODAS as notas do período (todos os clientes):
@@ -2173,7 +2173,7 @@ const FaturamentoNFs = ({ ctx }) => {
       }
     };
     try {
-      await Promise.all(Array.from({ length: 5 }, () => worker()));
+      await Promise.all(Array.from({ length: 3 }, () => worker()));
       const blob = new Blob(['﻿' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a'); a.href = url; a.download = `faturamento_detalhado_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
@@ -2196,10 +2196,16 @@ const FaturamentoNFs = ({ ctx }) => {
   useEffect(() => { carregar(periodo); }, [periodo]);
 
   // Base (aplica cancelamento). A agregação por cliente e a lista partem daqui.
+  // Códigos de utilização (CFOP) presentes, para o filtro.
+  const cfopsDisponiveis = useMemo(() => {
+    const s = new Set();
+    (dados || []).forEach(n => (n.cfops || []).forEach(c => c && s.add(String(c))));
+    return Array.from(s).sort();
+  }, [dados]);
   const base = useMemo(() => (dados || []).filter(n =>
     (incluirCanceladas || !n.cancelada) &&
-    (tipoNota === 'todas' || (tipoNota === 'vendas' ? n.ehVenda : !n.ehVenda))
-  ), [dados, incluirCanceladas, tipoNota]);
+    (cfopSel === 'todos' || (n.cfops || []).map(String).includes(cfopSel))
+  ), [dados, incluirCanceladas, cfopSel]);
 
   // Agregado por cliente (para o filtro e o quadro "por cliente").
   const porCliente = useMemo(() => {
@@ -2278,10 +2284,9 @@ const FaturamentoNFs = ({ ctx }) => {
           <option value="todos">Todos os clientes ({porCliente.length})</option>
           {porCliente.map(c => <option key={c.cardCode || c.cliente} value={c.cardCode || c.cliente}>{c.cliente} — {fmtMoney(c.valor)}</option>)}
         </select>
-        <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={tipoNota} onChange={e => setTipoNota(e.target.value)} title="Filtra pelo CFOP: vendas (51xx/61xx) x remessas/transferências">
-          <option value="vendas">Só vendas</option>
-          <option value="todas">Todas as notas</option>
-          <option value="outras">Só não-venda (remessa/transf.)</option>
+        <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={cfopSel} onChange={e => setCfopSel(e.target.value)} title="Filtra pelo código da utilização (CFOP) da nota">
+          <option value="todos">Utilização: todas</option>
+          {cfopsDisponiveis.map(c => <option key={c} value={c}>Utilização {c}</option>)}
         </select>
         <div className="search-box" style={{ flex: '1 1 200px', minWidth: 160 }}><i className="ti ti-search"></i>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar cliente, NFe, vendedor, CFOP..." /></div>

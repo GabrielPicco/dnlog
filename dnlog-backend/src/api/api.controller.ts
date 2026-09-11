@@ -171,6 +171,17 @@ export class ApiController {
   @Get('nf-lotes')
   async nfLotes(@Query('nfe') nfe?: string, @Query('serie') serie?: string) {
     if (!nfe) throw new HttpException('Informe o número da NFe (?nfe=)', HttpStatus.BAD_REQUEST);
+    // NF emitida é IMUTÁVEL → cache longo (1h). Evita rebater no SAP a cada
+    // expandir/exportar; a mesma NF é consultada 1x e reaproveitada por todos.
+    return this.cache.wrap(
+      `nf-lotes:${nfe}:${serie || ''}`,
+      () => this.nfLotesSap(nfe, serie),
+      3600000,
+      (v: any) => v && v.encontrada, // só cacheia quando achou a NF
+    );
+  }
+
+  private async nfLotesSap(nfe: string, serie?: string) {
     const full = await this.sap.getFaturaPorNFe(nfe, serie);
     if (!full) return { encontrada: false, nfe };
     const linhas = (full.DocumentLines || []).map((l: any) => ({
