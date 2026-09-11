@@ -1360,6 +1360,14 @@ const DNLOG_API = {
     if (!r.ok) throw new Error('GET /faturamento ' + r.status);
     return r.json();
   },
+  async nfLotes(nfe, serie) {
+    const p = new URLSearchParams();
+    p.set('nfe', nfe);
+    if (serie) p.set('serie', serie);
+    const r = await fetch(`${DNLOG_API_BASE}/nf-lotes?${p.toString()}`, { headers: dnlogAuthHeaders() });
+    if (!r.ok) throw new Error('GET /nf-lotes ' + r.status);
+    return r.json();
+  },
 };
 window.DNLOG_API = DNLOG_API;
 
@@ -2094,6 +2102,22 @@ const FaturamentoNFs = ({ ctx }) => {
   const [clienteSel, setClienteSel] = useState('todos'); // cardCode | 'todos'
   const [q, setQ] = useState('');
   const [incluirCanceladas, setIncluirCanceladas] = useState(false);
+  const [aberto, setAberto] = useState(null);   // docNum da NF expandida (item/lote/valor)
+  const [detalhes, setDetalhes] = useState({}); // docNum -> { loading, linhas, erro }
+
+  const abrirNF = async (n) => {
+    const k = n.docNum;
+    if (aberto === k) { setAberto(null); return; }
+    setAberto(k);
+    if (detalhes[k] && detalhes[k].linhas) return; // já carregado
+    setDetalhes(d => ({ ...d, [k]: { loading: true } }));
+    try {
+      const r = await DNLOG_API.nfLotes(n.nfe, n.serie);
+      setDetalhes(d => ({ ...d, [k]: { loading: false, linhas: (r && r.linhas) || [] } }));
+    } catch (e) {
+      setDetalhes(d => ({ ...d, [k]: { loading: false, erro: (e && e.message) || 'falha' } }));
+    }
+  };
 
   const carregar = async (dias) => {
     setCarregando(true); setErro('');
@@ -2241,15 +2265,58 @@ const FaturamentoNFs = ({ ctx }) => {
                 <th className="num" style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>Valor</th>
               </tr></thead>
               <tbody>
-                {lista.map((n, i) => (
-                  <tr key={(n.docNum || '') + '|' + i} style={{ opacity: n.cancelada ? 0.5 : 1 }}>
-                    <td className="mono cell-primary" style={{ fontWeight: 700 }}>{n.nfe}<span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>/{n.serie}</span></td>
-                    <td className="mono cell-muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(n.data)}</td>
-                    <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.cliente}</td>
-                    <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{n.vendedor || '—'}</td>
-                    <td className="num mono" style={{ fontWeight: 700 }}>{fmtMoney(n.total)}{n.cancelada && <span className="chip" style={{ marginLeft: 6, background: 'var(--red-bg)', color: 'var(--red)', fontSize: 9 }}>CANC</span>}</td>
-                  </tr>
-                ))}
+                {lista.map((n, i) => {
+                  const k = n.docNum;
+                  const exp = aberto === k;
+                  const det = detalhes[k];
+                  return (
+                    <React.Fragment key={(n.docNum || '') + '|' + i}>
+                      <tr onClick={() => abrirNF(n)} style={{ opacity: n.cancelada ? 0.5 : 1, cursor: 'pointer', background: exp ? 'var(--bg-hover)' : undefined }}>
+                        <td className="mono cell-primary" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+                          <i className={'ti ' + (exp ? 'ti-chevron-down' : 'ti-chevron-right')} style={{ fontSize: 12, marginRight: 4, color: 'var(--text-muted)' }}></i>
+                          {n.nfe}<span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>/{n.serie}</span>
+                        </td>
+                        <td className="mono cell-muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(n.data)}</td>
+                        <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.cliente}</td>
+                        <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{n.vendedor || '—'}</td>
+                        <td className="num mono" style={{ fontWeight: 700 }}>{fmtMoney(n.total)}{n.cancelada && <span className="chip" style={{ marginLeft: 6, background: 'var(--red-bg)', color: 'var(--red)', fontSize: 9 }}>CANC</span>}</td>
+                      </tr>
+                      {exp && (
+                        <tr>
+                          <td colSpan={5} style={{ padding: 0, background: 'var(--bg-card)' }}>
+                            {det && det.loading ? (
+                              <div style={{ padding: '10px 16px', fontSize: 12, color: 'var(--text-muted)' }}><i className="ti ti-loader-2"></i> Carregando itens/lotes da NF…</div>
+                            ) : det && det.erro ? (
+                              <div style={{ padding: '10px 16px', fontSize: 12, color: 'var(--red)' }}><i className="ti ti-alert-triangle"></i> {det.erro}</div>
+                            ) : det && det.linhas ? (
+                              <table style={{ width: '100%', fontSize: 11.5, margin: 0 }}>
+                                <thead><tr style={{ color: 'var(--text-muted)' }}>
+                                  <th style={{ paddingLeft: 28, textAlign: 'left' }}>Item</th>
+                                  <th style={{ textAlign: 'left' }}>Lote</th>
+                                  <th className="num">Qtd</th>
+                                  <th className="num" style={{ paddingRight: 16 }}>Valor</th>
+                                </tr></thead>
+                                <tbody>
+                                  {det.linhas.flatMap((l, li) => {
+                                    const lotes = (l.lotes && l.lotes.length) ? l.lotes : [{ lote: '—', quantidade: l.quantidade, valor: l.valorLinha }];
+                                    return lotes.map((lo, loi) => (
+                                      <tr key={li + '-' + loi}>
+                                        <td style={{ paddingLeft: 28 }}>{loi === 0 ? (l.descricao || l.itemCode) : ''}<span style={{ color: 'var(--text-dim)' }}>{loi === 0 && l.descricao ? ' · ' + l.itemCode : ''}</span></td>
+                                        <td className="mono" style={{ color: 'var(--accent-light)', fontWeight: 600 }}>{lo.lote}</td>
+                                        <td className="num mono">{fmtNum(lo.quantidade)}</td>
+                                        <td className="num mono" style={{ paddingRight: 16 }}>{fmtMoney(lo.valor)}</td>
+                                      </tr>
+                                    ));
+                                  })}
+                                </tbody>
+                              </table>
+                            ) : null}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -2345,6 +2412,15 @@ const Relatorios = ({ ctx }) => {
   // ---- Resumo comercial de pedidos (abertos/fechados, unidades, valor, comissão) ----
   // Comissão é % configurável (não vem do SAP); aplica sobre o valor total.
   const [comissaoPct, setComissaoPct] = useState('');
+  // Navegação por cards: null = mostra os cards; senão o relatório escolhido.
+  const [relAtivo, setRelAtivo] = useState(null);
+  const RELATORIOS_CARDS = [
+    { id: 'faturamento', titulo: 'Faturamento — NFs por cliente', desc: 'Notas fiscais de saída do SAP por cliente, com item, lote, quantidade e valor.', icon: 'ti-file-invoice', cor: 'var(--green)', bg: 'var(--green-bg)' },
+    { id: 'comercial', titulo: 'Resumo comercial de pedidos', desc: 'Abertos/fechados, unidades, valor e comissão por representante.', icon: 'ti-report-money', cor: 'var(--accent-light)', bg: 'var(--bg-hover)' },
+    { id: 'carteira', titulo: 'Carteira aberta', desc: 'Saldo a embarcar por cultivar e por vendedor, OEs por status e pedidos atrasados.', icon: 'ti-chart-bar', cor: 'var(--blue)', bg: 'var(--blue-bg)' },
+    { id: 'divergencias', titulo: 'Divergências de entrega', desc: 'Conferência SAP × DNLog (entregue × faturado).', icon: 'ti-scale', cor: 'var(--orange)', bg: 'var(--orange-bg)' },
+  ];
+  const cardAtivo = RELATORIOS_CARDS.find(c => c.id === relAtivo);
   const resumo = useMemo(() => {
     const peds = ctx.pedidos || [];
     const naoCancel = peds.filter(p => p.status_sap !== 'cancelado');
@@ -2419,16 +2495,40 @@ const Relatorios = ({ ctx }) => {
     <div>
       <div className="page-header">
         <div>
-          <div className="crumb"><i className="ti ti-home"></i> Gestão · Relatórios</div>
+          <div className="crumb"><i className="ti ti-home"></i> Gestão · Relatórios{cardAtivo ? ' · ' + cardAtivo.titulo : ''}</div>
           <h1 className="page-title">Relatórios</h1>
-          <p className="page-subtitle">Visão analítica da carteira aberta no SAP e dos embarques · {rel.abertos.length} pedidos em aberto</p>
+          <p className="page-subtitle">{cardAtivo ? cardAtivo.desc : 'Escolha um relatório'}</p>
         </div>
+        {relAtivo && (
+          <button className="btn btn-ghost" onClick={() => setRelAtivo(null)}><i className="ti ti-arrow-left"></i> Todos os relatórios</button>
+        )}
       </div>
 
+      {/* ===== CARDS DE RELATÓRIOS ===== */}
+      {relAtivo === null && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 12 }}>
+          {RELATORIOS_CARDS.map(c => (
+            <button key={c.id} onClick={() => setRelAtivo(c.id)} className="panel" style={{
+              textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', padding: 18,
+              display: 'flex', gap: 12, alignItems: 'flex-start', background: 'var(--bg-card)', border: '1px solid var(--border)',
+            }}>
+              <div style={{ width: 42, height: 42, borderRadius: 10, background: c.bg, color: c.cor, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <i className={'ti ' + c.icon} style={{ fontSize: 21 }}></i>
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{c.titulo}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.45 }}>{c.desc}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* ===== FATURAMENTO (NFs de saída) POR CLIENTE ===== */}
-      <FaturamentoNFs ctx={ctx} />
+      {relAtivo === 'faturamento' && <FaturamentoNFs ctx={ctx} />}
 
       {/* ===== RESUMO COMERCIAL DE PEDIDOS (abertos/fechados, unidades, valor, comissão) ===== */}
+      {relAtivo === 'comercial' && (
       <div className="panel" style={{ marginBottom: 16 }}>
         <div className="panel-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2482,8 +2582,10 @@ const Relatorios = ({ ctx }) => {
           </tr></tfoot>
         </table>
       </div>
+      )}
 
       {/* ===== DIVERGÊNCIAS DE ENTREGA (SAP × DNLog) ===== */}
+      {relAtivo === 'divergencias' && (
       <div className="panel" style={{ marginBottom: 16 }}>
         <div className="panel-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2522,7 +2624,10 @@ const Relatorios = ({ ctx }) => {
           A exibição do saldo usa a MAIOR das duas fontes (nunca soma), então isto aqui é só o mapa das diferenças para conferência — não afeta o saldo. Read-only no SAP.
         </div>
       </div>
+      )}
 
+      {/* ===== CARTEIRA ABERTA (métricas + status + cultivar + vendedor + atrasados) ===== */}
+      {relAtivo === 'carteira' && (<>
       {filtrando && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12, color: 'var(--text-muted)' }}>
           <span className="chip chip-green"><i className="ti ti-filter"></i> Filtrando grupo: <b style={{ marginLeft: 4 }}>{filtroGrupo}</b></span>
@@ -2648,6 +2753,7 @@ const Relatorios = ({ ctx }) => {
           )}
         </div>
       </div>
+      </>)}
     </div>
   );
 };

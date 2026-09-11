@@ -159,10 +159,13 @@ export class ApiController {
       itemCode: l.ItemCode,
       descricao: l.ItemDescription,
       quantidade: Number(l.Quantity) || 0,
+      precoUnitario: Number(l.Price) || 0,
+      valorLinha: Number(l.LineTotal) || (Number(l.Price) || 0) * (Number(l.Quantity) || 0),
       armazem: l.WarehouseCode,
       lotes: (l.BatchNumbers || []).map((b: any) => ({
         lote: b.BatchNumber,
         quantidade: Number(b.Quantity) || 0,
+        valor: (Number(l.Price) || 0) * (Number(b.Quantity) || 0),
       })),
     }));
     return {
