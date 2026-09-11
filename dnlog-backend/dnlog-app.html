@@ -2102,21 +2102,83 @@ const FaturamentoNFs = ({ ctx }) => {
   const [clienteSel, setClienteSel] = useState('todos'); // cardCode | 'todos'
   const [q, setQ] = useState('');
   const [incluirCanceladas, setIncluirCanceladas] = useState(false);
-  const [aberto, setAberto] = useState(null);   // docNum da NF expandida (item/lote/valor)
+  const [abertos, setAbertos] = useState(() => new Set()); // docNums expandidos (várias NFs juntas)
   const [detalhes, setDetalhes] = useState({}); // docNum -> { loading, linhas, erro }
+  const [exportando, setExportando] = useState(false);
 
-  const abrirNF = async (n) => {
+  // Carrega (uma vez) os itens/lotes/valores de uma NF e guarda em cache.
+  const carregarDetalhe = async (n) => {
     const k = n.docNum;
-    if (aberto === k) { setAberto(null); return; }
-    setAberto(k);
-    if (detalhes[k] && detalhes[k].linhas) return; // já carregado
-    setDetalhes(d => ({ ...d, [k]: { loading: true } }));
+    setDetalhes(d => (d[k] && d[k].linhas) ? d : ({ ...d, [k]: { loading: true } }));
     try {
       const r = await DNLOG_API.nfLotes(n.nfe, n.serie);
-      setDetalhes(d => ({ ...d, [k]: { loading: false, linhas: (r && r.linhas) || [] } }));
+      const linhas = (r && r.linhas) || [];
+      setDetalhes(d => ({ ...d, [k]: { loading: false, linhas } }));
+      return linhas;
     } catch (e) {
       setDetalhes(d => ({ ...d, [k]: { loading: false, erro: (e && e.message) || 'falha' } }));
+      return null;
     }
+  };
+  const abrirNF = (n) => {
+    const k = n.docNum;
+    setAbertos(prev => { const s = new Set(prev); s.has(k) ? s.delete(k) : s.add(k); return s; });
+    if (!(detalhes[k] && detalhes[k].linhas)) carregarDetalhe(n);
+  };
+  const recolherTodas = () => setAbertos(new Set());
+  const expandirTodas = async () => {
+    setAbertos(new Set(lista.map(n => n.docNum)));
+    const pend = lista.filter(n => !(detalhes[n.docNum] && detalhes[n.docNum].linhas));
+    let idx = 0;
+    const worker = async () => { while (idx < pend.length) { await carregarDetalhe(pend[idx++]); } };
+    await Promise.all(Array.from({ length: 5 }, () => worker()));
+  };
+
+  // Export DETALHADO de TODAS as notas do período (todos os clientes):
+  // uma linha por NF×item×lote com quantidade e valor. Busca os lotes de cada
+  // NF (concorrência limitada) e monta o CSV.
+  const exportarDetalhado = async () => {
+    const notas = base; // todas do período (respeita só canceladas)
+    if (!notas.length) return;
+    setExportando(true);
+    ctx.showToast && ctx.showToast('Gerando export detalhado…', `${notas.length} NF(s) — aguarde`);
+    const clean = s => String(s == null ? '' : s).replace(/[;\n\r]/g, ' ');
+    const rows = [['NFe', 'Serie', 'DocNum', 'Data', 'Cliente', 'CardCode', 'Vendedor', 'Item', 'Descricao', 'Lote', 'Quantidade', 'Valor', 'Status'].join(';')];
+    const cacheLocal = {};
+    let idx = 0;
+    const worker = async () => {
+      while (idx < notas.length) {
+        const n = notas[idx++];
+        const k = n.docNum;
+        let linhas = cacheLocal[k] || (detalhes[k] && detalhes[k].linhas);
+        if (!linhas) {
+          try { const r = await DNLOG_API.nfLotes(n.nfe, n.serie); linhas = (r && r.linhas) || []; }
+          catch (e) { linhas = []; }
+          cacheLocal[k] = linhas;
+        }
+        const st = n.cancelada ? 'CANCELADA' : (n.status || '');
+        const data = (n.data || '').slice(0, 10);
+        const cab = [n.nfe, n.serie, n.docNum, data, clean(n.cliente), n.cardCode, clean(n.vendedor)];
+        if (!linhas.length) {
+          rows.push([...cab, '', '', '', '', (n.total || 0).toFixed(2), st].join(';'));
+        } else {
+          linhas.forEach(l => {
+            const lotes = (l.lotes && l.lotes.length) ? l.lotes : [{ lote: '', quantidade: l.quantidade, valor: l.valorLinha }];
+            lotes.forEach(lo => {
+              rows.push([...cab, l.itemCode, clean(l.descricao), lo.lote, lo.quantidade, (lo.valor || 0).toFixed(2), st].join(';'));
+            });
+          });
+        }
+      }
+    };
+    try {
+      await Promise.all(Array.from({ length: 5 }, () => worker()));
+      const blob = new Blob(['﻿' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `faturamento_detalhado_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+      URL.revokeObjectURL(url);
+      ctx.showToast && ctx.showToast('Export detalhado pronto', `${notas.length} NF(s) · ${rows.length - 1} linhas`);
+    } finally { setExportando(false); }
   };
 
   const carregar = async (dias) => {
@@ -2196,7 +2258,11 @@ const FaturamentoNFs = ({ ctx }) => {
             <i className={'ti ' + (carregando ? 'ti-loader-2' : 'ti-refresh')}></i> {carregando ? 'Carregando…' : 'Atualizar'}
           </button>
           <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportarCSV} disabled={!lista.length}>
-            <i className="ti ti-download"></i> CSV
+            <i className="ti ti-download"></i> CSV resumo
+          </button>
+          <button className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportarDetalhado} disabled={exportando || !base.length}
+            title="CSV de TODAS as notas do período, com item, lote, quantidade e valor">
+            <i className={'ti ' + (exportando ? 'ti-loader-2' : 'ti-file-spreadsheet')}></i> {exportando ? 'Gerando…' : 'Export detalhado (todas)'}
           </button>
         </div>
       </div>
@@ -2256,6 +2322,11 @@ const FaturamentoNFs = ({ ctx }) => {
           </div>
           {/* Notas */}
           <div style={{ maxHeight: 460, overflowY: 'auto', overflowX: 'auto' }}>
+            <div style={{ display: 'flex', gap: 6, padding: '6px 10px', borderBottom: '1px solid var(--border)', background: 'var(--bg-elev)' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', alignSelf: 'center', marginRight: 'auto' }}>Notas · clique p/ ver itens/lotes</span>
+              <button onClick={expandirTodas} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', borderRadius: 5, padding: '3px 8px' }}><i className="ti ti-chevrons-down"></i> Expandir todas</button>
+              <button onClick={recolherTodas} disabled={abertos.size === 0} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', borderRadius: 5, padding: '3px 8px' }}><i className="ti ti-chevrons-up"></i> Recolher</button>
+            </div>
             <table style={{ width: '100%', fontSize: 12, minWidth: 560 }}>
               <thead><tr>
                 <th style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>NFe</th>
@@ -2267,7 +2338,7 @@ const FaturamentoNFs = ({ ctx }) => {
               <tbody>
                 {lista.map((n, i) => {
                   const k = n.docNum;
-                  const exp = aberto === k;
+                  const exp = abertos.has(k);
                   const det = detalhes[k];
                   return (
                     <React.Fragment key={(n.docNum || '') + '|' + i}>
