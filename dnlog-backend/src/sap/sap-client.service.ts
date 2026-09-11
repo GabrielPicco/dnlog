@@ -543,6 +543,17 @@ export class SapClientService implements OnModuleDestroy {
     }
   }
 
+  /** [LEITURA] Pedido de venda (Order) completo — para inspecionar campos (Project etc.). */
+  async getOrderFull(docEntry: number | string): Promise<any> {
+    await this.ensureSession();
+    try {
+      const resp = await this.axios.get(`/Orders(${docEntry})`);
+      return resp.data;
+    } catch (err) {
+      this.handleError(err, 'buscar pedido completo');
+    }
+  }
+
   /**
    * [LEITURA] Lista as Notas Fiscais de Saída (Invoices/OINV) do período, para o
    * relatório de faturamento por cliente. Campos-chave apenas (sem linhas).

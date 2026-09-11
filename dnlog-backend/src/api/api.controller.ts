@@ -106,6 +106,49 @@ export class ApiController {
     return true;
   }
 
+  // -------- DIAG TIPOS (TEMPORÁRIO / SOMENTE LEITURA) --------
+  // Descobre onde vivem a "Utilização" (Usage) da NF e o "Projeto/safra" do
+  // pedido. REMOVER após confirmar os campos.
+  @Public()
+  @Get('diag-tipos')
+  async diagTipos(@Query('inv') inv?: string, @Query('ord') ord?: string) {
+    const filtra = (obj: any, re: RegExp) => {
+      const out: Record<string, any> = {};
+      if (obj) for (const k of Object.keys(obj)) {
+        const v = obj[k];
+        if (re.test(k) && (typeof v !== 'object' || v === null)) out[k] = v;
+      }
+      return out;
+    };
+    // Invoice (usa a NFe 119 = DocEntry 150 por padrão)
+    const invoice = await this.sap.getInvoiceFull(inv ? Number(inv) : 150).catch(() => null);
+    const invLinha0 = invoice?.DocumentLines?.[0] || {};
+    // Order: pega um pedido recente
+    let orderFull: any = null;
+    try {
+      const peds = await this.sap.getPedidosAbertos();
+      const alvo = ord ? peds.find((p: any) => String(p.DocNum) === String(ord)) : peds[0];
+      if (alvo) orderFull = await this.sap.getOrderFull(alvo.DocEntry);
+    } catch (e) {}
+    const ordLinha0 = orderFull?.DocumentLines?.[0] || {};
+    const reUso = /usage|uso|util|cfop|fiscal|oper/i;
+    const reProj = /project|proj|safra/i;
+    return {
+      invoice: {
+        DocNum: invoice?.DocNum, SequenceSerial: invoice?.SequenceSerial,
+        headerUso: filtra(invoice, reUso),
+        headerProj: filtra(invoice, reProj),
+        linha0Uso: filtra(invLinha0, reUso),
+        linha0Proj: filtra(invLinha0, reProj),
+      },
+      order: {
+        DocNum: orderFull?.DocNum,
+        headerProj: filtra(orderFull, reProj),
+        linha0Proj: filtra(ordLinha0, reProj),
+      },
+    };
+  }
+
   // -------- FATURAMENTO (NFs de Saída) POR PERÍODO --------
   // Lista as Notas Fiscais de Saída para o relatório de faturamento por cliente.
   // Período padrão: últimos 90 dias. SOMENTE LEITURA no SAP.
