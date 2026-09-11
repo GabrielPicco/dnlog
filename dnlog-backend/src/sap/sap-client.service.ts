@@ -549,19 +549,29 @@ export class SapClientService implements OnModuleDestroy {
    */
   async getFaturamento(desde?: string, ate?: string): Promise<any[]> {
     await this.ensureSession();
-    const conds: string[] = [];
-    if (desde) conds.push(`DocDate ge '${desde}'`);
-    if (ate) conds.push(`DocDate le '${ate}'`);
-    const params: any = {
-      $select:
-        'DocEntry,DocNum,SequenceSerial,SeriesString,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,DocumentStatus,SalesPersonCode',
-      $orderby: 'DocDate desc',
+    const select =
+      'DocEntry,DocNum,SequenceSerial,SeriesString,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,DocumentStatus,SalesPersonCode';
+    // Monta o $filter de data. O SAP B1 Service Layer costuma aceitar a data
+    // entre aspas ('2026-06-13'); alguns ambientes exigem sem aspas. Tentamos
+    // as duas formas antes de desistir (não quebra o relatório por formato).
+    const build = (comAspas: boolean) => {
+      const q = comAspas ? "'" : '';
+      const conds: string[] = [];
+      if (desde) conds.push(`DocDate ge ${q}${desde}${q}`);
+      if (ate) conds.push(`DocDate le ${q}${ate}${q}`);
+      const params: any = { $select: select, $orderby: 'DocDate desc' };
+      if (conds.length) params.$filter = conds.join(' and ');
+      return params;
     };
-    if (conds.length) params.$filter = conds.join(' and ');
     try {
-      return await this.getAllPages('/Invoices', params);
-    } catch (err) {
-      this.handleError(err, 'listar faturamento (Invoices)');
+      return await this.getAllPages('/Invoices', build(true));
+    } catch (err1) {
+      this.logger.warn('Faturamento: filtro com aspas falhou, tentando sem aspas…');
+      try {
+        return await this.getAllPages('/Invoices', build(false));
+      } catch (err2) {
+        this.handleError(err2, 'listar faturamento (Invoices)');
+      }
     }
   }
 
