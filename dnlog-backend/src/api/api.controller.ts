@@ -133,7 +133,25 @@ export class ApiController {
     const ordLinha0 = orderFull?.DocumentLines?.[0] || {};
     const reUso = /usage|uso|util|cfop|fiscal|oper/i;
     const reProj = /project|proj|safra/i;
+    // Tenta descobrir a entidade de Utilização (Usage master) na Service Layer.
+    const usageInt = invLinha0?.Usage;
+    const tentativas: Record<string, any> = {};
+    for (const ent of ['Usages', 'Usage', 'UsageForNFM', 'USG1', 'CfopCodes']) {
+      try {
+        const r = await this.sap.getRaw(`/${ent}?$top=2`);
+        tentativas[ent] = { ok: true, amostra: (r?.value || r)?.[0] || r };
+      } catch (e: any) {
+        tentativas[ent] = { ok: false, status: e?.response?.status };
+      }
+    }
+    let usageResolvido: any = null;
+    if (usageInt != null) {
+      for (const ent of ['Usages', 'Usage']) {
+        try { usageResolvido = { ent, doc: await this.sap.getRaw(`/${ent}(${usageInt})`) }; break; } catch (e) {}
+      }
+    }
     return {
+      usageInt, tentativas, usageResolvido,
       invoice: {
         DocNum: invoice?.DocNum, SequenceSerial: invoice?.SequenceSerial,
         headerUso: filtra(invoice, reUso),

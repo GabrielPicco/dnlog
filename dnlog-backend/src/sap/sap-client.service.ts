@@ -543,6 +543,13 @@ export class SapClientService implements OnModuleDestroy {
     }
   }
 
+  /** [LEITURA/DIAG] GET cru numa entidade da Service Layer. */
+  async getRaw(path: string): Promise<any> {
+    await this.ensureSession();
+    const resp = await this.axios.get(path);
+    return resp.data;
+  }
+
   /** [LEITURA] Pedido de venda (Order) completo — para inspecionar campos (Project etc.). */
   async getOrderFull(docEntry: number | string): Promise<any> {
     await this.ensureSession();
