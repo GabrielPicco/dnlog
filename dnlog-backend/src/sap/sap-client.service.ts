@@ -544,6 +544,30 @@ export class SapClientService implements OnModuleDestroy {
   }
 
   /**
+   * [LEITURA] Localiza a Nota Fiscal de Saída (Invoice) pelo número da NFe
+   * (campo SequenceSerial) + Série (SeriesString), e devolve o documento COMPLETO
+   * (com DocumentLines.BatchNumbers). Retorna a mais recente que casar, ou null.
+   */
+  async getFaturaPorNFe(nfe: number | string, serie?: string): Promise<any | null> {
+    await this.ensureSession();
+    const n = Number(nfe);
+    if (!n) return null;
+    let filtro = `SequenceSerial eq ${n}`;
+    if (serie) filtro += ` and SeriesString eq '${String(serie).replace(/'/g, "''")}'`;
+    try {
+      const resp = await this.axios.get('/Invoices', {
+        params: { $select: 'DocEntry,DocNum,SequenceSerial,SeriesString', $filter: filtro, $orderby: 'DocEntry desc', $top: 5 },
+      });
+      const arr = resp.data?.value || [];
+      if (!arr.length) return null;
+      // Busca o documento completo (a listagem filtrada não traz BatchNumbers).
+      return await this.getInvoiceFull(arr[0].DocEntry);
+    } catch (err) {
+      this.handleError(err, 'buscar fatura por NFe');
+    }
+  }
+
+  /**
    * Cria uma Delivery Note (Nota de Saida) baseada em uma OE faturada.
    *
    * Esse e o passo critico: quando a OE eh marcada como faturada no DNLog,

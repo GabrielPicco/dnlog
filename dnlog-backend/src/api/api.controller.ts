@@ -106,54 +106,36 @@ export class ApiController {
     return true;
   }
 
-  // -------- DIAG NF (TEMPORÁRIO / SOMENTE LEITURA) --------
-  // Inspeciona uma Nota Fiscal de Saída (Invoice) para descobrir qual campo
-  // guarda o número da NFe e como vêm os lotes (DocumentLines.BatchNumbers).
-  // REMOVER depois de confirmar a ligação lote↔NFe.
-  @Public()
-  @Get('diag-nf')
-  async diagNf(@Query('docentry') docentry?: string, @Query('nf') nf?: string) {
-    const recentes = await this.sap.getInvoicesRecentes(6);
-    let entry: any = docentry ? Number(docentry) : null;
-    if (!entry && recentes.length) entry = recentes[0].DocEntry;
-    const full = entry != null ? await this.sap.getInvoiceFull(entry) : null;
-
-    // Linhas com os lotes efetivamente faturados.
-    const linhas = (full?.DocumentLines || []).map((l: any) => ({
-      LineNum: l.LineNum,
-      ItemCode: l.ItemCode,
-      Quantity: l.Quantity,
-      WarehouseCode: l.WarehouseCode,
-      BatchNumbers: (l.BatchNumbers || []).map((b: any) => ({
-        BatchNumber: b.BatchNumber,
-        Quantity: b.Quantity,
+  // -------- LOTES DE UMA NOTA FISCAL DE SAÍDA (por número da NFe) --------
+  // Lê da Invoice (OINV) os lotes efetivamente faturados: casa a NF pelo
+  // SequenceSerial (= nº da NFe) + Série, e devolve DocumentLines.BatchNumbers.
+  // Usado para dar baixa no QCDN pelos lotes REAIS que saíram na nota.
+  // SOMENTE LEITURA no SAP.
+  @Get('nf-lotes')
+  async nfLotes(@Query('nfe') nfe?: string, @Query('serie') serie?: string) {
+    if (!nfe) throw new HttpException('Informe o número da NFe (?nfe=)', HttpStatus.BAD_REQUEST);
+    const full = await this.sap.getFaturaPorNFe(nfe, serie);
+    if (!full) return { encontrada: false, nfe };
+    const linhas = (full.DocumentLines || []).map((l: any) => ({
+      itemCode: l.ItemCode,
+      descricao: l.ItemDescription,
+      quantidade: Number(l.Quantity) || 0,
+      armazem: l.WarehouseCode,
+      lotes: (l.BatchNumbers || []).map((b: any) => ({
+        lote: b.BatchNumber,
+        quantidade: Number(b.Quantity) || 0,
       })),
     }));
-
-    // Campos escalares do cabeçalho cujo VALOR bate com os números candidatos
-    // (o que você digita: 119 = NFe, 34 = DocNum/NFS, etc.).
-    const alvo = [nf, '119', '34', '1', '55', '9'].filter(Boolean).map(String);
-    const camposComValorAlvo: Record<string, any> = {};
-    const camposFiscais: Record<string, any> = {};
-    if (full) {
-      for (const k of Object.keys(full)) {
-        const v = (full as any)[k];
-        if ((typeof v === 'string' || typeof v === 'number') && alvo.includes(String(v))) {
-          camposComValorAlvo[k] = v;
-        }
-        if (/nf|nota|fisc|serie|serial|folio|federal|dfe|nfe|seq|numberatcard/i.test(k)) {
-          camposFiscais[k] = v;
-        }
-      }
-    }
-
     return {
-      recentes,
-      docEntryUsado: entry,
-      DocNum: full?.DocNum,
-      CardCode: full?.CardCode,
-      camposComValorAlvo,
-      camposFiscais,
+      encontrada: true,
+      docNum: full.DocNum,
+      nfe: full.SequenceSerial,
+      serie: full.SeriesString,
+      modelo: full.SequenceModel,
+      cardCode: full.CardCode,
+      cliente: full.CardName,
+      data: full.DocDate,
+      cancelada: full.Cancelled === 'tYES',
       linhas,
     };
   }
