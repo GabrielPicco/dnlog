@@ -544,6 +544,28 @@ export class SapClientService implements OnModuleDestroy {
   }
 
   /**
+   * [LEITURA] Lista as Notas Fiscais de Saída (Invoices/OINV) do período, para o
+   * relatório de faturamento por cliente. Campos-chave apenas (sem linhas).
+   */
+  async getFaturamento(desde?: string, ate?: string): Promise<any[]> {
+    await this.ensureSession();
+    const conds: string[] = [];
+    if (desde) conds.push(`DocDate ge '${desde}'`);
+    if (ate) conds.push(`DocDate le '${ate}'`);
+    const params: any = {
+      $select:
+        'DocEntry,DocNum,SequenceSerial,SeriesString,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,DocumentStatus,SalesPersonCode',
+      $orderby: 'DocDate desc',
+    };
+    if (conds.length) params.$filter = conds.join(' and ');
+    try {
+      return await this.getAllPages('/Invoices', params);
+    } catch (err) {
+      this.handleError(err, 'listar faturamento (Invoices)');
+    }
+  }
+
+  /**
    * [LEITURA] Localiza a Nota Fiscal de Saída (Invoice) pelo número da NFe
    * (campo SequenceSerial) + Série (SeriesString), e devolve o documento COMPLETO
    * (com DocumentLines.BatchNumbers). Retorna a mais recente que casar, ou null.

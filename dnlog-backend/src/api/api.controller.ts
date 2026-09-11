@@ -106,6 +106,45 @@ export class ApiController {
     return true;
   }
 
+  // -------- FATURAMENTO (NFs de Saída) POR PERÍODO --------
+  // Lista as Notas Fiscais de Saída para o relatório de faturamento por cliente.
+  // Período padrão: últimos 90 dias. SOMENTE LEITURA no SAP.
+  @Get('faturamento')
+  async faturamento(@Query('desde') desde?: string, @Query('ate') ate?: string) {
+    const d =
+      desde ||
+      new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+    const a = ate || '';
+    return this.cache.wrap(
+      `faturamento:${d}:${a}`,
+      async () => {
+        const [invs, vendedores] = await Promise.all([
+          this.sap.getFaturamento(d, a || undefined),
+          this.sap.getSalesPersons?.().catch(() => []) ?? [],
+        ]);
+        const nomeVend: Record<string, string> = {};
+        for (const v of vendedores as any[]) {
+          nomeVend[String(v.SalesEmployeeCode)] = v.SalesEmployeeName;
+        }
+        return (invs as any[]).map((i) => ({
+          docNum: i.DocNum,
+          nfe: i.SequenceSerial,
+          serie: i.SeriesString,
+          cardCode: i.CardCode,
+          cliente: i.CardName,
+          data: i.DocDate,
+          vencimento: i.DocDueDate,
+          total: Number(i.DocTotal) || 0,
+          moeda: i.DocCurrency,
+          vendedor: nomeVend[String(i.SalesPersonCode)] || '',
+          cancelada: i.Cancelled === 'tYES',
+          status: i.DocumentStatus === 'bost_Close' ? 'fechada' : 'aberta',
+        }));
+      },
+      300000,
+    );
+  }
+
   // -------- LOTES DE UMA NOTA FISCAL DE SAÍDA (por número da NFe) --------
   // Lê da Invoice (OINV) os lotes efetivamente faturados: casa a NF pelo
   // SequenceSerial (= nº da NFe) + Série, e devolve DocumentLines.BatchNumbers.

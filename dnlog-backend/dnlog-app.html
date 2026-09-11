@@ -1350,6 +1350,16 @@ const DNLOG_API = {
     if (!r.ok) throw new Error('POST /motorista ' + r.status);
     return r.json();
   },
+
+  // ---- Faturamento (NFs de saída) ----
+  async listarFaturamento(desde, ate) {
+    const p = new URLSearchParams();
+    if (desde) p.set('desde', desde);
+    if (ate) p.set('ate', ate);
+    const r = await fetch(`${DNLOG_API_BASE}/faturamento?${p.toString()}`, { headers: dnlogAuthHeaders() });
+    if (!r.ok) throw new Error('GET /faturamento ' + r.status);
+    return r.json();
+  },
 };
 window.DNLOG_API = DNLOG_API;
 
@@ -2074,6 +2084,181 @@ const RelBar = ({ label, valor, max, cor, right, sub, code }) => (
   </div>
 );
 
+// Relatório de Faturamento (Notas Fiscais de Saída) por cliente. Lê as NFs do
+// SAP (somente leitura) por período; agrega por cliente e lista as notas.
+const FaturamentoNFs = ({ ctx }) => {
+  const [periodo, setPeriodo] = useState('90');   // dias
+  const [dados, setDados] = useState(null);        // array de NFs
+  const [erro, setErro] = useState('');
+  const [carregando, setCarregando] = useState(false);
+  const [clienteSel, setClienteSel] = useState('todos'); // cardCode | 'todos'
+  const [q, setQ] = useState('');
+  const [incluirCanceladas, setIncluirCanceladas] = useState(false);
+
+  const carregar = async (dias) => {
+    setCarregando(true); setErro('');
+    try {
+      const desde = new Date(Date.now() - Number(dias) * 86400000).toISOString().slice(0, 10);
+      const r = await DNLOG_API.listarFaturamento(desde, '');
+      setDados(Array.isArray(r) ? r : []);
+    } catch (e) {
+      setErro((e && e.message) || 'falha ao carregar');
+      setDados([]);
+    } finally { setCarregando(false); }
+  };
+  useEffect(() => { carregar(periodo); }, [periodo]);
+
+  // Base (aplica cancelamento). A agregação por cliente e a lista partem daqui.
+  const base = useMemo(() => (dados || []).filter(n => incluirCanceladas || !n.cancelada), [dados, incluirCanceladas]);
+
+  // Agregado por cliente (para o filtro e o quadro "por cliente").
+  const porCliente = useMemo(() => {
+    const m = new Map();
+    base.forEach(n => {
+      const k = n.cardCode || n.cliente || '—';
+      if (!m.has(k)) m.set(k, { cardCode: n.cardCode || '', cliente: n.cliente || '—', nfs: 0, valor: 0 });
+      const g = m.get(k); g.nfs += 1; g.valor += (n.total || 0);
+    });
+    return Array.from(m.values()).sort((a, b) => b.valor - a.valor);
+  }, [base]);
+
+  // Lista de NFs conforme filtros (cliente + busca).
+  const lista = useMemo(() => {
+    let l = base;
+    if (clienteSel !== 'todos') l = l.filter(n => (n.cardCode || n.cliente) === clienteSel);
+    if (q) {
+      const ql = q.toLowerCase();
+      l = l.filter(n => (n.cliente || '').toLowerCase().includes(ql) || String(n.nfe || '').includes(ql) || (n.vendedor || '').toLowerCase().includes(ql));
+    }
+    return [...l].sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+  }, [base, clienteSel, q]);
+
+  const totNFs = lista.length;
+  const totValor = lista.reduce((a, n) => a + (n.total || 0), 0);
+
+  const exportarCSV = () => {
+    const linhas = [['NFe', 'Serie', 'DocNum', 'Data', 'Cliente', 'CardCode', 'Vendedor', 'Valor', 'Status'].join(';')];
+    lista.forEach(n => linhas.push([
+      n.nfe, n.serie, n.docNum, (n.data || '').slice(0, 10), (n.cliente || '').replace(/;/g, ','),
+      n.cardCode, (n.vendedor || '').replace(/;/g, ','), (n.total || 0).toFixed(2), n.cancelada ? 'CANCELADA' : n.status,
+    ].map(c => String(c == null ? '' : c)).join(';')));
+    linhas.push(['', '', '', '', 'TOTAL', '', '', totValor.toFixed(2), `${totNFs} NF(s)`].join(';'));
+    const blob = new Blob(['﻿' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `faturamento_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    ctx.showToast && ctx.showToast('Faturamento exportado', `${totNFs} NF(s)`);
+  };
+
+  return (
+    <div className="panel" style={{ marginBottom: 16 }}>
+      <div className="panel-header" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <i className="ti ti-file-invoice" style={{ color: 'var(--accent-light)' }}></i>
+          <strong style={{ fontSize: 14 }}>Faturamento — NFs de saída por cliente</strong>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>SAP · somente leitura</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 2, background: 'var(--bg-card)', borderRadius: 5, padding: 2 }}>
+            {[['30', '30d'], ['90', '90d'], ['180', '180d'], ['365', '1 ano']].map(([v, l]) => (
+              <button key={v} onClick={() => setPeriodo(v)} style={{
+                background: periodo === v ? 'var(--accent)' : 'transparent',
+                color: periodo === v ? 'white' : 'var(--text-muted)',
+                border: 'none', padding: '4px 9px', borderRadius: 3, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 700,
+              }}>{l}</button>
+            ))}
+          </div>
+          <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => carregar(periodo)} disabled={carregando}>
+            <i className={'ti ' + (carregando ? 'ti-loader-2' : 'ti-refresh')}></i> {carregando ? 'Carregando…' : 'Atualizar'}
+          </button>
+          <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportarCSV} disabled={!lista.length}>
+            <i className="ti ti-download"></i> CSV
+          </button>
+        </div>
+      </div>
+
+      {/* Filtros */}
+      <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select className="input" style={{ width: 'auto', minWidth: 200, flex: '1 1 220px', padding: '6px 10px', fontSize: 12 }} value={clienteSel} onChange={e => setClienteSel(e.target.value)}>
+          <option value="todos">Todos os clientes ({porCliente.length})</option>
+          {porCliente.map(c => <option key={c.cardCode || c.cliente} value={c.cardCode || c.cliente}>{c.cliente} — {fmtMoney(c.valor)}</option>)}
+        </select>
+        <div className="search-box" style={{ flex: '1 1 200px', minWidth: 160 }}><i className="ti ti-search"></i>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar cliente, NFe, vendedor..." /></div>
+        <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
+          <input type="checkbox" checked={incluirCanceladas} onChange={e => setIncluirCanceladas(e.target.checked)} /> incluir canceladas
+        </label>
+      </div>
+
+      {/* Totalizadores */}
+      <div style={{ display: 'flex', gap: 24, padding: '10px 16px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Notas</div>
+          <div className="mono" style={{ fontSize: 18, fontWeight: 800 }}>{fmtNum(totNFs)}</div></div>
+        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Valor faturado</div>
+          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--green)' }}>{fmtMoney(totValor)}</div></div>
+        {clienteSel !== 'todos' && (
+          <div style={{ alignSelf: 'center' }}>
+            <button className="btn btn-ghost" style={{ padding: '3px 9px', fontSize: 11 }} onClick={() => setClienteSel('todos')}><i className="ti ti-x"></i> limpar cliente</button>
+          </div>
+        )}
+      </div>
+
+      {erro ? (
+        <div className="empty" style={{ padding: 24 }}><i className="ti ti-alert-triangle"></i><div>Não foi possível carregar</div><div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{erro}</div></div>
+      ) : carregando && !dados ? (
+        <div className="empty" style={{ padding: 24 }}><i className="ti ti-loader-2"></i><div>Consultando NFs no SAP…</div></div>
+      ) : lista.length === 0 ? (
+        <div className="empty" style={{ padding: 24 }}><i className="ti ti-file-off"></i><div>Nenhuma NF no período/filtro</div></div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) 2fr', gap: 0 }}>
+          {/* Por cliente */}
+          <div style={{ borderRight: '1px solid var(--border)', maxHeight: 460, overflowY: 'auto' }}>
+            <div style={{ padding: '8px 14px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', position: 'sticky', top: 0, background: 'var(--bg-elev)', borderBottom: '1px solid var(--border)' }}>Por cliente</div>
+            {porCliente.map(c => {
+              const sel = clienteSel === (c.cardCode || c.cliente);
+              return (
+                <div key={c.cardCode || c.cliente} onClick={() => setClienteSel(sel ? 'todos' : (c.cardCode || c.cliente))} style={{
+                  padding: '8px 14px', borderBottom: '1px solid var(--border)', cursor: 'pointer',
+                  background: sel ? 'var(--bg-hover)' : 'transparent',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.cliente}</div>
+                    <div className="mono" style={{ fontSize: 12, fontWeight: 700, color: 'var(--green)', flexShrink: 0 }}>{fmtMoney(c.valor)}</div>
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{c.nfs} NF(s){c.cardCode ? ' · ' + c.cardCode : ''}</div>
+                </div>
+              );
+            })}
+          </div>
+          {/* Notas */}
+          <div style={{ maxHeight: 460, overflowY: 'auto', overflowX: 'auto' }}>
+            <table style={{ width: '100%', fontSize: 12, minWidth: 560 }}>
+              <thead><tr>
+                <th style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>NFe</th>
+                <th style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>Data</th>
+                <th style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>Cliente</th>
+                <th style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>Vendedor</th>
+                <th className="num" style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>Valor</th>
+              </tr></thead>
+              <tbody>
+                {lista.map((n, i) => (
+                  <tr key={(n.docNum || '') + '|' + i} style={{ opacity: n.cancelada ? 0.5 : 1 }}>
+                    <td className="mono cell-primary" style={{ fontWeight: 700 }}>{n.nfe}<span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>/{n.serie}</span></td>
+                    <td className="mono cell-muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(n.data)}</td>
+                    <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.cliente}</td>
+                    <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{n.vendedor || '—'}</td>
+                    <td className="num mono" style={{ fontWeight: 700 }}>{fmtMoney(n.total)}{n.cancelada && <span className="chip" style={{ marginLeft: 6, background: 'var(--red-bg)', color: 'var(--red)', fontSize: 9 }}>CANC</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Relatorios = ({ ctx }) => {
   const rel = useMemo(() => {
     const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
@@ -2239,6 +2424,9 @@ const Relatorios = ({ ctx }) => {
           <p className="page-subtitle">Visão analítica da carteira aberta no SAP e dos embarques · {rel.abertos.length} pedidos em aberto</p>
         </div>
       </div>
+
+      {/* ===== FATURAMENTO (NFs de saída) POR CLIENTE ===== */}
+      <FaturamentoNFs ctx={ctx} />
 
       {/* ===== RESUMO COMERCIAL DE PEDIDOS (abertos/fechados, unidades, valor, comissão) ===== */}
       <div className="panel" style={{ marginBottom: 16 }}>
