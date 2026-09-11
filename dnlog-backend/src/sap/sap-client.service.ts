@@ -543,13 +543,6 @@ export class SapClientService implements OnModuleDestroy {
     }
   }
 
-  /** [LEITURA/DIAG] GET cru numa entidade da Service Layer. */
-  async getRaw(path: string): Promise<any> {
-    await this.ensureSession();
-    const resp = await this.axios.get(path);
-    return resp.data;
-  }
-
   /** [LEITURA] Pedido de venda (Order) completo — para inspecionar campos (Project etc.). */
   async getOrderFull(docEntry: number | string): Promise<any> {
     await this.ensureSession();
@@ -567,8 +560,10 @@ export class SapClientService implements OnModuleDestroy {
    */
   async getFaturamento(desde?: string, ate?: string): Promise<any[]> {
     await this.ensureSession();
+    // DocumentLines vem embutido pelo $select (não usar $expand). Traz CFOP e
+    // ProjectCode (safra) por linha, usados para classificar o tipo da NF.
     const select =
-      'DocEntry,DocNum,SequenceSerial,SeriesString,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,DocumentStatus,SalesPersonCode';
+      'DocEntry,DocNum,SequenceSerial,SeriesString,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,DocumentStatus,SalesPersonCode,DocumentLines';
     // Monta o $filter de data. O SAP B1 Service Layer costuma aceitar a data
     // entre aspas ('2026-06-13'); alguns ambientes exigem sem aspas. Tentamos
     // as duas formas antes de desistir (não quebra o relatório por formato).

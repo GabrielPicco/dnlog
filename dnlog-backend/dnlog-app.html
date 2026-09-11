@@ -2102,6 +2102,7 @@ const FaturamentoNFs = ({ ctx }) => {
   const [clienteSel, setClienteSel] = useState('todos'); // cardCode | 'todos'
   const [q, setQ] = useState('');
   const [incluirCanceladas, setIncluirCanceladas] = useState(false);
+  const [tipoNota, setTipoNota] = useState('vendas'); // 'vendas' | 'todas' | 'outras'
   const [abertos, setAbertos] = useState(() => new Set()); // docNums expandidos (várias NFs juntas)
   const [detalhes, setDetalhes] = useState({}); // docNum -> { loading, linhas, erro }
   const [exportando, setExportando] = useState(false);
@@ -2143,7 +2144,7 @@ const FaturamentoNFs = ({ ctx }) => {
     setExportando(true);
     ctx.showToast && ctx.showToast('Gerando export detalhado…', `${notas.length} NF(s) — aguarde`);
     const clean = s => String(s == null ? '' : s).replace(/[;\n\r]/g, ' ');
-    const rows = [['NFe', 'Serie', 'DocNum', 'Data', 'Cliente', 'CardCode', 'Vendedor', 'Item', 'Descricao', 'Lote', 'Quantidade', 'Valor', 'Status'].join(';')];
+    const rows = [['NFe', 'Serie', 'DocNum', 'Data', 'Cliente', 'CardCode', 'Vendedor', 'CFOP', 'Tipo', 'Item', 'Descricao', 'Projeto', 'Lote', 'Quantidade', 'Valor', 'Status'].join(';')];
     const cacheLocal = {};
     let idx = 0;
     const worker = async () => {
@@ -2158,14 +2159,14 @@ const FaturamentoNFs = ({ ctx }) => {
         }
         const st = n.cancelada ? 'CANCELADA' : (n.status || '');
         const data = (n.data || '').slice(0, 10);
-        const cab = [n.nfe, n.serie, n.docNum, data, clean(n.cliente), n.cardCode, clean(n.vendedor)];
+        const cab = [n.nfe, n.serie, n.docNum, data, clean(n.cliente), n.cardCode, clean(n.vendedor), n.cfop, n.ehVenda ? 'Venda' : 'Outra'];
         if (!linhas.length) {
-          rows.push([...cab, '', '', '', '', (n.total || 0).toFixed(2), st].join(';'));
+          rows.push([...cab, '', '', '', '', '', (n.total || 0).toFixed(2), st].join(';'));
         } else {
           linhas.forEach(l => {
             const lotes = (l.lotes && l.lotes.length) ? l.lotes : [{ lote: '', quantidade: l.quantidade, valor: l.valorLinha }];
             lotes.forEach(lo => {
-              rows.push([...cab, l.itemCode, clean(l.descricao), lo.lote, lo.quantidade, (lo.valor || 0).toFixed(2), st].join(';'));
+              rows.push([...cab, l.itemCode, clean(l.descricao), clean(l.projeto), lo.lote, lo.quantidade, (lo.valor || 0).toFixed(2), st].join(';'));
             });
           });
         }
@@ -2195,7 +2196,10 @@ const FaturamentoNFs = ({ ctx }) => {
   useEffect(() => { carregar(periodo); }, [periodo]);
 
   // Base (aplica cancelamento). A agregação por cliente e a lista partem daqui.
-  const base = useMemo(() => (dados || []).filter(n => incluirCanceladas || !n.cancelada), [dados, incluirCanceladas]);
+  const base = useMemo(() => (dados || []).filter(n =>
+    (incluirCanceladas || !n.cancelada) &&
+    (tipoNota === 'todas' || (tipoNota === 'vendas' ? n.ehVenda : !n.ehVenda))
+  ), [dados, incluirCanceladas, tipoNota]);
 
   // Agregado por cliente (para o filtro e o quadro "por cliente").
   const porCliente = useMemo(() => {
@@ -2214,7 +2218,7 @@ const FaturamentoNFs = ({ ctx }) => {
     if (clienteSel !== 'todos') l = l.filter(n => (n.cardCode || n.cliente) === clienteSel);
     if (q) {
       const ql = q.toLowerCase();
-      l = l.filter(n => (n.cliente || '').toLowerCase().includes(ql) || String(n.nfe || '').includes(ql) || (n.vendedor || '').toLowerCase().includes(ql));
+      l = l.filter(n => (n.cliente || '').toLowerCase().includes(ql) || String(n.nfe || '').includes(ql) || (n.vendedor || '').toLowerCase().includes(ql) || String(n.cfop || '').includes(ql));
     }
     return [...l].sort((a, b) => (b.data || '').localeCompare(a.data || ''));
   }, [base, clienteSel, q]);
@@ -2223,12 +2227,13 @@ const FaturamentoNFs = ({ ctx }) => {
   const totValor = lista.reduce((a, n) => a + (n.total || 0), 0);
 
   const exportarCSV = () => {
-    const linhas = [['NFe', 'Serie', 'DocNum', 'Data', 'Cliente', 'CardCode', 'Vendedor', 'Valor', 'Status'].join(';')];
+    const linhas = [['NFe', 'Serie', 'DocNum', 'Data', 'Cliente', 'CardCode', 'Vendedor', 'CFOP', 'Tipo', 'Projeto', 'Valor', 'Status'].join(';')];
     lista.forEach(n => linhas.push([
       n.nfe, n.serie, n.docNum, (n.data || '').slice(0, 10), (n.cliente || '').replace(/;/g, ','),
-      n.cardCode, (n.vendedor || '').replace(/;/g, ','), (n.total || 0).toFixed(2), n.cancelada ? 'CANCELADA' : n.status,
+      n.cardCode, (n.vendedor || '').replace(/;/g, ','), n.cfop, n.ehVenda ? 'Venda' : 'Outra', (n.projeto || '').replace(/;/g, ','),
+      (n.total || 0).toFixed(2), n.cancelada ? 'CANCELADA' : n.status,
     ].map(c => String(c == null ? '' : c)).join(';')));
-    linhas.push(['', '', '', '', 'TOTAL', '', '', totValor.toFixed(2), `${totNFs} NF(s)`].join(';'));
+    linhas.push(['', '', '', '', 'TOTAL', '', '', '', '', '', totValor.toFixed(2), `${totNFs} NF(s)`].join(';'));
     const blob = new Blob(['﻿' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = `faturamento_${new Date().toISOString().slice(0,10)}.csv`; a.click();
@@ -2273,8 +2278,13 @@ const FaturamentoNFs = ({ ctx }) => {
           <option value="todos">Todos os clientes ({porCliente.length})</option>
           {porCliente.map(c => <option key={c.cardCode || c.cliente} value={c.cardCode || c.cliente}>{c.cliente} — {fmtMoney(c.valor)}</option>)}
         </select>
+        <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={tipoNota} onChange={e => setTipoNota(e.target.value)} title="Filtra pelo CFOP: vendas (51xx/61xx) x remessas/transferências">
+          <option value="vendas">Só vendas</option>
+          <option value="todas">Todas as notas</option>
+          <option value="outras">Só não-venda (remessa/transf.)</option>
+        </select>
         <div className="search-box" style={{ flex: '1 1 200px', minWidth: 160 }}><i className="ti ti-search"></i>
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar cliente, NFe, vendedor..." /></div>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar cliente, NFe, vendedor, CFOP..." /></div>
         <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
           <input type="checkbox" checked={incluirCanceladas} onChange={e => setIncluirCanceladas(e.target.checked)} /> incluir canceladas
         </label>
@@ -2346,6 +2356,7 @@ const FaturamentoNFs = ({ ctx }) => {
                         <td className="mono cell-primary" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
                           <i className={'ti ' + (exp ? 'ti-chevron-down' : 'ti-chevron-right')} style={{ fontSize: 12, marginRight: 4, color: 'var(--text-muted)' }}></i>
                           {n.nfe}<span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>/{n.serie}</span>
+                          {n.cfop && <span style={{ display: 'block', fontSize: 9, fontWeight: 400, color: n.ehVenda ? 'var(--text-dim)' : 'var(--orange)' }}>CFOP {n.cfop}</span>}
                         </td>
                         <td className="mono cell-muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(n.data)}</td>
                         <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.cliente}</td>
@@ -2364,6 +2375,7 @@ const FaturamentoNFs = ({ ctx }) => {
                                 <thead><tr style={{ color: 'var(--text-muted)' }}>
                                   <th style={{ paddingLeft: 28, textAlign: 'left' }}>Item</th>
                                   <th style={{ textAlign: 'left' }}>Lote</th>
+                                  <th style={{ textAlign: 'left' }}>Projeto/safra</th>
                                   <th className="num">Qtd</th>
                                   <th className="num" style={{ paddingRight: 16 }}>Valor</th>
                                 </tr></thead>
@@ -2374,6 +2386,7 @@ const FaturamentoNFs = ({ ctx }) => {
                                       <tr key={li + '-' + loi}>
                                         <td style={{ paddingLeft: 28 }}>{loi === 0 ? (l.descricao || l.itemCode) : ''}<span style={{ color: 'var(--text-dim)' }}>{loi === 0 && l.descricao ? ' · ' + l.itemCode : ''}</span></td>
                                         <td className="mono" style={{ color: 'var(--accent-light)', fontWeight: 600 }}>{lo.lote}</td>
+                                        <td className="mono" style={{ color: 'var(--text-muted)' }}>{loi === 0 ? (l.projeto || '—') : ''}</td>
                                         <td className="num mono">{fmtNum(lo.quantidade)}</td>
                                         <td className="num mono" style={{ paddingRight: 16 }}>{fmtMoney(lo.valor)}</td>
                                       </tr>
@@ -2485,6 +2498,7 @@ const Relatorios = ({ ctx }) => {
   const [comissaoPct, setComissaoPct] = useState('');
   // Navegação por cards: null = mostra os cards; senão o relatório escolhido.
   const [relAtivo, setRelAtivo] = useState(null);
+  const [repAberto, setRepAberto] = useState(null); // representante expandido no resumo comercial
   const RELATORIOS_CARDS = [
     { id: 'faturamento', titulo: 'Faturamento — NFs por cliente', desc: 'Notas fiscais de saída do SAP por cliente, com item, lote, quantidade e valor.', icon: 'ti-file-invoice', cor: 'var(--green)', bg: 'var(--green-bg)' },
     { id: 'comercial', titulo: 'Resumo comercial de pedidos', desc: 'Abertos/fechados, unidades, valor e comissão por representante.', icon: 'ti-report-money', cor: 'var(--accent-light)', bg: 'var(--bg-hover)' },
@@ -2562,6 +2576,34 @@ const Relatorios = ({ ctx }) => {
     ctx.showToast('Relatório exportado', `${resumo.representantes.length} representantes`);
   };
 
+  // Pedidos (não cancelados) de um representante — para expandir no relatório.
+  const pedidosDoRep = (nomeVend) => (ctx.pedidos || [])
+    .filter(p => (p.vendedor || '—') === nomeVend && p.status_sap !== 'cancelado')
+    .sort((a, b) => (b.data_emissao || '').localeCompare(a.data_emissao || ''));
+
+  // Export DETALHADO dos pedidos (uma linha por pedido×item), com projeto/safra.
+  const exportarPedidosDetalhado = () => {
+    const peds = (ctx.pedidos || []).filter(p => p.status_sap !== 'cancelado');
+    const clean = s => String(s == null ? '' : s).replace(/[;\n\r]/g, ' ');
+    const rows = [['Pedido', 'Cliente', 'Vendedor', 'Projeto/Safra', 'Emissao', 'Entrega', 'Status', 'Item', 'Descricao', 'Grupo', 'Embalagem', 'Qtd', 'Entregue', 'Saldo', 'Preco unit', 'Valor total'].join(';')];
+    peds.forEach(p => {
+      const st = p.status_sap || (p.tem_saldo ? 'aberto' : 'fechado');
+      (p.itens || []).forEach(it => {
+        rows.push([
+          p.numero, clean(p.cliente), clean(p.vendedor), clean(it.projeto || p.projeto),
+          (p.data_emissao || '').slice(0, 10), (p.data_entrega || '').slice(0, 10), st,
+          it.codigo, clean(it.descricao), clean(it.grupo_nome), clean(it.embalagem),
+          it.qtd_bb, it.qtd_entregue || 0, it.saldo || 0, (it.valor_unitario || 0).toFixed(2), ((it.qtd_bb || 0) * (it.valor_unitario || 0)).toFixed(2),
+        ].map(c => String(c == null ? '' : c)).join(';'));
+      });
+    });
+    const blob = new Blob(['﻿' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `pedidos_detalhado_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    ctx.showToast('Pedidos exportados (detalhado)', `${peds.length} pedidos · ${rows.length - 1} linhas`);
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -2614,9 +2656,16 @@ const Relatorios = ({ ctx }) => {
                 style={{ width: 72, padding: '5px 8px', background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 4, color: 'var(--text)', fontFamily: 'inherit', fontSize: 13 }} />
             </label>
             <button className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 10px' }} onClick={exportarResumo}>
-              <i className="ti ti-file-export"></i> CSV
+              <i className="ti ti-file-export"></i> CSV resumo
+            </button>
+            <button className="btn btn-primary" style={{ fontSize: 12, padding: '6px 10px' }} onClick={exportarPedidosDetalhado}
+              title="CSV de todos os pedidos (por item), com projeto/safra e info completa">
+              <i className="ti ti-file-spreadsheet"></i> Pedidos detalhado
             </button>
           </div>
+        </div>
+        <div style={{ padding: '6px 16px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>
+          <i className="ti ti-info-circle"></i> Clique num representante para ver os pedidos (com projeto/safra).
         </div>
         <div className="metrics" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
           <div className="metric"><div className="metric-label"><i className="ti ti-folder-open"></i> Pedidos abertos</div><div className="metric-value" style={{ color: 'var(--green)' }}>{resumo.abertos}</div><div className="metric-delta">com saldo no SAP</div></div>
@@ -2632,16 +2681,61 @@ const Relatorios = ({ ctx }) => {
             <th className="num">Unidades</th><th className="num">Valor total</th><th className="num">Comissão</th>
           </tr></thead>
           <tbody>
-            {resumo.representantes.map(r => (
-              <tr key={r.vendedor}>
-                <td className="cell-primary">{r.vendedor}</td>
-                <td className="num mono">{r.pedidos}</td>
-                <td className="num mono" style={{ color: r.abertos ? 'var(--green)' : 'var(--text-dim)' }}>{r.abertos}</td>
-                <td className="num mono">{fmtNum(r.unidades)}</td>
-                <td className="num mono cell-primary">{fmtMoney(r.valor)}</td>
-                <td className="num mono" style={{ color: pct ? 'var(--accent-light)' : 'var(--text-dim)' }}>{pct ? fmtMoney(r.valor * pct / 100) : '—'}</td>
-              </tr>
-            ))}
+            {resumo.representantes.map(r => {
+              const exp = repAberto === r.vendedor;
+              const peds = exp ? pedidosDoRep(r.vendedor) : [];
+              return (
+                <React.Fragment key={r.vendedor}>
+                  <tr onClick={() => setRepAberto(exp ? null : r.vendedor)} style={{ cursor: 'pointer', background: exp ? 'var(--bg-hover)' : undefined }}>
+                    <td className="cell-primary"><i className={'ti ' + (exp ? 'ti-chevron-down' : 'ti-chevron-right')} style={{ fontSize: 12, marginRight: 5, color: 'var(--text-muted)' }}></i>{r.vendedor}</td>
+                    <td className="num mono">{r.pedidos}</td>
+                    <td className="num mono" style={{ color: r.abertos ? 'var(--green)' : 'var(--text-dim)' }}>{r.abertos}</td>
+                    <td className="num mono">{fmtNum(r.unidades)}</td>
+                    <td className="num mono cell-primary">{fmtMoney(r.valor)}</td>
+                    <td className="num mono" style={{ color: pct ? 'var(--accent-light)' : 'var(--text-dim)' }}>{pct ? fmtMoney(r.valor * pct / 100) : '—'}</td>
+                  </tr>
+                  {exp && (
+                    <tr>
+                      <td colSpan={6} style={{ padding: 0, background: 'var(--bg-card)' }}>
+                        <div style={{ overflowX: 'auto' }}>
+                          <table style={{ width: '100%', fontSize: 11.5, margin: 0, minWidth: 720 }}>
+                            <thead><tr style={{ color: 'var(--text-muted)' }}>
+                              <th style={{ paddingLeft: 28, textAlign: 'left' }}>Pedido</th>
+                              <th style={{ textAlign: 'left' }}>Cliente</th>
+                              <th style={{ textAlign: 'left' }}>Projeto/safra</th>
+                              <th>Emissão</th><th>Entrega</th><th>Status</th>
+                              <th className="num">Unidades</th><th className="num">Saldo un</th><th className="num" style={{ paddingRight: 16 }}>Valor</th>
+                            </tr></thead>
+                            <tbody>
+                              {peds.length === 0 ? (
+                                <tr><td colSpan={9} style={{ paddingLeft: 28, color: 'var(--text-muted)' }}>Sem pedidos.</td></tr>
+                              ) : peds.map(p => {
+                                const un = (p.itens || []).reduce((a, i) => a + (i.qtd_bb || 0), 0);
+                                const saldoUn = (p.itens || []).reduce((a, i) => a + (i.saldo || 0), 0);
+                                const valor = (p.itens || []).reduce((a, i) => a + (i.qtd_bb || 0) * (i.valor_unitario || 0), 0);
+                                return (
+                                  <tr key={p.numero} style={{ cursor: 'pointer' }} onClick={() => { ctx.setViewingPedido(p); ctx.setScreen('detalhe-pedido'); }}>
+                                    <td className="mono cell-primary" style={{ paddingLeft: 28, fontWeight: 600 }}>{p.numero}</td>
+                                    <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.cliente}</td>
+                                    <td className="mono" style={{ color: 'var(--text-muted)' }}>{p.projeto || '—'}</td>
+                                    <td className="mono cell-muted">{fmtDate(p.data_emissao)}</td>
+                                    <td className="mono cell-muted">{fmtDate(p.data_entrega)}</td>
+                                    <td><StatusSapChip status={p.status_sap || (p.tem_saldo ? 'aberto' : 'fechado')} /></td>
+                                    <td className="num mono">{fmtNum(un)}</td>
+                                    <td className="num mono" style={{ color: saldoUn ? 'var(--green)' : 'var(--text-dim)' }}>{fmtNum(saldoUn)}</td>
+                                    <td className="num mono" style={{ paddingRight: 16, fontWeight: 600 }}>{fmtMoney(valor)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
           </tbody>
           <tfoot><tr style={{ borderTop: '2px solid var(--border-strong)', fontWeight: 700 }}>
             <td className="cell-primary">TOTAL</td>
@@ -9414,6 +9508,7 @@ const Configuracoes = ({ ctx }) => {
       tem_saldo: p.tem_saldo,
       status_sap: p.status_sap,
       cancelado: p.cancelado,
+      projeto: p.projeto || '',   // Projeto SAP = SAFRA
       itens: (p.itens || []).map(it => ({
         codigo: it.codigo,
         descricao: it.descricao,
@@ -9432,6 +9527,7 @@ const Configuracoes = ({ ctx }) => {
         sap_line_num: it.sap_line_num,
         saldo: it.saldo,
         armazem: it.armazem,
+        projeto: it.projeto || '',
       }))
     }));
 

@@ -46,10 +46,13 @@ function construirItemInfo(itens: any[], grupos: any[]): ItemInfo {
  */
 function resumirLinhas(p: any, itemInfo: ItemInfo) {
   const linhas: any[] = Array.isArray(p.DocumentLines) ? p.DocumentLines : [];
+  // Projeto (usado como SAFRA) — vem por linha (ProjectCode). Guarda os distintos.
+  const projetos = Array.from(new Set(linhas.map((l: any) => l.ProjectCode).filter(Boolean)));
   return {
     qtd_total_bb: linhas.reduce((a: number, l: any) => a + (Number(l.Quantity) || 0), 0),
     qtd_saldo_bb: linhas.reduce((a: number, l: any) => a + saldoLinha(l), 0),
     saldo_aberto: linhas.reduce((a: number, l: any) => a + saldoLinha(l) * (Number(l.Price) || 0), 0),
+    projeto: projetos.join(', '),
     itens: linhas.map((l: any) => {
       const info = itemInfo[l.ItemCode] || { grupo_codigo: null, grupo_nome: '' };
       return {
@@ -64,6 +67,7 @@ function resumirLinhas(p: any, itemInfo: ItemInfo) {
         saldo: saldoLinha(l),
         valor_unitario: Number(l.Price) || 0,
         armazem: l.WarehouseCode,
+        projeto: l.ProjectCode || '',
       };
     }),
   };
@@ -106,67 +110,6 @@ export class ApiController {
     return true;
   }
 
-  // -------- DIAG TIPOS (TEMPORÁRIO / SOMENTE LEITURA) --------
-  // Descobre onde vivem a "Utilização" (Usage) da NF e o "Projeto/safra" do
-  // pedido. REMOVER após confirmar os campos.
-  @Public()
-  @Get('diag-tipos')
-  async diagTipos(@Query('inv') inv?: string, @Query('ord') ord?: string) {
-    const filtra = (obj: any, re: RegExp) => {
-      const out: Record<string, any> = {};
-      if (obj) for (const k of Object.keys(obj)) {
-        const v = obj[k];
-        if (re.test(k) && (typeof v !== 'object' || v === null)) out[k] = v;
-      }
-      return out;
-    };
-    // Invoice (usa a NFe 119 = DocEntry 150 por padrão)
-    const invoice = await this.sap.getInvoiceFull(inv ? Number(inv) : 150).catch(() => null);
-    const invLinha0 = invoice?.DocumentLines?.[0] || {};
-    // Order: pega um pedido recente
-    let orderFull: any = null;
-    try {
-      const peds = await this.sap.getPedidosAbertos();
-      const alvo = ord ? peds.find((p: any) => String(p.DocNum) === String(ord)) : peds[0];
-      if (alvo) orderFull = await this.sap.getOrderFull(alvo.DocEntry);
-    } catch (e) {}
-    const ordLinha0 = orderFull?.DocumentLines?.[0] || {};
-    const reUso = /usage|uso|util|cfop|fiscal|oper/i;
-    const reProj = /project|proj|safra/i;
-    // Tenta descobrir a entidade de Utilização (Usage master) na Service Layer.
-    const usageInt = invLinha0?.Usage;
-    const tentativas: Record<string, any> = {};
-    for (const ent of ['Usages', 'Usage', 'UsageForNFM', 'USG1', 'CfopCodes']) {
-      try {
-        const r = await this.sap.getRaw(`/${ent}?$top=2`);
-        tentativas[ent] = { ok: true, amostra: (r?.value || r)?.[0] || r };
-      } catch (e: any) {
-        tentativas[ent] = { ok: false, status: e?.response?.status };
-      }
-    }
-    let usageResolvido: any = null;
-    if (usageInt != null) {
-      for (const ent of ['Usages', 'Usage']) {
-        try { usageResolvido = { ent, doc: await this.sap.getRaw(`/${ent}(${usageInt})`) }; break; } catch (e) {}
-      }
-    }
-    return {
-      usageInt, tentativas, usageResolvido,
-      invoice: {
-        DocNum: invoice?.DocNum, SequenceSerial: invoice?.SequenceSerial,
-        headerUso: filtra(invoice, reUso),
-        headerProj: filtra(invoice, reProj),
-        linha0Uso: filtra(invLinha0, reUso),
-        linha0Proj: filtra(invLinha0, reProj),
-      },
-      order: {
-        DocNum: orderFull?.DocNum,
-        headerProj: filtra(orderFull, reProj),
-        linha0Proj: filtra(ordLinha0, reProj),
-      },
-    };
-  }
-
   // -------- FATURAMENTO (NFs de Saída) POR PERÍODO --------
   // Lista as Notas Fiscais de Saída para o relatório de faturamento por cliente.
   // Período padrão: últimos 90 dias. SOMENTE LEITURA no SAP.
@@ -187,20 +130,34 @@ export class ApiController {
         for (const v of vendedores as any[]) {
           nomeVend[String(v.SalesEmployeeCode)] = v.SalesEmployeeName;
         }
-        return (invs as any[]).map((i) => ({
-          docNum: i.DocNum,
-          nfe: i.SequenceSerial,
-          serie: i.SeriesString,
-          cardCode: i.CardCode,
-          cliente: i.CardName,
-          data: i.DocDate,
-          vencimento: i.DocDueDate,
-          total: Number(i.DocTotal) || 0,
-          moeda: i.DocCurrency,
-          vendedor: nomeVend[String(i.SalesPersonCode)] || '',
-          cancelada: i.Cancelled === 'tYES',
-          status: i.DocumentStatus === 'bost_Close' ? 'fechada' : 'aberta',
-        }));
+        // Venda = todas as linhas com CFOP de venda (51xx/61xx nas faixas 5101-5123).
+        // O que não é venda (remessa simbólica 5934/6934, transferência 5152 etc.)
+        // fica marcado como não-venda para poder ser filtrado.
+        const CFOP_VENDA = /^[56]1(0[1-9]|1[0-9]|2[0-3])$/;
+        return (invs as any[]).map((i) => {
+          const linhas = Array.isArray(i.DocumentLines) ? i.DocumentLines : [];
+          const cfops = Array.from(new Set(linhas.map((l: any) => l.CFOPCode).filter(Boolean)));
+          const projetos = Array.from(new Set(linhas.map((l: any) => l.ProjectCode).filter(Boolean)));
+          const ehVenda = cfops.length > 0 && cfops.every((c: any) => CFOP_VENDA.test(String(c)));
+          return {
+            docNum: i.DocNum,
+            nfe: i.SequenceSerial,
+            serie: i.SeriesString,
+            cardCode: i.CardCode,
+            cliente: i.CardName,
+            data: i.DocDate,
+            vencimento: i.DocDueDate,
+            total: Number(i.DocTotal) || 0,
+            moeda: i.DocCurrency,
+            vendedor: nomeVend[String(i.SalesPersonCode)] || '',
+            cancelada: i.Cancelled === 'tYES',
+            status: i.DocumentStatus === 'bost_Close' ? 'fechada' : 'aberta',
+            cfop: cfops.join(', '),
+            cfops,
+            projeto: projetos.join(', '),
+            ehVenda,
+          };
+        });
       },
       300000,
     );
@@ -222,6 +179,8 @@ export class ApiController {
       quantidade: Number(l.Quantity) || 0,
       precoUnitario: Number(l.Price) || 0,
       valorLinha: Number(l.LineTotal) || (Number(l.Price) || 0) * (Number(l.Quantity) || 0),
+      cfop: l.CFOPCode || '',
+      projeto: l.ProjectCode || '',
       armazem: l.WarehouseCode,
       lotes: (l.BatchNumbers || []).map((b: any) => ({
         lote: b.BatchNumber,
