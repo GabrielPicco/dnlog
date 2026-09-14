@@ -402,6 +402,36 @@ export class ApiController {
   }
 
   // -------- ESTOQUE POR LOTE (view Semantic Layer CALCULOSALDOITENS) --------
+  // DIAG TEMPORÁRIO (somente leitura, sem dado sensível): quantos lotes têm/faltam
+  // grupo_nome e quantos itens do catálogo vieram. Para diagnosticar o filtro de grupo.
+  @Public()
+  @Get('diag-grupos')
+  async diagGrupos() {
+    const [linhas, itens, grupos] = await Promise.all([
+      this.sap.getSaldoPorLote?.() ?? [],
+      this.sap.getItems?.().catch(() => []) ?? [],
+      this.sap.getItemGroups?.().catch(() => []) ?? [],
+    ]);
+    const itemInfo = construirItemInfo(itens as any[], grupos as any[]);
+    let comGrupo = 0, semGrupo = 0;
+    const distintos = new Set<string>();
+    const semGrupoItens = new Set<string>();
+    for (const r of linhas as any[]) {
+      const g = (itemInfo[r.CodigoItem] || {}).grupo_nome || '';
+      if (g) { comGrupo++; distintos.add(g); }
+      else { semGrupo++; if (semGrupoItens.size < 15) semGrupoItens.add(r.CodigoItem); }
+    }
+    return {
+      totalLinhas: (linhas as any[]).length,
+      totalItensCatalogo: (itens as any[]).length,
+      totalGruposCatalogo: (grupos as any[]).length,
+      lotesComGrupo: comGrupo,
+      lotesSemGrupo: semGrupo,
+      gruposDistintos: Array.from(distintos).sort(),
+      amostraItensSemGrupo: Array.from(semGrupoItens),
+    };
+  }
+
   @Get('estoque-lotes')
   async getEstoqueLotes() {
    return this.cache.wrap('estoque-lotes', async () => {
