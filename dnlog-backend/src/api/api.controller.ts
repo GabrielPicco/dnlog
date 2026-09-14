@@ -405,6 +405,22 @@ export class ApiController {
    });
   }
 
+  // DIAG TEMPORÁRIO: campos de cancelamento das Invoices de uma NFe. REMOVER.
+  @Public()
+  @Get('diag-cancel')
+  async diagCancel(@Query('nfe') nfe?: string) {
+    const docs = await this.sap.getInvoicesPorNfe(nfe || '110');
+    return docs.map((d: any) => {
+      const cancelKeys: Record<string, any> = {};
+      for (const k of Object.keys(d)) if (/cancel/i.test(k)) cancelKeys[k] = d[k];
+      return {
+        DocEntry: d.DocEntry, DocNum: d.DocNum, SequenceSerial: d.SequenceSerial,
+        DocTotal: d.DocTotal, DocumentStatus: d.DocumentStatus, Cancelled: d.Cancelled,
+        cancelKeys,
+      };
+    });
+  }
+
   // -------- ESTOQUE POR LOTE (view Semantic Layer CALCULOSALDOITENS) --------
   @Get('estoque-lotes')
   async getEstoqueLotes() {

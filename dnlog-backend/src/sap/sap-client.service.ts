@@ -554,6 +554,20 @@ export class SapClientService implements OnModuleDestroy {
     }
   }
 
+  /** [LEITURA/DIAG] Todas as Invoices completas com um dado SequenceSerial (NFe). */
+  async getInvoicesPorNfe(nfe: number | string): Promise<any[]> {
+    await this.ensureSession();
+    const n = Number(nfe);
+    if (!n) return [];
+    const resp = await this.axios.get('/Invoices', {
+      params: { $select: 'DocEntry', $filter: `SequenceSerial eq ${n}` },
+    });
+    const entries = (resp.data?.value || []).map((x: any) => x.DocEntry);
+    const full: any[] = [];
+    for (const e of entries) full.push(await this.getInvoiceFull(e));
+    return full;
+  }
+
   /**
    * [LEITURA] Lista as Notas Fiscais de Saída (Invoices/OINV) do período, para o
    * relatório de faturamento por cliente. Campos-chave apenas (sem linhas).
