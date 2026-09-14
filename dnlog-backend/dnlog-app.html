@@ -5449,7 +5449,7 @@ const NovaOE = ({ ctx, editMode }) => {
   const [veiculo_reboque, setVeiculoReboque] = useState(initial.veiculo_reboque || '');
   const [data_prevista, setDataPrevista] = useState(initial.data_prevista || addDays(todayISO(), 1));
   const [hora_prevista, setHoraPrevista] = useState(initial.hora_prevista || '08:00');
-  const [doca, setDoca] = useState(initial.doca || 'Doca 03');
+  const [doca, setDoca] = useState(initial.doca || '');
   const [observacoes, setObservacoes] = useState(initial.observacoes || '');
 
   const [busca, setBusca] = useState('');
@@ -6272,8 +6272,6 @@ const NovaOE = ({ ctx, editMode }) => {
                       style={{ textTransform: 'uppercase' }}
                     />
                   </div>
-                  <div className="field"><label className="field-label">Doca / Local</label>
-                    <input className="input" value={doca} onChange={e => setDoca(e.target.value)} placeholder="Doca 03" /></div>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, marginTop: 8, paddingTop: 16, borderTop: '1px dashed var(--border)' }}>
