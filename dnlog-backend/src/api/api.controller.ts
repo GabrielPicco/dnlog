@@ -150,7 +150,10 @@ export class ApiController {
             total: Number(i.DocTotal) || 0,
             moeda: i.DocCurrency,
             vendedor: nomeVend[String(i.SalesPersonCode)] || '',
-            cancelada: i.Cancelled === 'tYES',
+            // Cancelada = original cancelado (Cancelled tYES / CancelStatus csYes)
+            // OU a nota de cancelamento (CancelStatus csCancellation). Qualquer
+            // CancelStatus != csNo entra aqui — some por padrão no relatório.
+            cancelada: i.Cancelled === 'tYES' || (i.CancelStatus && i.CancelStatus !== 'csNo'),
             status: i.DocumentStatus === 'bost_Close' ? 'fechada' : 'aberta',
             cfop: cfops.join(', '),
             cfops,
@@ -403,22 +406,6 @@ export class ApiController {
     }
     return linhas;
    });
-  }
-
-  // DIAG TEMPORÁRIO: campos de cancelamento das Invoices de uma NFe. REMOVER.
-  @Public()
-  @Get('diag-cancel')
-  async diagCancel(@Query('nfe') nfe?: string) {
-    const docs = await this.sap.getInvoicesPorNfe(nfe || '110');
-    return docs.map((d: any) => {
-      const cancelKeys: Record<string, any> = {};
-      for (const k of Object.keys(d)) if (/cancel/i.test(k)) cancelKeys[k] = d[k];
-      return {
-        DocEntry: d.DocEntry, DocNum: d.DocNum, SequenceSerial: d.SequenceSerial,
-        DocTotal: d.DocTotal, DocumentStatus: d.DocumentStatus, Cancelled: d.Cancelled,
-        cancelKeys,
-      };
-    });
   }
 
   // -------- ESTOQUE POR LOTE (view Semantic Layer CALCULOSALDOITENS) --------

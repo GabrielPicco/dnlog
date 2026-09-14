@@ -554,20 +554,6 @@ export class SapClientService implements OnModuleDestroy {
     }
   }
 
-  /** [LEITURA/DIAG] Todas as Invoices completas com um dado SequenceSerial (NFe). */
-  async getInvoicesPorNfe(nfe: number | string): Promise<any[]> {
-    await this.ensureSession();
-    const n = Number(nfe);
-    if (!n) return [];
-    const resp = await this.axios.get('/Invoices', {
-      params: { $select: 'DocEntry', $filter: `SequenceSerial eq ${n}` },
-    });
-    const entries = (resp.data?.value || []).map((x: any) => x.DocEntry);
-    const full: any[] = [];
-    for (const e of entries) full.push(await this.getInvoiceFull(e));
-    return full;
-  }
-
   /**
    * [LEITURA] Lista as Notas Fiscais de Saída (Invoices/OINV) do período, para o
    * relatório de faturamento por cliente. Campos-chave apenas (sem linhas).
@@ -577,7 +563,7 @@ export class SapClientService implements OnModuleDestroy {
     // DocumentLines vem embutido pelo $select (não usar $expand). Traz CFOP e
     // ProjectCode (safra) por linha, usados para classificar o tipo da NF.
     const select =
-      'DocEntry,DocNum,SequenceSerial,SeriesString,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,DocumentStatus,SalesPersonCode,DocumentLines';
+      'DocEntry,DocNum,SequenceSerial,SeriesString,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,CancelStatus,DocumentStatus,SalesPersonCode,DocumentLines';
     // Monta o $filter de data. O SAP B1 Service Layer costuma aceitar a data
     // entre aspas ('2026-06-13'); alguns ambientes exigem sem aspas. Tentamos
     // as duas formas antes de desistir (não quebra o relatório por formato).
