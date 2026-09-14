@@ -216,6 +216,9 @@ export class ApiController {
   // -------- PEDIDOS --------
   @Get('pedidos')
   async getPedidos() {
+   // Não cacheia se o catálogo de itens vier vazio (senão o grupo dos itens some
+   // e o filtro de grupo quebra até o cache expirar).
+   let catalogoOk = true;
    return this.cache.wrap('pedidos', async () => {
     // Busca tudo em paralelo: pedidos + catalogos para enriquecer
     // (nome do vendedor e grupo de cada item). Os catalogos sao opcionais —
@@ -227,6 +230,7 @@ export class ApiController {
       this.sap.getSalesPersons?.().catch(() => []) ?? [],
     ]);
 
+    catalogoOk = (itens as any[]).length > 0;
     const itemInfo = construirItemInfo(itens, grupos);
 
     // Nome do vendedor por código (catálogo SalesPersons).
@@ -252,7 +256,7 @@ export class ApiController {
         ...resumirLinhas(p, itemInfo),
       };
     });
-   });
+   }, undefined, () => catalogoOk);
   }
 
   // -------- RESUMO DE ENTREGAS (para o gráfico do painel) --------
@@ -402,42 +406,11 @@ export class ApiController {
   }
 
   // -------- ESTOQUE POR LOTE (view Semantic Layer CALCULOSALDOITENS) --------
-  // DIAG TEMPORÁRIO (somente leitura, sem dado sensível): quantos lotes têm/faltam
-  // grupo_nome e quantos itens do catálogo vieram. Para diagnosticar o filtro de grupo.
-  @Public()
-  @Get('diag-grupos')
-  async diagGrupos() {
-    let erroItens: string | null = null;
-    let itens: any[] = [];
-    try { itens = (await this.sap.getItems()) || []; }
-    catch (e: any) { erroItens = e?.response?.data?.error?.message?.value || e?.response?.data || e?.message || String(e); }
-    const [linhas, grupos] = await Promise.all([
-      this.sap.getSaldoPorLote?.() ?? [],
-      this.sap.getItemGroups?.().catch(() => []) ?? [],
-    ]);
-    const itemInfo = construirItemInfo(itens as any[], grupos as any[]);
-    let comGrupo = 0, semGrupo = 0;
-    const distintos = new Set<string>();
-    const semGrupoItens = new Set<string>();
-    for (const r of linhas as any[]) {
-      const g = (itemInfo[r.CodigoItem] || {}).grupo_nome || '';
-      if (g) { comGrupo++; distintos.add(g); }
-      else { semGrupo++; if (semGrupoItens.size < 15) semGrupoItens.add(r.CodigoItem); }
-    }
-    return {
-      erroItens,
-      totalLinhas: (linhas as any[]).length,
-      totalItensCatalogo: (itens as any[]).length,
-      totalGruposCatalogo: (grupos as any[]).length,
-      lotesComGrupo: comGrupo,
-      lotesSemGrupo: semGrupo,
-      gruposDistintos: Array.from(distintos).sort(),
-      amostraItensSemGrupo: Array.from(semGrupoItens),
-    };
-  }
-
   @Get('estoque-lotes')
   async getEstoqueLotes() {
+   // Não cacheia se o catálogo de itens vier vazio (senão os lotes ficam sem
+   // grupo_nome e o filtro de grupo quebra até o cache expirar).
+   let catalogoOk = true;
    return this.cache.wrap('estoque-lotes', async () => {
     const [linhas, itens, grupos, pesos] = await Promise.all([
       this.sap.getSaldoPorLote?.() ?? [],
@@ -445,6 +418,7 @@ export class ApiController {
       this.sap.getItemGroups?.().catch(() => []) ?? [],
       this.sap.getPesosPorLote?.().catch(() => []) ?? [],
     ]);
+    catalogoOk = (itens as any[]).length > 0;
     const itemInfo = construirItemInfo(itens, grupos);
     // Peso líquido por big bag (UDF U_AGRT_PesoLiquido) indexado por item|lote.
     const pesoMap: Record<string, number> = {};
@@ -473,12 +447,13 @@ export class ApiController {
         peso_bb: r.Lote ? (pesoMap[r.CodigoItem + '|' + r.Lote] ?? null) : null,
       };
     });
-   });
+   }, undefined, () => catalogoOk);
   }
 
   // -------- ESTOQUE EM/DE TERCEIROS (armazéns DN_EMTER e DN_DETER) --------
   @Get('estoque-terceiros')
   async getEstoqueTerceiros() {
+    let catalogoOk = true;
     return this.cache.wrap('estoque-terceiros', async () => {
       // Fonte: CALCULOSALDOITENS (a mesma dos lotes) — agora que há saldo nos
       // armazéns de terceiros, ela traz LOTE e validade deles também. Filtramos
@@ -489,6 +464,7 @@ export class ApiController {
         this.sap.getItemGroups?.().catch(() => []) ?? [],
         this.sap.getPesosPorLote?.().catch(() => []) ?? [],
       ]);
+      catalogoOk = (itens as any[]).length > 0;
       const itemInfo = construirItemInfo(itens, grupos);
       const pesoMap: Record<string, number> = {};
       for (const b of pesos as any[]) {
@@ -524,7 +500,7 @@ export class ApiController {
             peso_bb: r.Lote ? (pesoMap[r.CodigoItem + '|' + r.Lote] ?? null) : null,
           };
         });
-    }, 600000); // 10 min — muda pouco
+    }, 600000, () => catalogoOk); // 10 min — muda pouco; não cacheia catálogo vazio
   }
 
   @Get('itens/:codigo/lotes')
