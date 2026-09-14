@@ -407,9 +407,12 @@ export class ApiController {
   @Public()
   @Get('diag-grupos')
   async diagGrupos() {
-    const [linhas, itens, grupos] = await Promise.all([
+    let erroItens: string | null = null;
+    let itens: any[] = [];
+    try { itens = (await this.sap.getItems()) || []; }
+    catch (e: any) { erroItens = e?.response?.data?.error?.message?.value || e?.response?.data || e?.message || String(e); }
+    const [linhas, grupos] = await Promise.all([
       this.sap.getSaldoPorLote?.() ?? [],
-      this.sap.getItems?.().catch(() => []) ?? [],
       this.sap.getItemGroups?.().catch(() => []) ?? [],
     ]);
     const itemInfo = construirItemInfo(itens as any[], grupos as any[]);
@@ -422,6 +425,7 @@ export class ApiController {
       else { semGrupo++; if (semGrupoItens.size < 15) semGrupoItens.add(r.CodigoItem); }
     }
     return {
+      erroItens,
       totalLinhas: (linhas as any[]).length,
       totalItensCatalogo: (itens as any[]).length,
       totalGruposCatalogo: (grupos as any[]).length,
