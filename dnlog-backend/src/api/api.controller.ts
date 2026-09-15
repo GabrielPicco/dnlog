@@ -408,23 +408,27 @@ export class ApiController {
    });
   }
 
-  // DIAG TEMPORÁRIO (read-only): descobrir o campo de adiantamento/saldo do cliente.
-  @Public()
-  @Get('diag-adiant')
-  async diagAdiant(@Query('card') card?: string) {
-    if (card) {
-      const bp = await this.sap.getBusinessPartnerFull(card);
-      const campos: Record<string, any> = {};
-      for (const k of Object.keys(bp)) if (/balance|advance|adiant|down|credit|saldo|prepay|deposit/i.test(k)) campos[k] = bp[k];
-      return { CardCode: bp.CardCode, CardName: bp.CardName, campos };
-    }
-    const todos = await this.sap.getClientesSaldo();
-    const comSaldo = (todos as any[]).filter(b => Number(b.CurrentAccountBalance) !== 0);
-    return {
-      totalClientes: (todos as any[]).length,
-      comSaldoNaoZero: comSaldo.length,
-      amostra: comSaldo.slice(0, 25).map(b => ({ CardCode: b.CardCode, CardName: b.CardName, CurrentAccountBalance: b.CurrentAccountBalance })),
-    };
+  // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
+  // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
+  // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.
+  @Get('clientes-saldo')
+  async getClientesSaldo() {
+    return this.cache.wrap('clientes-saldo', async () => {
+      const cli = await this.sap.getClientesSaldo();
+      return (cli as any[])
+        .map((b) => {
+          const saldo = Number(b.CurrentAccountBalance) || 0;
+          return {
+            cardCode: b.CardCode,
+            cliente: b.CardName,
+            saldo,
+            adiantamento: saldo < 0 ? -saldo : 0, // crédito a favor do cliente
+            a_receber: saldo > 0 ? saldo : 0,
+          };
+        })
+        .filter((c) => c.saldo !== 0)
+        .sort((a, b) => b.adiantamento - a.adiantamento || b.a_receber - a.a_receber);
+    }, 300000);
   }
 
   // -------- ESTOQUE POR LOTE (view Semantic Layer CALCULOSALDOITENS) --------

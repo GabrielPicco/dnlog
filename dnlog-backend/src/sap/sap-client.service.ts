@@ -337,13 +337,6 @@ export class SapClientService implements OnModuleDestroy {
     }
   }
 
-  /** [LEITURA/DIAG] BusinessPartner completo (todos os campos) — p/ inspeção. */
-  async getBusinessPartnerFull(cardCode: string): Promise<any> {
-    await this.ensureSession();
-    const resp = await this.axios.get(`/BusinessPartners('${cardCode}')`);
-    return resp.data;
-  }
-
   /** [LEITURA] Clientes com saldo em conta corrente (adiantamento = saldo credor). */
   async getClientesSaldo(): Promise<any[]> {
     await this.ensureSession();

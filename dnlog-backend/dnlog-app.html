@@ -1368,6 +1368,11 @@ const DNLOG_API = {
     if (!r.ok) throw new Error('GET /nf-lotes ' + r.status);
     return r.json();
   },
+  async listarClientesSaldo() {
+    const r = await fetch(`${DNLOG_API_BASE}/clientes-saldo`, { headers: dnlogAuthHeaders() });
+    if (!r.ok) throw new Error('GET /clientes-saldo ' + r.status);
+    return r.json();
+  },
 };
 window.DNLOG_API = DNLOG_API;
 
@@ -2417,6 +2422,115 @@ const FaturamentoNFs = ({ ctx }) => {
   );
 };
 
+// Adiantamentos / saldo por cliente. Lê o CurrentAccountBalance do parceiro no
+// SAP: negativo = crédito/adiantamento a favor do cliente; positivo = a receber.
+const FinanceiroClientes = ({ ctx }) => {
+  const [dados, setDados] = useState(null);
+  const [erro, setErro] = useState('');
+  const [carregando, setCarregando] = useState(false);
+  const [q, setQ] = useState('');
+  const [modo, setModo] = useState('adiantamento'); // 'adiantamento' | 'receber' | 'todos'
+
+  const carregar = async () => {
+    setCarregando(true); setErro('');
+    try { const r = await DNLOG_API.listarClientesSaldo(); setDados(Array.isArray(r) ? r : []); }
+    catch (e) { setErro((e && e.message) || 'falha'); setDados([]); }
+    finally { setCarregando(false); }
+  };
+  useEffect(() => { carregar(); }, []);
+
+  const lista = useMemo(() => {
+    let l = dados || [];
+    if (modo === 'adiantamento') l = l.filter(c => c.adiantamento > 0);
+    else if (modo === 'receber') l = l.filter(c => c.a_receber > 0);
+    if (q) { const ql = q.toLowerCase(); l = l.filter(c => (c.cliente || '').toLowerCase().includes(ql) || (c.cardCode || '').toLowerCase().includes(ql)); }
+    return l;
+  }, [dados, modo, q]);
+
+  const totAdi = (dados || []).reduce((a, c) => a + (c.adiantamento || 0), 0);
+  const totRec = (dados || []).reduce((a, c) => a + (c.a_receber || 0), 0);
+
+  const exportar = () => {
+    const rows = [['Cliente', 'CardCode', 'Adiantamento', 'A receber', 'Saldo'].join(';')];
+    lista.forEach(c => rows.push([(c.cliente || '').replace(/;/g, ','), c.cardCode, (c.adiantamento || 0).toFixed(2), (c.a_receber || 0).toFixed(2), (c.saldo || 0).toFixed(2)].join(';')));
+    const blob = new Blob(['﻿' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `adiantamentos_clientes_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    ctx.showToast && ctx.showToast('Exportado', `${lista.length} cliente(s)`);
+  };
+
+  return (
+    <div className="panel" style={{ marginBottom: 16 }}>
+      <div className="panel-header" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <i className="ti ti-wallet" style={{ color: 'var(--accent-light)' }}></i>
+          <strong style={{ fontSize: 14 }}>Adiantamentos / saldo por cliente</strong>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>SAP · conta corrente do cliente</span>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 2, background: 'var(--bg-card)', borderRadius: 5, padding: 2 }}>
+            {[['adiantamento', 'Adiantados'], ['receber', 'A receber'], ['todos', 'Todos']].map(([v, l]) => (
+              <button key={v} onClick={() => setModo(v)} style={{
+                background: modo === v ? 'var(--accent)' : 'transparent', color: modo === v ? 'white' : 'var(--text-muted)',
+                border: 'none', padding: '4px 9px', borderRadius: 3, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 700,
+              }}>{l}</button>
+            ))}
+          </div>
+          <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={carregar} disabled={carregando}>
+            <i className={'ti ' + (carregando ? 'ti-loader-2' : 'ti-refresh')}></i> {carregando ? 'Carregando…' : 'Atualizar'}
+          </button>
+          <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportar} disabled={!lista.length}>
+            <i className="ti ti-download"></i> CSV
+          </button>
+        </div>
+      </div>
+
+      <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="search-box" style={{ flex: '1 1 220px', minWidth: 160 }}><i className="ti ti-search"></i>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar cliente ou código..." /></div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 24, padding: '10px 16px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Total adiantado (crédito)</div>
+          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--green)' }}>{fmtMoney(totAdi)}</div></div>
+        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Total a receber</div>
+          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--orange)' }}>{fmtMoney(totRec)}</div></div>
+      </div>
+
+      {erro ? (
+        <div className="empty" style={{ padding: 24 }}><i className="ti ti-alert-triangle"></i><div>Não foi possível carregar</div><div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{erro}</div></div>
+      ) : carregando && !dados ? (
+        <div className="empty" style={{ padding: 24 }}><i className="ti ti-loader-2"></i><div>Consultando saldos no SAP…</div></div>
+      ) : lista.length === 0 ? (
+        <div className="empty" style={{ padding: 24 }}><i className="ti ti-wallet-off"></i><div>Nenhum cliente neste filtro</div></div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', fontSize: 12.5, minWidth: 520 }}>
+            <thead><tr>
+              <th>Cliente</th>
+              <th className="num">Adiantamento</th>
+              <th className="num">A receber</th>
+            </tr></thead>
+            <tbody>
+              {lista.map((c, i) => (
+                <tr key={(c.cardCode || '') + i}>
+                  <td><div className="cell-primary" style={{ fontSize: 13 }}>{c.cliente}</div><div className="cell-muted mono" style={{ fontSize: 11 }}>{c.cardCode}</div></td>
+                  <td className="num mono" style={{ fontWeight: 700, color: c.adiantamento > 0 ? 'var(--green)' : 'var(--text-dim)' }}>{c.adiantamento > 0 ? fmtMoney(c.adiantamento) : '—'}</td>
+                  <td className="num mono" style={{ color: c.a_receber > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{c.a_receber > 0 ? fmtMoney(c.a_receber) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ padding: '8px 16px', fontSize: 10.5, color: 'var(--text-dim)' }}>
+        Baseado no saldo de conta corrente do cliente no SAP: saldo credor = adiantamento pago; saldo devedor = a receber. Read-only.
+      </div>
+    </div>
+  );
+};
+
 const Relatorios = ({ ctx }) => {
   const rel = useMemo(() => {
     const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
@@ -2508,6 +2622,7 @@ const Relatorios = ({ ctx }) => {
   const [repAberto, setRepAberto] = useState(null); // representante expandido no resumo comercial
   const RELATORIOS_CARDS = [
     { id: 'faturamento', titulo: 'Faturamento — NFs por cliente', desc: 'Notas fiscais de saída do SAP por cliente, com item, lote, quantidade e valor.', icon: 'ti-file-invoice', cor: 'var(--green)', bg: 'var(--green-bg)' },
+    { id: 'financeiro', titulo: 'Adiantamentos por cliente', desc: 'Valor pago/adiantado por cada cliente (saldo de conta corrente no SAP).', icon: 'ti-wallet', cor: 'var(--green)', bg: 'var(--green-bg)' },
     { id: 'comercial', titulo: 'Resumo comercial de pedidos', desc: 'Abertos/fechados, unidades, valor e comissão por representante.', icon: 'ti-report-money', cor: 'var(--accent-light)', bg: 'var(--bg-hover)' },
     { id: 'carteira', titulo: 'Carteira aberta', desc: 'Saldo a embarcar por cultivar e por vendedor, OEs por status e pedidos atrasados.', icon: 'ti-chart-bar', cor: 'var(--blue)', bg: 'var(--blue-bg)' },
     { id: 'divergencias', titulo: 'Divergências de entrega', desc: 'Conferência SAP × DNLog (entregue × faturado).', icon: 'ti-scale', cor: 'var(--orange)', bg: 'var(--orange-bg)' },
@@ -2646,6 +2761,9 @@ const Relatorios = ({ ctx }) => {
 
       {/* ===== FATURAMENTO (NFs de saída) POR CLIENTE ===== */}
       {relAtivo === 'faturamento' && <FaturamentoNFs ctx={ctx} />}
+
+      {/* ===== ADIANTAMENTOS / SALDO POR CLIENTE ===== */}
+      {relAtivo === 'financeiro' && <FinanceiroClientes ctx={ctx} />}
 
       {/* ===== RESUMO COMERCIAL DE PEDIDOS (abertos/fechados, unidades, valor, comissão) ===== */}
       {relAtivo === 'comercial' && (
