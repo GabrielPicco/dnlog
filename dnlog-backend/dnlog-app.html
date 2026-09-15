@@ -1482,6 +1482,7 @@ const App = ({ usuario, onLogout }) => {
   const [state, setState] = useState(loadState);
   const [toast, setToast] = useState(null);
   const [editingOE, setEditingOE] = useState(null);
+  const [editingOECompra, setEditingOECompra] = useState(null); // OE de retirada em edição
   const [viewingOE, setViewingOE] = useState(null);
   const [conferenceOE, setConferenceOE] = useState(null);
   const [viewingPedido, setViewingPedido] = useState(null);
@@ -1966,6 +1967,7 @@ const App = ({ usuario, onLogout }) => {
     pedidos: pedidosComSaldo,
     lotes: lotesComSaldo,
     editingOE, setEditingOE,
+    editingOECompra, setEditingOECompra,
     viewingOE, setViewingOE,
     conferenceOE, setConferenceOE,
     viewingPedido, setViewingPedido,
@@ -4691,7 +4693,7 @@ const EmbarquesFornecedores = ({ ctx }) => {
       {aba === 'retirada' ? (
         <div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
-            <button className="btn btn-primary" onClick={() => ctx.setScreen('nova-oe-fornecedor')}>
+            <button className="btn btn-primary" onClick={() => { ctx.setEditingOECompra(null); ctx.setScreen('nova-oe-fornecedor'); }}>
               <i className="ti ti-plus"></i> Nova OE de retirada
             </button>
           </div>
@@ -4754,6 +4756,12 @@ const EmbarquesFornecedores = ({ ctx }) => {
                             }}>
                             <i className="ti ti-printer"></i>
                           </button>
+                          {ctx.podeEditar && o.status !== 'CANCELADA' && (
+                            <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11, borderColor: 'var(--blue)', color: 'var(--blue)' }} title="Editar OE"
+                              onClick={() => { ctx.setEditingOECompra(o); ctx.setScreen('nova-oe-fornecedor'); }}>
+                              <i className="ti ti-edit"></i>
+                            </button>
+                          )}
                           {ctx.podeEditar && o.status !== 'CANCELADA' && (
                             <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} title="Cancelar OE"
                               onClick={() => { if (confirm(`Cancelar a OE ${o.numero}?`)) ctx.cancelarOECompra(o.id); }}>
@@ -5253,16 +5261,40 @@ const AgendamentoForm = ({ ctx, inicial, onFechar }) => {
 };
 
 const NovaOEFornecedor = ({ ctx }) => {
+  const edit = ctx.editingOECompra || null; // OE de retirada em edição (ou null = nova)
   const pedidos = (typeof DADOS_PEDIDOS_COMPRA !== 'undefined' ? DADOS_PEDIDOS_COMPRA : []).filter(p => p.tem_saldo);
-  const [pcNumero, setPcNumero] = useState('');
+  const [pcNumero, setPcNumero] = useState(edit ? (edit.pedido_compra_numero || '') : '');
   const pc = useMemo(() => pedidos.find(p => p.numero === pcNumero) || null, [pedidos, pcNumero]);
-  const [sel, setSel] = useState({}); // { [codigo]: { incluir, qtd, it } }
-  const [mot, setMot] = useState({ nome: '', cpf: '', telefone: '', placa: '', uf: '', tipo: '' });
-  const [dataPrev, setDataPrev] = useState('');
-  const [obs, setObs] = useState('');
+  // Em edição, o pedido de compra pode não estar mais na lista (sem saldo).
+  // Então usamos os itens gravados na própria OE como base editável.
+  const itensEdit = useMemo(() => (edit && edit.itens ? edit.itens.map(it => ({
+    codigo: it.codigo, descricao: it.descricao, embalagem: it.embalagem || '',
+    saldo: (it.saldo_pedido != null ? it.saldo_pedido : it.qtd), valor_unitario: it.valor_unitario, grupo_nome: it.grupo_nome,
+  })) : []), []);
+  const itensBase = pc ? (pc.itens || []) : itensEdit;
+  const [sel, setSel] = useState(() => {
+    if (edit && edit.itens) {
+      const m = {};
+      edit.itens.forEach(it => { m[it.codigo] = { incluir: true, qtd: it.qtd, it: {
+        codigo: it.codigo, descricao: it.descricao, embalagem: it.embalagem || '',
+        saldo: (it.saldo_pedido != null ? it.saldo_pedido : it.qtd), valor_unitario: it.valor_unitario, grupo_nome: it.grupo_nome,
+      } }; });
+      return m;
+    }
+    return {};
+  });
+  const [mot, setMot] = useState(edit ? {
+    nome: edit.motorista_nome || '', cpf: edit.motorista_cpf || '', telefone: edit.motorista_telefone || '',
+    placa: edit.veiculo_placa || '', uf: edit.veiculo_placa_uf || '', tipo: edit.veiculo_tipo || '',
+  } : { nome: '', cpf: '', telefone: '', placa: '', uf: '', tipo: '' });
+  const [dataPrev, setDataPrev] = useState(edit ? (edit.data_prevista || '') : '');
+  const [obs, setObs] = useState(edit ? (edit.observacoes || '') : '');
 
-  // Ao trocar de pedido, pré-marca todos os itens com a quantidade do saldo.
+  // Ao TROCAR de pedido, pré-marca todos os itens com a quantidade do saldo.
+  // Não sobrescreve na primeira carga (preserva a seleção do modo edição).
+  const primeiraCarga = useRef(true);
   useEffect(() => {
+    if (primeiraCarga.current) { primeiraCarga.current = false; return; }
     if (!pc) { setSel({}); return; }
     const init = {};
     (pc.itens || []).forEach(it => {
@@ -5276,20 +5308,22 @@ const NovaOEFornecedor = ({ ctx }) => {
   const lbl = { fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 };
 
   const salvar = () => {
-    if (!pc) { ctx.showToast('Escolha um pedido de compra', ''); return; }
+    if (!pc && !edit) { ctx.showToast('Escolha um pedido de compra', ''); return; }
     if (escolhidos.length === 0) { ctx.showToast('Selecione ao menos um item com quantidade', ''); return; }
     if (!mot.nome.trim() || !mot.placa.trim()) { ctx.showToast('Informe o motorista e a placa', ''); return; }
-    // Resolve CNPJ + endereço do fornecedor no cadastro do SAP (por código, com
-    // fallback por nome) para irem na OE e na impressão.
-    const fCad = (DADOS_FORNECEDORES || []).find(f => f.codigo === pc.fornecedor_codigo)
-      || (DADOS_FORNECEDORES || []).find(f => (f.nome || '') === (pc.fornecedor || ''));
-    ctx.criarOECompra({
-      fornecedor: pc.fornecedor,
-      fornecedor_codigo: pc.fornecedor_codigo,
-      fornecedor_cnpj: fCad ? (fCad.cnpj || '') : '',
-      fornecedor_endereco: fCad ? (fCad.endereco || '') : '',
-      pedido_compra_numero: pc.numero,
-      pedido_compra_doc_entry: pc.doc_entry,
+    // Fornecedor: do PC (nova) ou da própria OE (edição sem PC ativo).
+    const fornNome = pc ? pc.fornecedor : (edit ? edit.fornecedor : '');
+    const fornCod = pc ? pc.fornecedor_codigo : (edit ? edit.fornecedor_codigo : '');
+    // Resolve CNPJ + endereço no cadastro do SAP (por código, fallback por nome).
+    const fCad = (DADOS_FORNECEDORES || []).find(f => f.codigo === fornCod)
+      || (DADOS_FORNECEDORES || []).find(f => (f.nome || '') === (fornNome || ''));
+    const payload = {
+      fornecedor: fornNome,
+      fornecedor_codigo: fornCod,
+      fornecedor_cnpj: (fCad && fCad.cnpj) || (edit && edit.fornecedor_cnpj) || '',
+      fornecedor_endereco: (fCad && fCad.endereco) || (edit && edit.fornecedor_endereco) || '',
+      pedido_compra_numero: pc ? pc.numero : (edit ? edit.pedido_compra_numero : ''),
+      pedido_compra_doc_entry: pc ? pc.doc_entry : (edit ? edit.pedido_compra_doc_entry : null),
       itens: escolhidos.map(x => ({
         codigo: x.it.codigo,
         descricao: x.it.descricao,
@@ -5308,7 +5342,14 @@ const NovaOEFornecedor = ({ ctx }) => {
       veiculo_tipo: mot.tipo.trim(),
       data_prevista: dataPrev || null,
       observacoes: obs.trim(),
-    });
+    };
+    if (edit) {
+      ctx.atualizarOECompra(edit.id, payload);
+      ctx.setEditingOECompra(null);
+      ctx.showToast('OE de retirada atualizada', edit.numero || '');
+    } else {
+      ctx.criarOECompra(payload);
+    }
     ctx.setScreen('embarque-fornecedores');
   };
 
@@ -5316,26 +5357,35 @@ const NovaOEFornecedor = ({ ctx }) => {
     <div>
       <div className="page-header">
         <div>
-          <div className="crumb"><i className="ti ti-home"></i> Operação · Nova OE de Retirada</div>
-          <h1 className="page-title">Nova OE · Retirada em Fornecedor</h1>
-          <p className="page-subtitle">Escolha o pedido de compra, os itens e informe motorista/veículo</p>
+          <div className="crumb"><i className="ti ti-home"></i> Operação · {edit ? 'Editar OE de Retirada' : 'Nova OE de Retirada'}</div>
+          <h1 className="page-title">{edit ? `Editar ${edit.numero || 'OE de Retirada'}` : 'Nova OE · Retirada em Fornecedor'}</h1>
+          <p className="page-subtitle">{edit ? 'Ajuste itens, motorista/veículo e programação' : 'Escolha o pedido de compra, os itens e informe motorista/veículo'}</p>
         </div>
-        <button className="btn btn-ghost" onClick={() => ctx.setScreen('embarque-fornecedores')}><i className="ti ti-arrow-left"></i> Voltar</button>
+        <button className="btn btn-ghost" onClick={() => { ctx.setEditingOECompra(null); ctx.setScreen('embarque-fornecedores'); }}><i className="ti ti-arrow-left"></i> Voltar</button>
       </div>
 
       <div className="panel" style={{ marginBottom: 16 }}>
         <div className="panel-header"><div><div className="panel-title">1 · Pedido de compra</div><div className="panel-sub">Fornecedor de onde vamos retirar</div></div></div>
         <div style={{ padding: 18 }}>
-          <select className="input" value={pcNumero} onChange={e => setPcNumero(e.target.value)} style={{ maxWidth: 560 }}>
-            <option value="">— Selecione o pedido de compra —</option>
-            {pedidos.map(p => <option key={p.numero} value={p.numero}>{p.numero} · {p.fornecedor} · saldo {fmtNum(p.qtd_saldo_bb || 0)}</option>)}
-          </select>
-          {pedidos.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>Nenhum pedido de compra com saldo em aberto no SAP.</div>}
-          {pc && <div style={{ marginTop: 12, fontSize: 13 }}><strong>{pc.fornecedor}</strong> <span className="cell-muted mono" style={{ fontSize: 12 }}>({pc.fornecedor_codigo})</span></div>}
+          {edit ? (
+            <div style={{ fontSize: 13 }}>
+              <strong>{edit.fornecedor}</strong> <span className="cell-muted mono" style={{ fontSize: 12 }}>({edit.fornecedor_codigo || '—'})</span>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Pedido de compra: {edit.pedido_compra_numero || '—'} · o pedido não é alterado na edição.</div>
+            </div>
+          ) : (
+            <>
+              <select className="input" value={pcNumero} onChange={e => setPcNumero(e.target.value)} style={{ maxWidth: 560 }}>
+                <option value="">— Selecione o pedido de compra —</option>
+                {pedidos.map(p => <option key={p.numero} value={p.numero}>{p.numero} · {p.fornecedor} · saldo {fmtNum(p.qtd_saldo_bb || 0)}</option>)}
+              </select>
+              {pedidos.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>Nenhum pedido de compra com saldo em aberto no SAP.</div>}
+              {pc && <div style={{ marginTop: 12, fontSize: 13 }}><strong>{pc.fornecedor}</strong> <span className="cell-muted mono" style={{ fontSize: 12 }}>({pc.fornecedor_codigo})</span></div>}
+            </>
+          )}
         </div>
       </div>
 
-      {pc && (
+      {(pc || edit) && (
         <div className="panel" style={{ marginBottom: 16 }}>
           <div className="panel-header">
             <div><div className="panel-title">2 · Itens a retirar</div><div className="panel-sub">Marque os itens e ajuste as quantidades (padrão: saldo do pedido)</div></div>
@@ -5343,7 +5393,7 @@ const NovaOEFornecedor = ({ ctx }) => {
           </div>
           <table>
             <thead><tr><th style={{ width: 40 }}></th><th>Item</th><th>Descrição</th><th>Embalagem</th><th className="num">Saldo</th><th className="num">Qtd a retirar</th></tr></thead>
-            <tbody>{(pc.itens || []).map(it => {
+            <tbody>{itensBase.map(it => {
               const s = sel[it.codigo] || { incluir: false, qtd: 0 };
               return (
                 <tr key={it.codigo} style={{ opacity: s.incluir ? 1 : 0.5 }}>
@@ -5364,7 +5414,7 @@ const NovaOEFornecedor = ({ ctx }) => {
         </div>
       )}
 
-      {pc && (
+      {(pc || edit) && (
         <div className="panel" style={{ marginBottom: 16 }}>
           <div className="panel-header"><div><div className="panel-title">3 · Motorista e veículo</div><div className="panel-sub">Quem vai buscar</div></div></div>
           <div style={{ padding: 18, display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 12 }}>
@@ -5385,8 +5435,8 @@ const NovaOEFornecedor = ({ ctx }) => {
       )}
 
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-        <button className="btn btn-ghost" onClick={() => ctx.setScreen('embarque-fornecedores')}>Cancelar</button>
-        <button className="btn btn-primary" onClick={salvar} disabled={!pc || escolhidos.length === 0}><i className="ti ti-check"></i> Criar OE de retirada</button>
+        <button className="btn btn-ghost" onClick={() => { ctx.setEditingOECompra(null); ctx.setScreen('embarque-fornecedores'); }}>Cancelar</button>
+        <button className="btn btn-primary" onClick={salvar} disabled={(!pc && !edit) || escolhidos.length === 0}><i className="ti ti-check"></i> {edit ? 'Salvar alterações' : 'Criar OE de retirada'}</button>
       </div>
     </div>
   );
