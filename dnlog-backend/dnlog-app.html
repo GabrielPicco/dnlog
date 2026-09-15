@@ -4750,6 +4750,7 @@ const EmbarquesFornecedores = ({ ctx }) => {
                                   placa: o.veiculo_placa,
                                   uf: o.veiculo_placa_uf || '',
                                   tipo_de_veiculo: o.veiculo_tipo || '',
+                                  instrucoes_para_o_fornecedor: o.observacoes || '',
                                 },
                                 produtos: (o.itens || []).map(it => ({ produto: it.descricao || it.codigo, embalagem: it.embalagem || it.unidade || '', qtd: it.qtd })),
                               }, 'OE de Retirada · Fornecedor');
