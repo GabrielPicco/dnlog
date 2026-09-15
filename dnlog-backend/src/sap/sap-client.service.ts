@@ -337,6 +337,26 @@ export class SapClientService implements OnModuleDestroy {
     }
   }
 
+  /** [LEITURA/DIAG] BusinessPartner completo (todos os campos) — p/ inspeção. */
+  async getBusinessPartnerFull(cardCode: string): Promise<any> {
+    await this.ensureSession();
+    const resp = await this.axios.get(`/BusinessPartners('${cardCode}')`);
+    return resp.data;
+  }
+
+  /** [LEITURA] Clientes com saldo em conta corrente (adiantamento = saldo credor). */
+  async getClientesSaldo(): Promise<any[]> {
+    await this.ensureSession();
+    try {
+      return await this.getAllPages('/BusinessPartners', {
+        $filter: "CardType eq 'cCustomer' and Frozen eq 'tNO'",
+        $select: 'CardCode,CardName,CurrentAccountBalance',
+      });
+    } catch (err) {
+      this.handleError(err, 'buscar saldo de clientes');
+    }
+  }
+
   /**
    * Busca itens (cadastro de mercadorias).
    */

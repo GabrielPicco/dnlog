@@ -408,6 +408,25 @@ export class ApiController {
    });
   }
 
+  // DIAG TEMPORÁRIO (read-only): descobrir o campo de adiantamento/saldo do cliente.
+  @Public()
+  @Get('diag-adiant')
+  async diagAdiant(@Query('card') card?: string) {
+    if (card) {
+      const bp = await this.sap.getBusinessPartnerFull(card);
+      const campos: Record<string, any> = {};
+      for (const k of Object.keys(bp)) if (/balance|advance|adiant|down|credit|saldo|prepay|deposit/i.test(k)) campos[k] = bp[k];
+      return { CardCode: bp.CardCode, CardName: bp.CardName, campos };
+    }
+    const todos = await this.sap.getClientesSaldo();
+    const comSaldo = (todos as any[]).filter(b => Number(b.CurrentAccountBalance) !== 0);
+    return {
+      totalClientes: (todos as any[]).length,
+      comSaldoNaoZero: comSaldo.length,
+      amostra: comSaldo.slice(0, 25).map(b => ({ CardCode: b.CardCode, CardName: b.CardName, CurrentAccountBalance: b.CurrentAccountBalance })),
+    };
+  }
+
   // -------- ESTOQUE POR LOTE (view Semantic Layer CALCULOSALDOITENS) --------
   @Get('estoque-lotes')
   async getEstoqueLotes() {
