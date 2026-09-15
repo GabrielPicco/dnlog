@@ -4731,11 +4731,27 @@ const EmbarquesFornecedores = ({ ctx }) => {
                       <td>
                         <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
                           <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} title="Imprimir"
-                            onClick={() => imprimirAgendamento({
-                              num: o.numero,
-                              campos: { fornecedor: o.fornecedor, data_prevista_do_embarque: o.data_prevista, motorista: o.motorista_nome, placa: o.veiculo_placa, local_de_retirada: o.local_retirada || '' },
-                              produtos: (o.itens || []).map(it => ({ produto: it.descricao || it.codigo, embalagem: it.embalagem || it.unidade || '', qtd: it.qtd })),
-                            }, 'OE de Retirada · Fornecedor')}>
+                            onClick={() => {
+                              // CNPJ/endereço: usa o gravado na OE; se faltar (OEs antigas), resolve no cadastro.
+                              const fCad = (DADOS_FORNECEDORES || []).find(f => f.codigo === o.fornecedor_codigo)
+                                || (DADOS_FORNECEDORES || []).find(f => (f.nome || '') === (o.fornecedor || ''));
+                              imprimirAgendamento({
+                                num: o.numero,
+                                campos: {
+                                  fornecedor: o.fornecedor,
+                                  cnpj_do_fornecedor: o.fornecedor_cnpj || (fCad && fCad.cnpj) || '',
+                                  local_de_retirada: o.fornecedor_endereco || o.local_retirada || (fCad && fCad.endereco) || '',
+                                  data_prevista_do_embarque: o.data_prevista,
+                                  motorista: o.motorista_nome,
+                                  cpf: o.motorista_cpf || '',
+                                  telefone: o.motorista_telefone || '',
+                                  placa: o.veiculo_placa,
+                                  uf: o.veiculo_placa_uf || '',
+                                  tipo_de_veiculo: o.veiculo_tipo || '',
+                                },
+                                produtos: (o.itens || []).map(it => ({ produto: it.descricao || it.codigo, embalagem: it.embalagem || it.unidade || '', qtd: it.qtd })),
+                              }, 'OE de Retirada · Fornecedor');
+                            }}>
                             <i className="ti ti-printer"></i>
                           </button>
                           {ctx.podeEditar && o.status !== 'CANCELADA' && (
@@ -5241,7 +5257,7 @@ const NovaOEFornecedor = ({ ctx }) => {
   const [pcNumero, setPcNumero] = useState('');
   const pc = useMemo(() => pedidos.find(p => p.numero === pcNumero) || null, [pedidos, pcNumero]);
   const [sel, setSel] = useState({}); // { [codigo]: { incluir, qtd, it } }
-  const [mot, setMot] = useState({ nome: '', cpf: '', placa: '', uf: '' });
+  const [mot, setMot] = useState({ nome: '', cpf: '', telefone: '', placa: '', uf: '', tipo: '' });
   const [dataPrev, setDataPrev] = useState('');
   const [obs, setObs] = useState('');
 
@@ -5263,9 +5279,15 @@ const NovaOEFornecedor = ({ ctx }) => {
     if (!pc) { ctx.showToast('Escolha um pedido de compra', ''); return; }
     if (escolhidos.length === 0) { ctx.showToast('Selecione ao menos um item com quantidade', ''); return; }
     if (!mot.nome.trim() || !mot.placa.trim()) { ctx.showToast('Informe o motorista e a placa', ''); return; }
+    // Resolve CNPJ + endereço do fornecedor no cadastro do SAP (por código, com
+    // fallback por nome) para irem na OE e na impressão.
+    const fCad = (DADOS_FORNECEDORES || []).find(f => f.codigo === pc.fornecedor_codigo)
+      || (DADOS_FORNECEDORES || []).find(f => (f.nome || '') === (pc.fornecedor || ''));
     ctx.criarOECompra({
       fornecedor: pc.fornecedor,
       fornecedor_codigo: pc.fornecedor_codigo,
+      fornecedor_cnpj: fCad ? (fCad.cnpj || '') : '',
+      fornecedor_endereco: fCad ? (fCad.endereco || '') : '',
       pedido_compra_numero: pc.numero,
       pedido_compra_doc_entry: pc.doc_entry,
       itens: escolhidos.map(x => ({
@@ -5280,8 +5302,10 @@ const NovaOEFornecedor = ({ ctx }) => {
       })),
       motorista_nome: mot.nome.trim(),
       motorista_cpf: mot.cpf.trim(),
+      motorista_telefone: mot.telefone.trim(),
       veiculo_placa: mot.placa.trim().toUpperCase(),
       veiculo_placa_uf: mot.uf.trim().toUpperCase(),
+      veiculo_tipo: mot.tipo.trim(),
       data_prevista: dataPrev || null,
       observacoes: obs.trim(),
     });
@@ -5343,11 +5367,15 @@ const NovaOEFornecedor = ({ ctx }) => {
       {pc && (
         <div className="panel" style={{ marginBottom: 16 }}>
           <div className="panel-header"><div><div className="panel-title">3 · Motorista e veículo</div><div className="panel-sub">Quem vai buscar</div></div></div>
-          <div style={{ padding: 18, display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 90px', gap: 12 }}>
+          <div style={{ padding: 18, display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 12 }}>
             <div><label style={lbl}>Motorista *</label><input className="input" value={mot.nome} onChange={e => setMot({ ...mot, nome: e.target.value })} placeholder="Nome do motorista" /></div>
-            <div><label style={lbl}>CPF</label><input className="input" value={mot.cpf} onChange={e => setMot({ ...mot, cpf: e.target.value })} placeholder="CPF" /></div>
+            <div><label style={lbl}>CPF</label><input className="input" value={mot.cpf} onChange={e => setMot({ ...mot, cpf: e.target.value })} placeholder="000.000.000-00" /></div>
+            <div><label style={lbl}>Telefone</label><input className="input" value={mot.telefone} onChange={e => setMot({ ...mot, telefone: e.target.value })} placeholder="(00) 00000-0000" /></div>
+          </div>
+          <div style={{ padding: '0 18px 18px', display: 'grid', gridTemplateColumns: '1fr 90px 2fr', gap: 12 }}>
             <div><label style={lbl}>Placa *</label><input className="input" value={mot.placa} onChange={e => setMot({ ...mot, placa: e.target.value })} placeholder="ABC1D23" /></div>
             <div><label style={lbl}>UF</label><input className="input" value={mot.uf} onChange={e => setMot({ ...mot, uf: e.target.value })} placeholder="UF" maxLength={2} /></div>
+            <div><label style={lbl}>Tipo de veículo</label><input className="input" value={mot.tipo} onChange={e => setMot({ ...mot, tipo: e.target.value })} placeholder="Ex.: Truck, Carreta, Bitrem" /></div>
           </div>
           <div style={{ padding: '0 18px 18px', display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
             <div><label style={lbl}>Data prevista</label><input className="input" type="date" value={dataPrev} onChange={e => setDataPrev(e.target.value)} /></div>
