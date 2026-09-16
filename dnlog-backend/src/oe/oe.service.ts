@@ -43,7 +43,16 @@ export class OeService {
     }
 
     const id = oe.id || uuidv4();
-    const numero = oe.numero || (await this.proximoNumero());
+    let numero = oe.numero || (await this.proximoNumero());
+    // Anti-colisão: 'numero' é UNIQUE. Se outra OE (id diferente) já usa este
+    // número — colisão entre clientes com contador local desatualizado —,
+    // reatribui um número livre em vez de deixar o insert falhar e a OE sumir.
+    const conflito = await this.repo.findOne({ where: { numero } });
+    if (conflito && conflito.id !== id) {
+      const novo = await this.proximoNumero();
+      this.logger.warn(`Colisao de numero ${numero} (id ${id} x ${conflito.id}) -> reatribuido ${novo}`);
+      numero = novo;
+    }
     const dados = { ...oe, id, numero };
 
     const registro = this.repo.create({
@@ -155,11 +164,17 @@ export class OeService {
       .createQueryBuilder('oe')
       .orderBy('oe.numero', 'DESC')
       .getOne();
-    let seq = 1;
+    // Preserva o MESMO formato do último número (prefixo + largura do zero-pad),
+    // ex.: OE-2026-00013. Assim a reatribuição por colisão não muda o padrão.
     if (ultimo?.numero) {
-      const m = ultimo.numero.match(/(\d+)$/);
-      if (m) seq = parseInt(m[1], 10) + 1;
+      const m = ultimo.numero.match(/^(.*?)(\d+)$/);
+      if (m) {
+        const prefixo = m[1];
+        const largura = m[2].length;
+        const seq = parseInt(m[2], 10) + 1;
+        return prefixo + String(seq).padStart(largura, '0');
+      }
     }
-    return `OE-${String(seq).padStart(4, '0')}`;
+    return 'OE-2026-00001';
   }
 }

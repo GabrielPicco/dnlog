@@ -408,21 +408,6 @@ export class ApiController {
    });
   }
 
-  // DIAG TEMPORÁRIO: verifica se uma OE existe no banco (recuperação). REMOVER.
-  @Public()
-  @Get('diag-oe')
-  async diagOe(@Query('numero') numero?: string) {
-    const todas = await this.oeService.findAll();
-    const found = numero ? todas.filter((o: any) => o.numero === numero) : [];
-    return {
-      totalNoBanco: todas.length,
-      ultimas: todas.slice(0, 10).map((o: any) => ({ numero: o.numero, cliente: o.cliente, status: o.status, criado_em: o.criado_em })),
-      procurado: numero || null,
-      encontradas: found.length,
-      detalhe: found.map((o: any) => ({ id: o.id, numero: o.numero, cliente: o.cliente, status: o.status, criado_em: o.criado_em })),
-    };
-  }
-
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.

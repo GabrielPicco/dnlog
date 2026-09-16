@@ -1564,12 +1564,12 @@ const App = ({ usuario, onLogout }) => {
         setState(prev => {
           let novo = prev, mudou = false;
           if (Array.isArray(ordens)) {
-            // MESCLA: nunca descarta uma OE local que ainda não está no banco
-            // (recém-criada / sync ainda não confirmado). Evita a OE "sumir" no
-            // polling. OEs nunca são apagadas no banco (só canceladas), então
-            // preservar as só-locais é seguro.
-            const numsBanco = new Set(ordens.map(o => o && o.numero).filter(Boolean));
-            const soLocais = (prev.ordens || []).filter(o => o && o.numero && !numsBanco.has(o.numero));
+            // MESCLA por ID: nunca descarta uma OE local cujo id ainda não está
+            // no banco (recém-criada / sync pendente). Dedup por id (não por
+            // número), pois números podem colidir entre clientes até o servidor
+            // reatribuir. OEs nunca são apagadas no banco (só canceladas).
+            const idsBanco = new Set(ordens.map(o => o && o.id).filter(Boolean));
+            const soLocais = (prev.ordens || []).filter(o => o && o.id && !idsBanco.has(o.id));
             const merged = soLocais.length ? [...ordens, ...soLocais] : ordens;
             if (JSON.stringify(merged) !== JSON.stringify(prev.ordens || [])) {
               novo = { ...novo, ordens: merged }; mudou = true;
@@ -1743,7 +1743,16 @@ const App = ({ usuario, onLogout }) => {
 
   const criarOE = (oe) => {
     setState(s => {
-      const numero = `OE-2026-${String(s.proxNumero).padStart(5, '0')}`;
+      // Próximo número = maior entre o contador e (maior número já existente + 1).
+      // Como s.ordens inclui as OEs do banco (bootstrap/polling), isso evita
+      // reusar um número que já existe (colisão). O servidor ainda reatribui se
+      // houver corrida.
+      const maxExistente = (s.ordens || []).reduce((mx, o) => {
+        const m = ((o && o.numero) || '').match(/(\d+)$/);
+        return m ? Math.max(mx, parseInt(m[1], 10)) : mx;
+      }, 0);
+      const seq = Math.max(s.proxNumero || 1, maxExistente + 1);
+      const numero = `OE-2026-${String(seq).padStart(5, '0')}`;
       const novaOE = {
         ...oe,
         id: 'oe_' + Date.now(),
@@ -1754,7 +1763,7 @@ const App = ({ usuario, onLogout }) => {
       };
       showToast('OE criada com sucesso!', `${numero} foi adicionada à fila de embarques`);
       logAcao('OE criada', `${numero} · ${novaOE.cliente || ''} · ${totalBBs(novaOE)} un`, { entidade_tipo: 'OE', entidade_id: numero });
-      return { ...s, ordens: [...s.ordens, novaOE], proxNumero: s.proxNumero + 1 };
+      return { ...s, ordens: [...s.ordens, novaOE], proxNumero: seq + 1 };
     });
   };
 
