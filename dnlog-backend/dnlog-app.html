@@ -7071,7 +7071,7 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
           </div>
         </div>
 
-        <div className="modal-body" style={{ padding: 0 }}>
+        <div className="modal-body" style={{ padding: 0, maxHeight: '55vh', overflowY: 'auto' }}>
           {lotesDisponiveis.length === 0 ? (
             <div className="empty">
               <i className="ti ti-box-off"></i>
@@ -7080,10 +7080,10 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
             </div>
           ) : (
             <table style={{ width: '100%' }}>
-              <thead><tr>
-                <th>Lote</th><th>Armazém</th><th>Peneira</th>
-                <th className="num">Germ.</th><th className="num">Fab.</th>
-                <th className="num">Disp.</th><th className="num" style={{ width: 140 }}>Alocar</th>
+              <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr>
+                <th style={{ background: 'var(--bg-elev)' }}>Lote</th><th style={{ background: 'var(--bg-elev)' }}>Armazém</th><th style={{ background: 'var(--bg-elev)' }}>Peneira</th>
+                <th className="num" style={{ background: 'var(--bg-elev)' }}>Germ.</th><th className="num" style={{ background: 'var(--bg-elev)' }}>Fab.</th>
+                <th className="num" style={{ background: 'var(--bg-elev)' }}>Disp.</th><th className="num" style={{ width: 140, background: 'var(--bg-elev)' }}>Alocar</th>
               </tr></thead>
               <tbody>
                 {lotesDisponiveis.map(l => {
