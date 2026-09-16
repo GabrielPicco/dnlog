@@ -408,17 +408,6 @@ export class ApiController {
    });
   }
 
-  // DIAG TEMPORÁRIO (read-only): conta o que as queries de estoque do SAP retornam.
-  @Public()
-  @Get('diag-estoque')
-  async diagEstoque(@Query('t') t: string) {
-    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const out: any = {};
-    out.saldoRaw = await this.sap.getSaldoPorLoteRaw();
-    try { out.itens = (await this.sap.getItems()).length; } catch (e: any) { out.itensErro = e?.message; }
-    return out;
-  }
-
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.

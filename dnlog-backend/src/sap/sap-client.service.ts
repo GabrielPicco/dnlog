@@ -491,28 +491,27 @@ export class SapClientService implements OnModuleDestroy {
    * receber de PC). SOMENTE LEITURA (GET). Substitui a OIBT, que não é acessível
    * pela Service Layer.
    */
-  /** [DIAG] Chama a view CALCULOSALDOITENS crua e devolve o erro do SAP se falhar. */
-  async getSaldoPorLoteRaw(): Promise<any> {
-    await this.ensureSession();
-    const endpoint =
-      "/sml.svc/CALCULOSALDOITENSParameters(ExibirItensSemSaldo='N')/CALCULOSALDOITENS";
-    try {
-      const resp = await this.axios.get(endpoint);
-      return { ok: true, count: (resp.data?.value || []).length };
-    } catch (e: any) {
-      return { ok: false, status: e?.response?.status, data: e?.response?.data, msg: e?.message };
-    }
-  }
-
   async getSaldoPorLote(): Promise<any[]> {
     await this.ensureSession();
     const endpoint =
       "/sml.svc/CALCULOSALDOITENSParameters(ExibirItensSemSaldo='N')/CALCULOSALDOITENS";
-    try {
-      return await this.getAllPages(endpoint);
-    } catch (err) {
-      this.handleError(err, 'buscar saldo por lote (CALCULOSALDOITENS)');
+    // A view do Semantic Layer às vezes falha de forma transitória. Tenta de novo
+    // (reabrindo a sessão) antes de desistir — evita "Estoque não carregado".
+    const tentativas = 3;
+    let ultimoErro: any;
+    for (let i = 1; i <= tentativas; i++) {
+      try {
+        return await this.getAllPages(endpoint);
+      } catch (err) {
+        ultimoErro = err;
+        this.logger.warn(`CALCULOSALDOITENS falhou (tentativa ${i}/${tentativas}): ${(err as any)?.message}`);
+        if (i < tentativas) {
+          await new Promise((r) => setTimeout(r, 1200 * i));
+          try { await this.login(); } catch (e) {} // reabre a sessão antes de tentar de novo
+        }
+      }
     }
+    this.handleError(ultimoErro, 'buscar saldo por lote (CALCULOSALDOITENS)');
   }
 
   /**
