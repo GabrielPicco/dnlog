@@ -491,22 +491,24 @@ export class SapClientService implements OnModuleDestroy {
    * receber de PC). SOMENTE LEITURA (GET). Substitui a OIBT, que não é acessível
    * pela Service Layer.
    */
-  /** [DIAG] Testa variações da view CALCULOSALDOITENS e devolve o erro cru do SAP. */
+  /** [DIAG] Testa formas de paginar a view parametrizada CALCULOSALDOITENS. */
   async diagSaldoVariantes(): Promise<any> {
     await this.ensureSession();
-    const eps = [
-      "/sml.svc/CALCULOSALDOITENSParameters(ExibirItensSemSaldo='N')/CALCULOSALDOITENS",
-      "/sml.svc/CALCULOSALDOITENSParameters(ExibirItensSemSaldo='S')/CALCULOSALDOITENS",
-      "/sml.svc/CALCULOSALDOITENS",
-      "/b1s/v1/sml.svc/CALCULOSALDOITENSParameters(ExibirItensSemSaldo='N')/CALCULOSALDOITENS",
+    const base = "/sml.svc/CALCULOSALDOITENSParameters(ExibirItensSemSaldo='N')/CALCULOSALDOITENS";
+    const testes: { nome: string; url: string; headers?: any }[] = [
+      { nome: 'pagina1 (default)', url: base },
+      { nome: 'top1000', url: base + '?$top=1000' },
+      { nome: 'skip20', url: base + '?$skip=20' },
+      { nome: 'top20skip20', url: base + '?$top=20&$skip=20' },
+      { nome: 'maxpagesize1000', url: base, headers: { Prefer: 'odata.maxpagesize=1000' } },
     ];
     const out: any[] = [];
-    for (const ep of eps) {
+    for (const tst of testes) {
       try {
-        const resp = await this.axios.get(ep);
-        out.push({ ep, ok: true, count: (resp.data?.value || []).length });
+        const resp = await this.axios.get(tst.url, { headers: tst.headers });
+        out.push({ nome: tst.nome, ok: true, count: (resp.data?.value || []).length, temNext: !!(resp.data?.['@odata.nextLink']) , next: resp.data?.['@odata.nextLink'] });
       } catch (e: any) {
-        out.push({ ep, ok: false, status: e?.response?.status, data: e?.response?.data, msg: e?.message });
+        out.push({ nome: tst.nome, ok: false, status: e?.response?.status, data: e?.response?.data, msg: e?.message });
       }
     }
     return out;
