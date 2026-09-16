@@ -1200,6 +1200,14 @@ const DNLOG_API = {
         console.warn('[DNLog API] Sync de OEs NÃO salvo — HTTP ' + r.status);
         return { ok: false, status: r.status, motivo: r.status === 401 ? 'sessao' : 'http' };
       }
+      // HTTP 200 não basta: o upsert é por-OE. Se alguma linha falhou
+      // (salvos < total), NÃO confirma — mantém pendente e retenta (senão a OE
+      // some no próximo polling, que traz a lista do banco sem ela).
+      let body = null; try { body = await r.json(); } catch (e) {}
+      if (body && body.total != null && body.salvos != null && body.salvos < body.total) {
+        console.warn(`[DNLog API] Sync PARCIAL: ${body.salvos}/${body.total} salvos.`, body.erros);
+        return { ok: false, status: r.status, motivo: 'parcial', erros: body.erros };
+      }
       return { ok: true, status: r.status };
     } catch (e) {
       console.warn('[DNLog API] Falha ao sincronizar OEs (offline?):', e.message);
@@ -1555,8 +1563,17 @@ const App = ({ usuario, onLogout }) => {
         try { if (localStorage.getItem('dnlog_pending_sync')) return; } catch (e) {}
         setState(prev => {
           let novo = prev, mudou = false;
-          if (Array.isArray(ordens) && JSON.stringify(ordens) !== JSON.stringify(prev.ordens || [])) {
-            novo = { ...novo, ordens }; mudou = true;
+          if (Array.isArray(ordens)) {
+            // MESCLA: nunca descarta uma OE local que ainda não está no banco
+            // (recém-criada / sync ainda não confirmado). Evita a OE "sumir" no
+            // polling. OEs nunca são apagadas no banco (só canceladas), então
+            // preservar as só-locais é seguro.
+            const numsBanco = new Set(ordens.map(o => o && o.numero).filter(Boolean));
+            const soLocais = (prev.ordens || []).filter(o => o && o.numero && !numsBanco.has(o.numero));
+            const merged = soLocais.length ? [...ordens, ...soLocais] : ordens;
+            if (JSON.stringify(merged) !== JSON.stringify(prev.ordens || [])) {
+              novo = { ...novo, ordens: merged }; mudou = true;
+            }
           }
           if (Array.isArray(ags) && JSON.stringify(ags) !== JSON.stringify(prev.agendamentos || [])) {
             novo = { ...novo, agendamentos: ags }; mudou = true;
