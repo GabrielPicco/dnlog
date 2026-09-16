@@ -412,7 +412,9 @@ export class ApiController {
   @Get('diag-estoque')
   async diagEstoque(@Query('t') t: string) {
     if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    return { variantes: await this.sap.diagSaldoVariantes() };
+    const t0 = Date.now();
+    try { const r = await this.sap.getSaldoPorLote(); return { ok: true, count: r.length, ms: Date.now() - t0 }; }
+    catch (e: any) { return { ok: false, ms: Date.now() - t0, msg: e?.message }; }
   }
 
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------

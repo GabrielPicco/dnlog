@@ -491,46 +491,41 @@ export class SapClientService implements OnModuleDestroy {
    * receber de PC). SOMENTE LEITURA (GET). Substitui a OIBT, que não é acessível
    * pela Service Layer.
    */
-  /** [DIAG] Testa formas de paginar a view parametrizada CALCULOSALDOITENS. */
-  async diagSaldoVariantes(): Promise<any> {
-    await this.ensureSession();
-    const base = "/sml.svc/CALCULOSALDOITENSParameters(ExibirItensSemSaldo='N')/CALCULOSALDOITENS";
-    const testes: { nome: string; url: string; headers?: any }[] = [
-      { nome: 'pagina1 (default)', url: base },
-      { nome: 'top1000', url: base + '?$top=1000' },
-      { nome: 'skip20', url: base + '?$skip=20' },
-      { nome: 'top20skip20', url: base + '?$top=20&$skip=20' },
-      { nome: 'maxpagesize1000', url: base, headers: { Prefer: 'odata.maxpagesize=1000' } },
-    ];
-    const out: any[] = [];
-    for (const tst of testes) {
-      try {
-        const resp = await this.axios.get(tst.url, { headers: tst.headers });
-        out.push({ nome: tst.nome, ok: true, count: (resp.data?.value || []).length, temNext: !!(resp.data?.['@odata.nextLink']) , next: resp.data?.['@odata.nextLink'] });
-      } catch (e: any) {
-        out.push({ nome: tst.nome, ok: false, status: e?.response?.status, data: e?.response?.data, msg: e?.message });
-      }
-    }
-    return out;
-  }
-
   async getSaldoPorLote(): Promise<any[]> {
-    await this.ensureSession();
     const endpoint =
       "/sml.svc/CALCULOSALDOITENSParameters(ExibirItensSemSaldo='N')/CALCULOSALDOITENS";
-    // A view do Semantic Layer às vezes falha de forma transitória. Tenta de novo
-    // (reabrindo a sessão) antes de desistir — evita "Estoque não carregado".
+    // Paginador DEDICADO para a view parametrizada do Semantic Layer:
+    //  1) página grande (maxpagesize) — normalmente traz tudo numa ida;
+    //  2) se houver nextLink, ele vem SEM o prefixo do serviço ('sml.svc/'),
+    //     então recolocamos — senão a 2ª página dava 400 e o estoque zerava.
+    const headers = { Prefer: 'odata.maxpagesize=5000' };
+    const buscar = async (): Promise<any[]> => {
+      await this.ensureSession();
+      const todos: any[] = [];
+      let resp = await this.axios.get(endpoint, { headers });
+      for (let pagina = 0; pagina < 500; pagina++) {
+        const data = resp.data || {};
+        if (Array.isArray(data.value)) todos.push(...data.value);
+        let next = data['@odata.nextLink'] || data['odata.nextLink'];
+        if (!next) break;
+        next = String(next).replace(/^\/+/, '');
+        if (!next.startsWith('sml.svc/')) next = 'sml.svc/' + next; // corrige o prefixo
+        resp = await this.axios.get('/' + next, { headers });
+      }
+      return todos;
+    };
+    // Retry (reabrindo a sessão) para falhas transitórias do Semantic Layer.
     const tentativas = 3;
     let ultimoErro: any;
     for (let i = 1; i <= tentativas; i++) {
       try {
-        return await this.getAllPages(endpoint);
+        return await buscar();
       } catch (err) {
         ultimoErro = err;
         this.logger.warn(`CALCULOSALDOITENS falhou (tentativa ${i}/${tentativas}): ${(err as any)?.message}`);
         if (i < tentativas) {
-          await new Promise((r) => setTimeout(r, 1200 * i));
-          try { await this.login(); } catch (e) {} // reabre a sessão antes de tentar de novo
+          await new Promise((r) => setTimeout(r, 1000 * i));
+          try { await this.login(); } catch (e) {}
         }
       }
     }
