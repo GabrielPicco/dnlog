@@ -408,6 +408,18 @@ export class ApiController {
    });
   }
 
+  // DIAG TEMPORÁRIO (somente leitura): estado das OEs no banco. REMOVER.
+  @Public()
+  @Get('diag-oe2')
+  async diagOe2(@Query('t') t: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const todas = await this.oeService.findAll();
+    return {
+      total: todas.length,
+      lista: todas.map((o: any) => ({ numero: o.numero, cliente: o.cliente || null, status: o.status, pedido: o.pedido_numero, criado_em: o.criado_em })),
+    };
+  }
+
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.
