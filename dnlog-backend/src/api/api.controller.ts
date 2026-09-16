@@ -408,6 +408,13 @@ export class ApiController {
    });
   }
 
+  @Public()
+  @Get('diag-estoque')
+  async diagEstoque(@Query('t') t: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    return { variantes: await this.sap.diagSaldoVariantes() };
+  }
+
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.
