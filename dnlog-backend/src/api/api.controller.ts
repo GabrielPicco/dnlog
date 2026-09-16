@@ -414,14 +414,8 @@ export class ApiController {
   async diagEstoque(@Query('t') t: string) {
     if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
     const out: any = {};
-    try { out.saldoPorLote = (await this.sap.getSaldoPorLote()).length; } catch (e: any) { out.saldoPorLoteErro = e?.response?.status + ' ' + (e?.response?.data?.error?.message?.value || e?.message); }
+    out.saldoRaw = await this.sap.getSaldoPorLoteRaw();
     try { out.itens = (await this.sap.getItems()).length; } catch (e: any) { out.itensErro = e?.message; }
-    try { out.grupos = (await this.sap.getItemGroups()).length; } catch (e: any) { out.gruposErro = e?.message; }
-    try {
-      const linhas = await this.sap.getSaldoPorLote();
-      out.amostraDepositos = Array.from(new Set((linhas as any[]).slice(0, 200).map(r => r.CodigoDeposito))).slice(0, 20);
-      out.comLoteDN_EST = (linhas as any[]).filter(r => r.CodigoDeposito === 'DN_EST' && r.Lote).length;
-    } catch (e) {}
     return out;
   }
 

@@ -491,6 +491,19 @@ export class SapClientService implements OnModuleDestroy {
    * receber de PC). SOMENTE LEITURA (GET). Substitui a OIBT, que não é acessível
    * pela Service Layer.
    */
+  /** [DIAG] Chama a view CALCULOSALDOITENS crua e devolve o erro do SAP se falhar. */
+  async getSaldoPorLoteRaw(): Promise<any> {
+    await this.ensureSession();
+    const endpoint =
+      "/sml.svc/CALCULOSALDOITENSParameters(ExibirItensSemSaldo='N')/CALCULOSALDOITENS";
+    try {
+      const resp = await this.axios.get(endpoint);
+      return { ok: true, count: (resp.data?.value || []).length };
+    } catch (e: any) {
+      return { ok: false, status: e?.response?.status, data: e?.response?.data, msg: e?.message };
+    }
+  }
+
   async getSaldoPorLote(): Promise<any[]> {
     await this.ensureSession();
     const endpoint =
