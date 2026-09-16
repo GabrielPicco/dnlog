@@ -417,15 +417,15 @@ export class ApiController {
       try { const r = await fn(); return { nome, ok: true, count: (r || []).length, ms: Date.now() - t0 }; }
       catch (e: any) { return { nome, ok: false, ms: Date.now() - t0, msg: e?.message, data: e?.response?.data }; }
     };
-    // Mesmo padrão do /estoque-lotes: 4 consultas em paralelo.
+    // SEQUENCIAL: a view sozinha primeiro, depois os catálogos em paralelo.
     const t0 = Date.now();
-    const [saldo, itens, grupos, pesos] = await Promise.all([
-      timed('saldoPorLote', () => this.sap.getSaldoPorLote()),
+    const saldo = await timed('saldoPorLote', () => this.sap.getSaldoPorLote());
+    const [itens, grupos, pesos] = await Promise.all([
       timed('itens', () => this.sap.getItems()),
       timed('grupos', () => this.sap.getItemGroups()),
       timed('pesos', () => this.sap.getPesosPorLote()),
     ]);
-    return { totalMs: Date.now() - t0, saldo, itens, grupos, pesos };
+    return { modo: 'sequencial', totalMs: Date.now() - t0, saldo, itens, grupos, pesos };
   }
 
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
