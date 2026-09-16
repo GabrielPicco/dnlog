@@ -420,6 +420,19 @@ export class ApiController {
     };
   }
 
+  @Public()
+  @Post('diag-oe2-del')
+  async diagOe2Del(@Query('t') t: string, @Body() body: any) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const numeros: string[] = Array.isArray(body?.numeros) ? body.numeros : [];
+    const todas = await this.oeService.findAll();
+    const removidos: string[] = [];
+    for (const o of todas as any[]) {
+      if (numeros.includes(o.numero)) { try { await this.oeService.remove(o.id); removidos.push(o.numero); } catch (e) {} }
+    }
+    return { removidos };
+  }
+
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.

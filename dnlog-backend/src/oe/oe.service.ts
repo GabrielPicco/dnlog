@@ -81,10 +81,22 @@ export class OeService {
    * nao derruba o sync inteiro (o que faria o app "perder" o salvamento e a OE
    * voltar ao status antigo no reload).
    */
+  /** OE "em branco" (sem cliente, sem fornecedor e sem itens) — lixo, não persiste. */
+  private ehVazia(oe: any): boolean {
+    if (!oe) return true;
+    const temCliente = !!this.extrairCliente(oe) || !!oe.fornecedor || !!oe.fornecedor_nome;
+    const itens =
+      (Array.isArray(oe.itens) && oe.itens.length) ||
+      (Array.isArray(oe.paradas) && oe.paradas.some((p: any) => Array.isArray(p?.itens) && p.itens.length));
+    return !temCliente && !itens;
+  }
+
   async upsertMany(ordens: any[]): Promise<any> {
     let salvos = 0;
+    let ignorados = 0;
     const erros: any[] = [];
     for (const oe of ordens || []) {
+      if (this.ehVazia(oe)) { ignorados++; continue; } // não persiste OE em branco
       try {
         await this.upsert(oe);
         salvos++;
@@ -95,7 +107,9 @@ export class OeService {
         erros.push({ id: oe?.id, numero: oe?.numero, erro: String(e?.message || e) });
       }
     }
-    return { sucesso: erros.length === 0, salvos, total: (ordens || []).length, erros };
+    // total desconta os ignorados (vazios) — assim salvos==total quando só houve
+    // OE em branco, e a detecção de "parcial" no cliente não dispara à toa.
+    return { sucesso: erros.length === 0, salvos, ignorados, total: (ordens || []).length - ignorados, erros };
   }
 
   async remove(id: string): Promise<void> {

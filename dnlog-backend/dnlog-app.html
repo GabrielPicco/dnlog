@@ -1138,6 +1138,15 @@ const cardCodeDoPedido = (pedidoNumero) => {
 // Normaliza número de lote para casar entre DNLog e QCDN (igual ao backend).
 const normLote = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
 
+// OE "em branco" (sem cliente/fornecedor e sem itens) é lixo — não deve aparecer
+// nem ser sincronizada. Filtra em toda entrada de ordens (load, bootstrap, poll).
+const oeNaoVazia = (o) => {
+  if (!o) return false;
+  const temCliente = !!(o.cliente || o.fornecedor || o.fornecedor_nome || (o.paradas || []).some(p => p && p.cliente));
+  const temItens = ((o.itens || []).length > 0) || (o.paradas || []).some(p => ((p && p.itens) || []).length > 0);
+  return temCliente || temItens;
+};
+
 // Total de BBs de uma OE
 const totalBBs = (oe) => getAllItens(oe).reduce((a, i) => a + (i.qtd_bb || 0), 0);
 // Total em valor da OE
@@ -1394,6 +1403,7 @@ const loadState = () => {
       // no bootstrap). Isso é o que alimenta o seletor de lotes do embarque.
       parsed.lotes = lotesDoEstoqueSAP();
       parsed._semLotesFicticios = true;
+      if (Array.isArray(parsed.ordens)) parsed.ordens = parsed.ordens.filter(oeNaoVazia); // descarta lixo
       if (!parsed.baixasFaturadas) parsed.baixasFaturadas = {};
       // OEs de retirada em fornecedor (entrada). Lista à parte de `ordens`
       // (vendas), pra não misturar com o fluxo de saída.
@@ -1568,9 +1578,10 @@ const App = ({ usuario, onLogout }) => {
             // no banco (recém-criada / sync pendente). Dedup por id (não por
             // número), pois números podem colidir entre clientes até o servidor
             // reatribuir. OEs nunca são apagadas no banco (só canceladas).
-            const idsBanco = new Set(ordens.map(o => o && o.id).filter(Boolean));
-            const soLocais = (prev.ordens || []).filter(o => o && o.id && !idsBanco.has(o.id));
-            const merged = soLocais.length ? [...ordens, ...soLocais] : ordens;
+            const ordensBanco = ordens.filter(oeNaoVazia); // ignora lixo do banco
+            const idsBanco = new Set(ordensBanco.map(o => o && o.id).filter(Boolean));
+            const soLocais = (prev.ordens || []).filter(o => o && o.id && !idsBanco.has(o.id) && oeNaoVazia(o));
+            const merged = soLocais.length ? [...ordensBanco, ...soLocais] : ordensBanco;
             if (JSON.stringify(merged) !== JSON.stringify(prev.ordens || [])) {
               novo = { ...novo, ordens: merged }; mudou = true;
             }
@@ -9656,7 +9667,7 @@ const Configuracoes = ({ ctx }) => {
       const ordensBanco = await fetchTimeout(`${API_BASE}/oe`, DATA_TIMEOUT_MS);
       if (Array.isArray(ordensBanco)) {
         const atual = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-        atual.ordens = ordensBanco;
+        atual.ordens = ordensBanco.filter(oeNaoVazia);
         if (atual.proxNumero == null) atual.proxNumero = ordensBanco.length + 1;
         localStorage.setItem(STORAGE_KEY, JSON.stringify(atual));
         console.log(`[DNLog API] ${ordensBanco.length} OE(s) carregadas do banco`);
