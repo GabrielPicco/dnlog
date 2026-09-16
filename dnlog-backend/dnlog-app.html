@@ -1498,6 +1498,62 @@ if (typeof window !== 'undefined') {
 }
 
 // ============================================================
+// PERMISSÕES POR PERFIL (o que cada perfil pode ver)
+// ============================================================
+// Itens do menu com o perfil PADRÃO que os enxerga. O gestor pode sobrescrever
+// por perfil na tela Configurações → Permissões (config.permissoes).
+const MENU_DEFS = [
+  { id: 'dashboard', label: 'Painel', perfis: ['OPERADOR', 'GESTOR'] },
+  { id: 'relatorios', label: 'Relatórios', perfis: ['GESTOR', 'OPERADOR'] },
+  { id: 'embarques', label: 'Embarques', perfis: ['OPERADOR', 'GESTOR'] },
+  { id: 'embarque-fornecedores', label: 'Embarque - Fornecedores', perfis: ['OPERADOR', 'GESTOR'] },
+  { id: 'conferencia', label: 'Conferência', perfis: ['OPERADOR', 'GESTOR', 'CONFERENTE'] },
+  { id: 'triangulares', label: 'Triangulares', perfis: ['OPERADOR', 'GESTOR'] },
+  { id: 'pedidos', label: 'Pedidos', perfis: ['OPERADOR', 'GESTOR'] },
+  { id: 'estoque', label: 'Estoque', perfis: ['OPERADOR', 'GESTOR'] },
+  { id: 'resumo-estoque', label: 'Resumo de estoque', perfis: ['OPERADOR', 'GESTOR', 'VISUALIZACAO', 'CONFERENTE'] },
+  { id: 'logs', label: 'Logs', perfis: ['GESTOR'] },
+  { id: 'configuracoes', label: 'Configurações', perfis: ['GESTOR'] },
+];
+const PERFIS_ALL = ['GESTOR', 'OPERADOR', 'CONFERENTE', 'VISUALIZACAO'];
+// Subtelas → seções que as liberam (uma OE só é vista por quem vê Embarques, etc.).
+const SUBTELAS = {
+  'detalhe-oe': ['embarques', 'conferencia'],
+  'nova-oe': ['embarques'],
+  'editar-oe': ['embarques'],
+  'agendamentos': ['embarques'],
+  'calendario': ['embarques'],
+  'conferencia-detalhe': ['conferencia'],
+  'detalhe-pedido': ['pedidos'],
+  'pedidos-compra': ['embarque-fornecedores'],
+  'nova-oe-fornecedor': ['embarque-fornecedores'],
+  'usuarios': ['configuracoes'],
+};
+// Um perfil pode ver um item? Override em config.permissoes[perfil][itemId], senão o padrão.
+const perfilPodeVer = (perfil, itemId, config) => {
+  const perm = config && config.permissoes && config.permissoes[perfil];
+  if (perm && Object.prototype.hasOwnProperty.call(perm, itemId)) return !!perm[itemId];
+  const def = MENU_DEFS.find(m => m.id === itemId);
+  return def ? def.perfis.includes(perfil) : false;
+};
+// Conjunto de telas (seções + subtelas) que o perfil pode acessar.
+const telasPermitidas = (perfil, config) => {
+  const oculto = (config && config.menuOculto) || [];
+  const set = new Set(
+    MENU_DEFS.map(m => m.id).filter(id =>
+      perfilPodeVer(perfil, id, config) && (id === 'configuracoes' || !oculto.includes(id))
+    )
+  );
+  Object.keys(SUBTELAS).forEach(sub => { if (SUBTELAS[sub].some(r => set.has(r))) set.add(sub); });
+  return set;
+};
+// Primeira tela (seção) que o perfil pode abrir — usada como destino padrão.
+const primeiraTela = (perfil, config) => {
+  const t = telasPermitidas(perfil, config);
+  return MENU_DEFS.map(m => m.id).find(id => t.has(id)) || 'resumo-estoque';
+};
+
+// ============================================================
 // APP PRINCIPAL
 // ============================================================
 const App = ({ usuario, onLogout }) => {
@@ -1623,16 +1679,12 @@ const App = ({ usuario, onLogout }) => {
 
   // Quando troca perfil, redireciona se necessário
   useEffect(() => {
-    if (perfilAtivo === 'CONFERENTE') {
-      // Conferente acessa: conferencia, conferencia-detalhe, detalhe-oe e o Resumo de estoque.
-      if (!['conferencia', 'conferencia-detalhe', 'detalhe-oe', 'resumo-estoque'].includes(screen)) {
-        setScreen('conferencia');
-      }
-    } else if (perfilAtivo === 'VISUALIZACAO') {
-      // Visualização só vê o Resumo de estoque.
-      if (screen !== 'resumo-estoque') setScreen('resumo-estoque');
+    // Se a tela atual não é permitida ao perfil (pelas permissões configuráveis),
+    // manda para a primeira tela liberada.
+    if (!telasPermitidas(perfilAtivo, config).has(screen)) {
+      setScreen(primeiraTela(perfilAtivo, config));
     }
-  }, [perfilAtivo]);
+  }, [perfilAtivo, screen, config]);
 
   // Calcula saldo real considerando OEs criadas (suporta paradas multi-cliente)
   // E também considera baixas faturadas (vendas concluídas)
@@ -2025,45 +2077,37 @@ const App = ({ usuario, onLogout }) => {
     podeEditar: !['CONFERENTE', 'VISUALIZACAO'].includes(perfilAtivo)
   };
 
+  // Tela efetiva: se a atual não é permitida ao perfil, usa a primeira liberada
+  // (o efeito de redirect sincroniza o estado; isto evita piscar tela proibida).
+  const _permitidas = telasPermitidas(perfilAtivo, config);
+  const screenEff = _permitidas.has(screen) ? screen : primeiraTela(perfilAtivo, config);
+
   return (
     <div className="app" style={{ gridTemplateColumns: effectiveCollapsed ? '64px 1fr' : '240px 1fr' }}>
       <Sidebar ctx={ctx} />
       <main className="main">
-        {ctx.perfilAtivo === 'VISUALIZACAO' ? (
-          <ResumoEstoque ctx={ctx} />
-        ) : ctx.perfilAtivo === 'CONFERENTE' ? (
-          <>
-            {screen === 'conferencia' && <Conferencia ctx={ctx} />}
-            {screen === 'conferencia-detalhe' && <ConferenciaDetalhe ctx={ctx} />}
-            {screen === 'detalhe-oe' && <DetalheOE ctx={ctx} />}
-            {screen === 'resumo-estoque' && <ResumoEstoque ctx={ctx} />}
-            {!['conferencia','conferencia-detalhe','detalhe-oe','resumo-estoque'].includes(screen) && <Conferencia ctx={ctx} />}
-          </>
-        ) : (
-          <>
-            {screen === 'dashboard' && <Dashboard ctx={ctx} />}
-            {screen === 'relatorios' && <Relatorios ctx={ctx} />}
-            {screen === 'agendamentos' && <EmbarquesHub ctx={ctx} />}
-            {screen === 'embarques' && <EmbarquesHub ctx={ctx} />}
-            {screen === 'calendario' && <EmbarquesHub ctx={ctx} />}
-            {screen === 'pedidos' && <Pedidos ctx={ctx} />}
-            {screen === 'pedidos-compra' && <PedidosCompra ctx={ctx} />}
-            {screen === 'usuarios' && <AdminUsuarios ctx={ctx} />}
-            {screen === 'configuracoes' && <Configuracoes ctx={ctx} />}
-            {screen === 'logs' && <LogsView ctx={ctx} />}
-            {screen === 'detalhe-pedido' && <DetalhePedido ctx={ctx} />}
-            {screen === 'estoque' && <Estoque ctx={ctx} />}
-            {screen === 'resumo-estoque' && <ResumoEstoque ctx={ctx} />}
-            {screen === 'conferencia' && <Conferencia ctx={ctx} />}
-            {screen === 'triangulares' && <Triangulares ctx={ctx} />}
-            {screen === 'nova-oe' && <NovaOE ctx={ctx} />}
-            {screen === 'editar-oe' && <NovaOE ctx={ctx} editMode />}
-            {screen === 'detalhe-oe' && <DetalheOE ctx={ctx} />}
-            {screen === 'conferencia-detalhe' && <ConferenciaDetalhe ctx={ctx} />}
-            {screen === 'embarque-fornecedores' && <EmbarquesFornecedores ctx={ctx} />}
-            {screen === 'nova-oe-fornecedor' && <NovaOEFornecedor ctx={ctx} />}
-          </>
-        )}
+        {/* Render unificado, gatilhado por permissão (screenEff já respeita o perfil). */}
+        {screenEff === 'dashboard' && <Dashboard ctx={ctx} />}
+        {screenEff === 'relatorios' && <Relatorios ctx={ctx} />}
+        {screenEff === 'agendamentos' && <EmbarquesHub ctx={ctx} />}
+        {screenEff === 'embarques' && <EmbarquesHub ctx={ctx} />}
+        {screenEff === 'calendario' && <EmbarquesHub ctx={ctx} />}
+        {screenEff === 'pedidos' && <Pedidos ctx={ctx} />}
+        {screenEff === 'pedidos-compra' && <PedidosCompra ctx={ctx} />}
+        {screenEff === 'usuarios' && <AdminUsuarios ctx={ctx} />}
+        {screenEff === 'configuracoes' && <Configuracoes ctx={ctx} />}
+        {screenEff === 'logs' && <LogsView ctx={ctx} />}
+        {screenEff === 'detalhe-pedido' && <DetalhePedido ctx={ctx} />}
+        {screenEff === 'estoque' && <Estoque ctx={ctx} />}
+        {screenEff === 'resumo-estoque' && <ResumoEstoque ctx={ctx} />}
+        {screenEff === 'conferencia' && <Conferencia ctx={ctx} />}
+        {screenEff === 'triangulares' && <Triangulares ctx={ctx} />}
+        {screenEff === 'nova-oe' && <NovaOE ctx={ctx} />}
+        {screenEff === 'editar-oe' && <NovaOE ctx={ctx} editMode />}
+        {screenEff === 'detalhe-oe' && <DetalheOE ctx={ctx} />}
+        {screenEff === 'conferencia-detalhe' && <ConferenciaDetalhe ctx={ctx} />}
+        {screenEff === 'embarque-fornecedores' && <EmbarquesFornecedores ctx={ctx} />}
+        {screenEff === 'nova-oe-fornecedor' && <NovaOEFornecedor ctx={ctx} />}
       </main>
       {toast && <Toast {...toast} />}
       {/* SALVANDO: barra no topo + bloqueio de cliques até confirmar no banco */}
@@ -3150,11 +3194,11 @@ const Sidebar = ({ ctx }) => {
     { id: 'configuracoes', icon: 'ti-settings', label: 'Configurações', perfis: ['GESTOR'] },
   ];
 
-  // Itens ocultados pelo gestor na tela Configurações (nunca esconde a própria
-  // tela de Configurações, para o gestor sempre conseguir voltar).
+  // Visibilidade por perfil (configurável em Configurações → Permissões) +
+  // ocultação global (menuOculto). Nunca esconde a própria Configurações do gestor.
   const menuOculto = (ctx.config && ctx.config.menuOculto) || [];
   const items = todosItems.filter(it =>
-    it.perfis.includes(ctx.perfilAtivo) &&
+    perfilPodeVer(ctx.perfilAtivo, it.id, ctx.config) &&
     (it.id === 'configuracoes' || !menuOculto.includes(it.id))
   );
 
@@ -9504,6 +9548,13 @@ const Configuracoes = ({ ctx }) => {
     ctx.salvarConfig({ ...(ctx.config || {}), menuOculto: novoOculto });
   };
 
+  // Permissões por perfil (matriz). Grava override em config.permissoes[perfil][id].
+  const setPerm = (perfil, id, val) => {
+    const permissoes = { ...((ctx.config && ctx.config.permissoes) || {}) };
+    permissoes[perfil] = { ...(permissoes[perfil] || {}), [id]: val };
+    ctx.salvarConfig({ ...(ctx.config || {}), permissoes });
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -9518,6 +9569,7 @@ const Configuracoes = ({ ctx }) => {
       <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid var(--border)' }}>
         {[
           { id: 'menu', label: 'Menu lateral', icon: 'ti-menu-2' },
+          { id: 'permissoes', label: 'Permissões por perfil', icon: 'ti-shield-lock' },
           { id: 'usuarios', label: 'Usuários', icon: 'ti-users' },
         ].map(t => (
           <button key={t.id} onClick={() => setAba(t.id)} style={{
@@ -9567,6 +9619,43 @@ const Configuracoes = ({ ctx }) => {
               </div>
             );
           })}
+        </div>
+      ) : aba === 'permissoes' ? (
+        <div className="panel" style={{ padding: 0, overflowX: 'auto' }}>
+          <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>O que cada perfil pode ver</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+              Marque as telas que cada perfil enxerga. Vale para todos os usuários com aquele perfil. Itens ocultados globalmente (aba Menu lateral) ficam escondidos para todos, independente disto.
+            </div>
+          </div>
+          <table style={{ width: '100%', minWidth: 620, fontSize: 13 }}>
+            <thead><tr>
+              <th style={{ textAlign: 'left', padding: '10px 18px' }}>Tela</th>
+              {PERFIS_ALL.map(p => <th key={p} style={{ textAlign: 'center', padding: '10px 8px' }}>{p}</th>)}
+            </tr></thead>
+            <tbody>
+              {MENU_DEFS.map(m => (
+                <tr key={m.id} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ padding: '10px 18px', fontWeight: 600 }}>{m.label}</td>
+                  {PERFIS_ALL.map(p => {
+                    const marcado = perfilPodeVer(p, m.id, ctx.config);
+                    // Trava: gestor sempre vê Configurações (não pode se auto-bloquear).
+                    const travado = (p === 'GESTOR' && m.id === 'configuracoes');
+                    return (
+                      <td key={p} style={{ textAlign: 'center', padding: '8px' }}>
+                        <input type="checkbox" checked={marcado} disabled={travado}
+                          onChange={e => setPerm(p, m.id, e.target.checked)}
+                          style={{ width: 18, height: 18, cursor: travado ? 'not-allowed' : 'pointer', accentColor: 'var(--accent)' }} />
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ padding: '10px 18px', fontSize: 11, color: 'var(--text-dim)', borderTop: '1px solid var(--border)' }}>
+            Observação: perfis Conferente e Visualização continuam em modo somente-leitura (podem ver as telas liberadas, mas não editar/criar).
+          </div>
         </div>
       ) : (
         <AdminUsuarios ctx={ctx} />
