@@ -408,15 +408,6 @@ export class ApiController {
    });
   }
 
-  // RECUPERAÇÃO TEMPORÁRIA (protegida por token): reinsere uma OE perdida.
-  // REMOVER após uso.
-  @Public()
-  @Post('diag-restore-oe')
-  async diagRestoreOe(@Query('t') t: string, @Body() body: any) {
-    if (t !== 'REST-9f3a2c') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    return this.oeService.upsert(body);
-  }
-
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.
