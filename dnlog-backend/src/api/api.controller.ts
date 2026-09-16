@@ -408,6 +408,29 @@ export class ApiController {
    });
   }
 
+  // LIMPEZA TEMPORÁRIA (protegida por token): lista e remove OEs em branco criadas
+  // por engano na verificação. REMOVER após uso.
+  @Public()
+  @Get('diag-cleanup')
+  async diagCleanup(@Query('t') t: string) {
+    if (t !== 'CLN-9f3a2c') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const todas = await this.oeService.findAll();
+    return todas.map((o: any) => ({
+      id: o.id, numero: o.numero, cliente: o.cliente || null, status: o.status,
+      itens: (o.itens || []).length, criado_em: o.criado_em,
+    }));
+  }
+
+  @Public()
+  @Post('diag-cleanup-del')
+  async diagCleanupDel(@Query('t') t: string, @Body() body: any) {
+    if (t !== 'CLN-9f3a2c') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const ids: string[] = Array.isArray(body?.ids) ? body.ids : [];
+    const removidos: string[] = [];
+    for (const id of ids) { try { await this.oeService.remove(id); removidos.push(id); } catch (e) {} }
+    return { removidos };
+  }
+
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.
