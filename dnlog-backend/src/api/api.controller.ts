@@ -408,12 +408,112 @@ export class ApiController {
    });
   }
 
-  // DIAG TEMPORÁRIO (read-only): inspeciona /IncomingPayments (Assistente de Recebimentos).
+  // -------- RECEBIMENTOS POR CLIENTE (Assistente de Recebimentos) --------
+  // Fonte: IncomingPayments (frmAssistRc) — o que foi efetivamente dado entrada
+  // como pagamento/adiantamento do cliente no SAP. SOMENTE LEITURA.
+
+  /** Período padrão: do 1º dia do ano corrente até hoje. */
+  private periodoRecebimentos(desde?: string, ate?: string) {
+    const hoje = new Date();
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    return {
+      desde: desde || `${hoje.getFullYear()}-01-01`,
+      ate: ate || iso(hoje),
+    };
+  }
+
+  /** Soma dos MEIOS de pagamento (dinheiro + transferência + cheques + cartões + LC). */
+  private valorRecebimento(p: any): number {
+    const checks = (p.PaymentChecks || []).reduce((a: number, c: any) => a + (Number(c.CheckSum) || 0), 0);
+    const cards = (p.PaymentCreditCards || []).reduce((a: number, c: any) => a + (Number(c.CreditSum) || 0), 0);
+    return (Number(p.CashSum) || 0) + (Number(p.TransferSum) || 0) + (Number(p.BillOfExchangeAmount) || 0) + checks + cards;
+  }
+
+  /** Adiantamento quando o recebimento foi aplicado a um pedido de adiantamento (it_DownPayment). */
+  private tipoRecebimento(p: any): 'Adiantamento' | 'Baixa de título' | 'Em conta' {
+    const inv = p.PaymentInvoices || [];
+    if (inv.some((l: any) => l.InvoiceType === 'it_DownPayment')) return 'Adiantamento';
+    if (inv.length) return 'Baixa de título';
+    return 'Em conta';
+  }
+
+  /** Agrega os IncomingPayments do SAP por cliente (ignora cancelados). */
+  private agregarRecebimentos(lista: any[]) {
+    const porCliente: Record<string, any> = {};
+    let totalGeral = 0;
+    let totalAdiantamentos = 0;
+    let qtd = 0;
+    for (const p of lista || []) {
+      if (p.Cancelled === 'tYES') continue; // recebimento cancelado não conta
+      const valor = this.valorRecebimento(p);
+      if (!valor) continue;
+      const tipo = this.tipoRecebimento(p);
+      const cc = p.CardCode || '—';
+      if (!porCliente[cc]) {
+        porCliente[cc] = {
+          cardCode: cc,
+          cliente: p.CardName || cc,
+          totalRecebido: 0,
+          totalAdiantamento: 0,
+          qtd: 0,
+          recebimentos: [],
+        };
+      }
+      const g = porCliente[cc];
+      g.totalRecebido += valor;
+      if (tipo === 'Adiantamento') g.totalAdiantamento += valor;
+      g.qtd += 1;
+      g.recebimentos.push({
+        docEntry: p.DocEntry,
+        docNum: p.DocNum,
+        data: (p.DocDate || '').slice(0, 10),
+        valor,
+        moeda: p.DocCurrency || 'R$',
+        tipo,
+        referencia: p.Reference1 || p.Reference2 || null,
+        obs: p.Remarks || p.JournalRemarks || null,
+      });
+      totalGeral += valor;
+      if (tipo === 'Adiantamento') totalAdiantamentos += valor;
+      qtd += 1;
+    }
+    const clientes = Object.values(porCliente).sort(
+      (a: any, b: any) => b.totalRecebido - a.totalRecebido,
+    );
+    clientes.forEach((c: any) => c.recebimentos.sort((a: any, b: any) => (b.data || '').localeCompare(a.data || '')));
+    return { totalGeral, totalAdiantamentos, qtd, clientes };
+  }
+
+  @Get('recebimentos')
+  async getRecebimentos(@Query('desde') desde?: string, @Query('ate') ate?: string) {
+    const per = this.periodoRecebimentos(desde, ate);
+    return this.cache.wrap(
+      `recebimentos:${per.desde}:${per.ate}`,
+      async () => {
+        const lista = await this.sap.getRecebimentos(per.desde, per.ate);
+        return { periodo: per, ...this.agregarRecebimentos(lista as any[]) };
+      },
+      300000,
+    );
+  }
+
+  // DIAG TEMPORÁRIO (read-only): valida a agregação de recebimentos com dados reais.
   @Public()
   @Get('diag-receb')
-  async diagReceb(@Query('t') t: string) {
+  async diagReceb(@Query('t') t: string, @Query('desde') desde?: string, @Query('ate') ate?: string) {
     if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    return this.sap.diagIncomingPayments();
+    const per = this.periodoRecebimentos(desde, ate);
+    const lista = await this.sap.getRecebimentos(per.desde, per.ate);
+    const agg = this.agregarRecebimentos(lista as any[]);
+    return {
+      periodo: per,
+      brutos: (lista as any[]).length,
+      totalGeral: agg.totalGeral,
+      totalAdiantamentos: agg.totalAdiantamentos,
+      qtd: agg.qtd,
+      clientes: agg.clientes.length,
+      amostra: agg.clientes.slice(0, 4),
+    };
   }
 
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------

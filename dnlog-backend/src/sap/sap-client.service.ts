@@ -350,27 +350,6 @@ export class SapClientService implements OnModuleDestroy {
     }
   }
 
-  /** [DIAG/LEITURA] Amostra crua de IncomingPayments (Assistente de Recebimentos). */
-  async diagIncomingPayments(): Promise<any> {
-    await this.ensureSession();
-    const out: any = {};
-    // 1) amostra recente ordenada por data, objeto completo (para ver os campos)
-    try {
-      const r = await this.axios.get('/IncomingPayments', {
-        params: { $orderby: 'DocDate desc', $top: 3 },
-        headers: { Prefer: 'odata.maxpagesize=3' },
-      });
-      const arr = r.data?.value || [];
-      out.total_amostra = arr.length;
-      out.campos = arr[0] ? Object.keys(arr[0]) : [];
-      out.amostra = arr;
-    } catch (e: any) {
-      out.erro_amostra = e?.response?.data?.error?.message?.value || e?.message || String(e);
-      out.status_amostra = e?.response?.status;
-    }
-    return out;
-  }
-
   /**
    * Busca itens (cadastro de mercadorias).
    */
@@ -648,6 +627,37 @@ export class SapClientService implements OnModuleDestroy {
         return await this.getAllPages('/Invoices', build(false));
       } catch (err2) {
         this.handleError(err2, 'listar faturamento (Invoices)');
+      }
+    }
+  }
+
+  /**
+   * [LEITURA] Recebimentos de clientes (IncomingPayments / "Assistente de
+   * Recebimentos" — frmAssistRc) do período. É o que foi efetivamente dado
+   * entrada como pagamento/adiantamento do cliente no SAP. SOMENTE LEITURA.
+   *
+   * Traz o objeto completo (sem $select) para que as coleções de meios de
+   * pagamento (PaymentChecks/PaymentCreditCards) e PaymentInvoices venham
+   * embutidas — é delas que sai o valor recebido e o tipo (adiantamento x
+   * baixa de título). O período limita o volume.
+   */
+  async getRecebimentos(desde?: string, ate?: string): Promise<any[]> {
+    await this.ensureSession();
+    const build = (comAspas: boolean) => {
+      const q = comAspas ? "'" : '';
+      const conds: string[] = ["DocType eq 'rCustomer'"];
+      if (desde) conds.push(`DocDate ge ${q}${desde}${q}`);
+      if (ate) conds.push(`DocDate le ${q}${ate}${q}`);
+      return { $filter: conds.join(' and '), $orderby: 'DocDate desc' };
+    };
+    try {
+      return await this.getAllPages('/IncomingPayments', build(true));
+    } catch (err1) {
+      this.logger.warn('Recebimentos: filtro com aspas falhou, tentando sem aspas…');
+      try {
+        return await this.getAllPages('/IncomingPayments', build(false));
+      } catch (err2) {
+        this.handleError(err2, 'listar recebimentos (IncomingPayments)');
       }
     }
   }
