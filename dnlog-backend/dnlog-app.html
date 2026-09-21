@@ -1602,7 +1602,18 @@ const App = ({ usuario, onLogout }) => {
     }
   };
 
-  useEffect(() => { saveState(state); }, [state]);
+  // Persiste no localStorage sempre; mas NÃO dispara o sync no banco na abertura
+  // (primeiro render) — só quando o usuário realmente altera algo. Evita o
+  // "Salvando no banco…" (e um eventual "não salvou") toda vez que abre o app.
+  const _jaMontou = useRef(false);
+  useEffect(() => {
+    if (!_jaMontou.current) {
+      _jaMontou.current = true;
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+      return; // pula o sync na montagem
+    }
+    saveState(state);
+  }, [state]);
 
   // ATUALIZAÇÃO AUTOMÁTICA — puxa ordens e agendamentos do banco a cada ~15s
   // (e ao voltar o foco/aba), para que uma OE criada por OUTRA pessoa apareça

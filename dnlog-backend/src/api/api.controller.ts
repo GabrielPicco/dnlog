@@ -408,17 +408,6 @@ export class ApiController {
    });
   }
 
-  // DIAG TEMPORÁRIO (protegido): reprocessa as OEs do banco (como o app faz ao
-  // abrir) e mostra salvos/total/erros — para achar a OE que falha no sync.
-  @Public()
-  @Get('diag-resync')
-  async diagResync(@Query('t') t: string) {
-    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const todas = await this.oeService.findAll();
-    const r = await this.oeService.upsertMany(todas);
-    return { totalNoBanco: todas.length, ...r };
-  }
-
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.
