@@ -497,25 +497,6 @@ export class ApiController {
     );
   }
 
-  // DIAG TEMPORÁRIO (read-only): valida a agregação de recebimentos com dados reais.
-  @Public()
-  @Get('diag-receb')
-  async diagReceb(@Query('t') t: string, @Query('desde') desde?: string, @Query('ate') ate?: string) {
-    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const per = this.periodoRecebimentos(desde, ate);
-    const lista = await this.sap.getRecebimentos(per.desde, per.ate);
-    const agg = this.agregarRecebimentos(lista as any[]);
-    return {
-      periodo: per,
-      brutos: (lista as any[]).length,
-      totalGeral: agg.totalGeral,
-      totalAdiantamentos: agg.totalAdiantamentos,
-      qtd: agg.qtd,
-      clientes: agg.clientes.length,
-      amostra: agg.clientes.slice(0, 4),
-    };
-  }
-
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.
