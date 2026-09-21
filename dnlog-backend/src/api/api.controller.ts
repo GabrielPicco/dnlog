@@ -408,6 +408,14 @@ export class ApiController {
    });
   }
 
+  // DIAG TEMPORÁRIO (read-only): inspeciona /IncomingPayments (Assistente de Recebimentos).
+  @Public()
+  @Get('diag-receb')
+  async diagReceb(@Query('t') t: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    return this.sap.diagIncomingPayments();
+  }
+
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.

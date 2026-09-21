@@ -350,6 +350,27 @@ export class SapClientService implements OnModuleDestroy {
     }
   }
 
+  /** [DIAG/LEITURA] Amostra crua de IncomingPayments (Assistente de Recebimentos). */
+  async diagIncomingPayments(): Promise<any> {
+    await this.ensureSession();
+    const out: any = {};
+    // 1) amostra recente ordenada por data, objeto completo (para ver os campos)
+    try {
+      const r = await this.axios.get('/IncomingPayments', {
+        params: { $orderby: 'DocDate desc', $top: 3 },
+        headers: { Prefer: 'odata.maxpagesize=3' },
+      });
+      const arr = r.data?.value || [];
+      out.total_amostra = arr.length;
+      out.campos = arr[0] ? Object.keys(arr[0]) : [];
+      out.amostra = arr;
+    } catch (e: any) {
+      out.erro_amostra = e?.response?.data?.error?.message?.value || e?.message || String(e);
+      out.status_amostra = e?.response?.status;
+    }
+    return out;
+  }
+
   /**
    * Busca itens (cadastro de mercadorias).
    */
