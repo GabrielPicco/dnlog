@@ -2809,8 +2809,10 @@ const PedidosPagamentos = ({ ctx }) => {
       <div style={{ display: 'flex', gap: 24, padding: '10px 16px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
         <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Pedidos em aberto</div>
           <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--orange)' }}>{fmtMoney(totais.pedidosAberto)}</div></div>
-        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Recebido no período</div>
-          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--green)' }}>{fmtMoney(totais.recebido)}</div></div>
+        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Adiantado</div>
+          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--green)' }}>{fmtMoney(totais.adiantamento)}</div></div>
+        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Recebido total</div>
+          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-muted)' }}>{fmtMoney(totais.recebido)}</div></div>
         <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>A pagar (saldo)</div>
           <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>{fmtMoney(totais.aPagar)}</div></div>
       </div>
@@ -2827,7 +2829,8 @@ const PedidosPagamentos = ({ ctx }) => {
             <thead><tr>
               <th>Cliente</th>
               <th className="num">Pedidos aberto</th>
-              <th className="num">Recebido</th>
+              <th className="num">Adiantamento</th>
+              <th className="num">Recebido (total)</th>
               <th className="num">A pagar</th>
               <th>Status</th>
             </tr></thead>
@@ -2836,7 +2839,8 @@ const PedidosPagamentos = ({ ctx }) => {
                 <tr key={(c.cardCode || '') + i}>
                   <td><div className="cell-primary" style={{ fontSize: 13 }}>{c.cliente}</div><div className="cell-muted mono" style={{ fontSize: 11 }}>{c.cardCode}{c.qtdPedidos ? ` · ${c.qtdPedidos} pedido(s)` : ''}</div></td>
                   <td className="num mono" style={{ color: c.valorPedidosAberto > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{c.valorPedidosAberto > 0 ? fmtMoney(c.valorPedidosAberto) : '—'}</td>
-                  <td className="num mono" style={{ color: c.totalRecebido > 0 ? 'var(--green)' : 'var(--text-dim)' }}>{c.totalRecebido > 0 ? fmtMoney(c.totalRecebido) : '—'}</td>
+                  <td className="num mono" style={{ fontWeight: 700, color: c.totalAdiantamento > 0 ? 'var(--green)' : 'var(--text-dim)' }}>{c.totalAdiantamento > 0 ? fmtMoney(c.totalAdiantamento) : '—'}</td>
+                  <td className="num mono" style={{ color: c.totalRecebido > 0 ? 'var(--text-muted)' : 'var(--text-dim)' }}>{c.totalRecebido > 0 ? fmtMoney(c.totalRecebido) : '—'}</td>
                   <td className="num mono" style={{ fontWeight: 700 }}>{c.aPagar > 0 ? fmtMoney(c.aPagar) : '—'}</td>
                   <td><PagamentoBadge status={c.status} /></td>
                 </tr>
@@ -2846,7 +2850,7 @@ const PedidosPagamentos = ({ ctx }) => {
         </div>
       )}
       <div style={{ padding: '8px 16px', fontSize: 10.5, color: 'var(--text-dim)' }}>
-        <strong>Pedidos em aberto</strong> = saldo a faturar dos pedidos de venda abertos no SAP. <strong>Recebido</strong> = pagamentos do Assistente de Recebimentos no período. <strong>A pagar</strong> = aberto − recebido. Status: <em>PGT Total</em> (recebido cobre o aberto), <em>PGT Parcial</em>, <em>Sem PGT</em>. Read-only.
+        <strong>Pedidos em aberto</strong> = saldo a faturar dos pedidos de venda abertos no SAP. <strong>Adiantamento</strong> = recebimento aplicado a pedido de adiantamento (dinheiro adiantado antes de faturar). <strong>Recebido (total)</strong> = todos os recebimentos do período (adiantamento + baixa de título já faturado). A <strong>flag</strong> e o <strong>A pagar</strong> (= aberto − adiantamento) usam o <strong>adiantamento</strong>. Read-only.
       </div>
     </div>
   );

@@ -555,19 +555,23 @@ export class ApiController {
         }
 
         const clientes = Object.values(porCliente).map((c: any) => {
-          c.aPagar = Math.max(0, c.valorPedidosAberto - c.totalRecebido);
-          c.status = this.statusPagamento(c.valorPedidosAberto, c.totalRecebido);
+          // A flag/status e o "a pagar" usam o ADIANTAMENTO (dinheiro adiantado
+          // sobre o pedido em aberto). O total recebido segue no payload para a
+          // tela mostrar as duas colunas lado a lado.
+          c.aPagar = Math.max(0, c.valorPedidosAberto - c.totalAdiantamento);
+          c.status = this.statusPagamento(c.valorPedidosAberto, c.totalAdiantamento);
           return c;
-        }).sort((a: any, b: any) => b.valorPedidosAberto - a.valorPedidosAberto || b.totalRecebido - a.totalRecebido);
+        }).sort((a: any, b: any) => b.valorPedidosAberto - a.valorPedidosAberto || b.totalAdiantamento - a.totalAdiantamento);
 
         const totais = clientes.reduce(
           (t: any, c: any) => {
             t.pedidosAberto += c.valorPedidosAberto;
             t.recebido += c.totalRecebido;
+            t.adiantamento += c.totalAdiantamento;
             t.aPagar += c.aPagar;
             return t;
           },
-          { pedidosAberto: 0, recebido: 0, aPagar: 0 },
+          { pedidosAberto: 0, recebido: 0, adiantamento: 0, aPagar: 0 },
         );
 
         return { periodo: per, totais, clientes };
