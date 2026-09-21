@@ -576,16 +576,6 @@ export class ApiController {
     );
   }
 
-  // DIAG TEMPORÁRIO (read-only): valida a conciliação pedidos x pagamentos.
-  @Public()
-  @Get('diag-pedpag')
-  async diagPedPag(@Query('t') t: string, @Query('desde') desde?: string, @Query('ate') ate?: string) {
-    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const r: any = await this.getPedidosPagamentos(desde, ate);
-    const porStatus = r.clientes.reduce((m: any, c: any) => { m[c.status] = (m[c.status] || 0) + 1; return m; }, {});
-    return { periodo: r.periodo, totais: r.totais, clientes: r.clientes.length, porStatus, amostra: r.clientes.slice(0, 6) };
-  }
-
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.
