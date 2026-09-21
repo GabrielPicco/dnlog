@@ -497,6 +497,95 @@ export class ApiController {
     );
   }
 
+  // -------- PEDIDOS x PAGAMENTOS (conciliação por cliente) --------
+  // Junta o valor dos pedidos de venda EM ABERTO com o que já foi recebido
+  // (Assistente de Recebimentos), por cliente. SOMENTE LEITURA no SAP.
+
+  /** Flag de pagamento a partir do valor em aberto e do total recebido. */
+  private statusPagamento(valorAberto: number, recebido: number): 'total' | 'parcial' | 'sem' {
+    if (recebido <= 0.005) return 'sem';
+    if (valorAberto <= 0.005) return 'total'; // sem pedido em aberto e já recebeu
+    if (recebido + 0.005 >= valorAberto) return 'total';
+    return 'parcial';
+  }
+
+  @Get('pedidos-pagamentos')
+  async getPedidosPagamentos(@Query('desde') desde?: string, @Query('ate') ate?: string) {
+    const per = this.periodoRecebimentos(desde, ate);
+    return this.cache.wrap(
+      `pedidos-pagamentos:${per.desde}:${per.ate}`,
+      async () => {
+        const [pedidosSap, recebs] = await Promise.all([
+          this.sap.getPedidosAbertos(),
+          this.sap.getRecebimentos(per.desde, per.ate),
+        ]);
+
+        // Pedidos EM ABERTO agregados por cliente (valor do saldo a faturar).
+        const porCliente: Record<string, any> = {};
+        for (const p of (pedidosSap as any[]) || []) {
+          if (p.Cancelled === 'tYES' || p.DocumentStatus !== 'bost_Open') continue;
+          const linhas: any[] = Array.isArray(p.DocumentLines) ? p.DocumentLines : [];
+          const valorAberto = linhas.reduce((a, l) => a + saldoLinha(l) * (Number(l.Price) || 0), 0);
+          const cc = p.CardCode || '—';
+          if (!porCliente[cc]) {
+            porCliente[cc] = {
+              cardCode: cc, cliente: p.CardName || cc,
+              valorPedidosAberto: 0, qtdPedidos: 0,
+              totalRecebido: 0, totalAdiantamento: 0, aPagar: 0, status: 'sem',
+            };
+          }
+          porCliente[cc].valorPedidosAberto += valorAberto;
+          porCliente[cc].qtdPedidos += 1;
+        }
+
+        // Recebimentos agregados por cliente (mesma lógica do relatório de recebimentos).
+        const agg = this.agregarRecebimentos(recebs as any[]);
+        for (const r of agg.clientes) {
+          const cc = r.cardCode || '—';
+          if (!porCliente[cc]) {
+            porCliente[cc] = {
+              cardCode: cc, cliente: r.cliente || cc,
+              valorPedidosAberto: 0, qtdPedidos: 0,
+              totalRecebido: 0, totalAdiantamento: 0, aPagar: 0, status: 'sem',
+            };
+          }
+          porCliente[cc].totalRecebido = r.totalRecebido;
+          porCliente[cc].totalAdiantamento = r.totalAdiantamento;
+          if (!porCliente[cc].cliente || porCliente[cc].cliente === cc) porCliente[cc].cliente = r.cliente || cc;
+        }
+
+        const clientes = Object.values(porCliente).map((c: any) => {
+          c.aPagar = Math.max(0, c.valorPedidosAberto - c.totalRecebido);
+          c.status = this.statusPagamento(c.valorPedidosAberto, c.totalRecebido);
+          return c;
+        }).sort((a: any, b: any) => b.valorPedidosAberto - a.valorPedidosAberto || b.totalRecebido - a.totalRecebido);
+
+        const totais = clientes.reduce(
+          (t: any, c: any) => {
+            t.pedidosAberto += c.valorPedidosAberto;
+            t.recebido += c.totalRecebido;
+            t.aPagar += c.aPagar;
+            return t;
+          },
+          { pedidosAberto: 0, recebido: 0, aPagar: 0 },
+        );
+
+        return { periodo: per, totais, clientes };
+      },
+      300000,
+    );
+  }
+
+  // DIAG TEMPORÁRIO (read-only): valida a conciliação pedidos x pagamentos.
+  @Public()
+  @Get('diag-pedpag')
+  async diagPedPag(@Query('t') t: string, @Query('desde') desde?: string, @Query('ate') ate?: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const r: any = await this.getPedidosPagamentos(desde, ate);
+    const porStatus = r.clientes.reduce((m: any, c: any) => { m[c.status] = (m[c.status] || 0) + 1; return m; }, {});
+    return { periodo: r.periodo, totais: r.totais, clientes: r.clientes.length, porStatus, amostra: r.clientes.slice(0, 6) };
+  }
+
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.

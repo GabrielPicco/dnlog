@@ -1398,6 +1398,14 @@ const DNLOG_API = {
     if (!r.ok) throw new Error('GET /recebimentos ' + r.status);
     return r.json();
   },
+  async listarPedidosPagamentos(desde, ate) {
+    const qs = new URLSearchParams();
+    if (desde) qs.set('desde', desde);
+    if (ate) qs.set('ate', ate);
+    const r = await fetch(`${DNLOG_API_BASE}/pedidos-pagamentos?${qs.toString()}`, { headers: dnlogAuthHeaders() });
+    if (!r.ok) throw new Error('GET /pedidos-pagamentos ' + r.status);
+    return r.json();
+  },
 };
 window.DNLOG_API = DNLOG_API;
 
@@ -2690,6 +2698,160 @@ const FinanceiroClientes = ({ ctx }) => {
   );
 };
 
+// ============================================================
+// PAGAMENTO — flag/badge reutilizável (relatório + lista de embarques)
+// status: 'total' | 'parcial' | 'sem' (do backend /pedidos-pagamentos)
+// ============================================================
+const PGT_META = {
+  total: { label: 'PGT Total', cor: 'var(--green)', bg: 'var(--green-bg)', icon: 'ti-circle-check' },
+  parcial: { label: 'PGT Parcial', cor: 'var(--orange)', bg: 'var(--orange-bg)', icon: 'ti-circle-half-2' },
+  sem: { label: 'Sem PGT', cor: 'var(--red)', bg: 'var(--red-bg)', icon: 'ti-circle-x' },
+};
+const PagamentoBadge = ({ status, mini }) => {
+  const m = PGT_META[status];
+  if (!m) return null;
+  return (
+    <span title={m.label} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap',
+      fontSize: mini ? 9.5 : 10.5, fontWeight: 700, color: m.cor, background: m.bg,
+      padding: mini ? '1px 6px' : '2px 8px', borderRadius: 20,
+    }}>
+      <i className={'ti ' + m.icon} style={{ fontSize: mini ? 10 : 12 }}></i>{m.label}
+    </span>
+  );
+};
+
+const PedidosPagamentos = ({ ctx }) => {
+  // Concilia pedidos de venda EM ABERTO (SAP) com o que já foi recebido no
+  // Assistente de Recebimentos, por cliente. Read-only.
+  const anoAtual = new Date().getFullYear();
+  const hojeISO = new Date().toISOString().slice(0, 10);
+  const [dados, setDados] = useState(null); // { totais, clientes }
+  const [erro, setErro] = useState('');
+  const [carregando, setCarregando] = useState(false);
+  const [q, setQ] = useState('');
+  const [modo, setModo] = useState('todos'); // 'todos' | 'sem' | 'parcial' | 'total'
+  const [desde, setDesde] = useState(`${anoAtual}-01-01`);
+  const [ate, setAte] = useState(hojeISO);
+
+  const carregar = async () => {
+    setCarregando(true); setErro('');
+    try { const r = await DNLOG_API.listarPedidosPagamentos(desde, ate); setDados(r || {}); }
+    catch (e) { setErro((e && e.message) || 'falha'); setDados({}); }
+    finally { setCarregando(false); }
+  };
+  useEffect(() => { carregar(); }, [desde, ate]);
+
+  const clientes = (dados && dados.clientes) || [];
+  const lista = useMemo(() => {
+    let l = clientes;
+    if (modo !== 'todos') l = l.filter(c => c.status === modo);
+    if (q) { const ql = q.toLowerCase(); l = l.filter(c => (c.cliente || '').toLowerCase().includes(ql) || (c.cardCode || '').toLowerCase().includes(ql)); }
+    return l;
+  }, [clientes, modo, q]);
+
+  const totais = (dados && dados.totais) || { pedidosAberto: 0, recebido: 0, aPagar: 0 };
+
+  const exportar = () => {
+    const rows = [['Cliente', 'CardCode', 'Pedidos em aberto', 'Recebido', 'Adiantamento', 'A pagar', 'Status'].join(';')];
+    lista.forEach(c => rows.push([
+      (c.cliente || '').replace(/;/g, ','), c.cardCode,
+      (c.valorPedidosAberto || 0).toFixed(2), (c.totalRecebido || 0).toFixed(2),
+      (c.totalAdiantamento || 0).toFixed(2), (c.aPagar || 0).toFixed(2),
+      (PGT_META[c.status] || {}).label || c.status,
+    ].join(';')));
+    const blob = new Blob(['﻿' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `pedidos_x_pagamentos_${desde}_a_${ate}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    ctx.showToast && ctx.showToast('Exportado', `${lista.length} cliente(s)`);
+  };
+
+  const dInput = { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text)', padding: '4px 8px', fontSize: 12, fontFamily: 'inherit' };
+  const contagem = (s) => clientes.filter(c => c.status === s).length;
+
+  return (
+    <div className="panel" style={{ marginBottom: 16 }}>
+      <div className="panel-header" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <i className="ti ti-scale" style={{ color: 'var(--accent-light)' }}></i>
+          <strong style={{ fontSize: 14 }}>Pedidos × Pagamentos</strong>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>SAP · carteira aberta vs recebido</span>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={carregar} disabled={carregando}>
+            <i className={'ti ' + (carregando ? 'ti-loader-2' : 'ti-refresh')}></i> {carregando ? 'Carregando…' : 'Atualizar'}
+          </button>
+          <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportar} disabled={!lista.length}>
+            <i className="ti ti-download"></i> CSV
+          </button>
+        </div>
+      </div>
+
+      <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>Recebido de
+          <input type="date" value={desde} max={ate} onChange={e => setDesde(e.target.value)} style={dInput} /></label>
+        <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>até
+          <input type="date" value={ate} min={desde} max={hojeISO} onChange={e => setAte(e.target.value)} style={dInput} /></label>
+        <div className="search-box" style={{ flex: '1 1 200px', minWidth: 160 }}><i className="ti ti-search"></i>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar cliente ou código..." /></div>
+      </div>
+
+      <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {[['todos', `Todos (${clientes.length})`], ['sem', `${PGT_META.sem.label} (${contagem('sem')})`], ['parcial', `${PGT_META.parcial.label} (${contagem('parcial')})`], ['total', `${PGT_META.total.label} (${contagem('total')})`]].map(([v, l]) => (
+          <button key={v} onClick={() => setModo(v)} style={{
+            background: modo === v ? 'var(--accent)' : 'var(--bg-card)', color: modo === v ? 'white' : 'var(--text-muted)',
+            border: '1px solid var(--border)', padding: '4px 10px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 700,
+          }}>{l}</button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 24, padding: '10px 16px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Pedidos em aberto</div>
+          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--orange)' }}>{fmtMoney(totais.pedidosAberto)}</div></div>
+        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Recebido no período</div>
+          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--green)' }}>{fmtMoney(totais.recebido)}</div></div>
+        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>A pagar (saldo)</div>
+          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>{fmtMoney(totais.aPagar)}</div></div>
+      </div>
+
+      {erro ? (
+        <div className="empty" style={{ padding: 24 }}><i className="ti ti-alert-triangle"></i><div>Não foi possível carregar</div><div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{erro}</div></div>
+      ) : carregando && !dados ? (
+        <div className="empty" style={{ padding: 24 }}><i className="ti ti-loader-2"></i><div>Conciliando pedidos e recebimentos no SAP…</div></div>
+      ) : lista.length === 0 ? (
+        <div className="empty" style={{ padding: 24 }}><i className="ti ti-inbox-off"></i><div>Nenhum cliente neste filtro</div></div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', fontSize: 12.5, minWidth: 640 }}>
+            <thead><tr>
+              <th>Cliente</th>
+              <th className="num">Pedidos aberto</th>
+              <th className="num">Recebido</th>
+              <th className="num">A pagar</th>
+              <th>Status</th>
+            </tr></thead>
+            <tbody>
+              {lista.map((c, i) => (
+                <tr key={(c.cardCode || '') + i}>
+                  <td><div className="cell-primary" style={{ fontSize: 13 }}>{c.cliente}</div><div className="cell-muted mono" style={{ fontSize: 11 }}>{c.cardCode}{c.qtdPedidos ? ` · ${c.qtdPedidos} pedido(s)` : ''}</div></td>
+                  <td className="num mono" style={{ color: c.valorPedidosAberto > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{c.valorPedidosAberto > 0 ? fmtMoney(c.valorPedidosAberto) : '—'}</td>
+                  <td className="num mono" style={{ color: c.totalRecebido > 0 ? 'var(--green)' : 'var(--text-dim)' }}>{c.totalRecebido > 0 ? fmtMoney(c.totalRecebido) : '—'}</td>
+                  <td className="num mono" style={{ fontWeight: 700 }}>{c.aPagar > 0 ? fmtMoney(c.aPagar) : '—'}</td>
+                  <td><PagamentoBadge status={c.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ padding: '8px 16px', fontSize: 10.5, color: 'var(--text-dim)' }}>
+        <strong>Pedidos em aberto</strong> = saldo a faturar dos pedidos de venda abertos no SAP. <strong>Recebido</strong> = pagamentos do Assistente de Recebimentos no período. <strong>A pagar</strong> = aberto − recebido. Status: <em>PGT Total</em> (recebido cobre o aberto), <em>PGT Parcial</em>, <em>Sem PGT</em>. Read-only.
+      </div>
+    </div>
+  );
+};
+
 const Relatorios = ({ ctx }) => {
   const rel = useMemo(() => {
     const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
@@ -2782,6 +2944,7 @@ const Relatorios = ({ ctx }) => {
   const RELATORIOS_CARDS = [
     { id: 'faturamento', titulo: 'Faturamento — NFs por cliente', desc: 'Notas fiscais de saída do SAP por cliente, com item, lote, quantidade e valor.', icon: 'ti-file-invoice', cor: 'var(--green)', bg: 'var(--green-bg)' },
     { id: 'financeiro', titulo: 'Recebimentos por cliente', desc: 'O que cada cliente pagou/adiantou, lançado no Assistente de Recebimentos do SAP.', icon: 'ti-wallet', cor: 'var(--green)', bg: 'var(--green-bg)' },
+    { id: 'pedidos-pagamentos', titulo: 'Pedidos × Pagamentos', desc: 'Carteira aberta de cada cliente vs. o que já foi recebido, com o saldo a pagar e a flag de pagamento.', icon: 'ti-scale', cor: 'var(--orange)', bg: 'var(--orange-bg)' },
     { id: 'comercial', titulo: 'Resumo comercial de pedidos', desc: 'Abertos/fechados, unidades, valor e comissão por representante.', icon: 'ti-report-money', cor: 'var(--accent-light)', bg: 'var(--bg-hover)' },
     { id: 'carteira', titulo: 'Carteira aberta', desc: 'Saldo a embarcar por cultivar e por vendedor, OEs por status e pedidos atrasados.', icon: 'ti-chart-bar', cor: 'var(--blue)', bg: 'var(--blue-bg)' },
     { id: 'divergencias', titulo: 'Divergências de entrega', desc: 'Conferência SAP × DNLog (entregue × faturado).', icon: 'ti-scale', cor: 'var(--orange)', bg: 'var(--orange-bg)' },
@@ -2923,6 +3086,7 @@ const Relatorios = ({ ctx }) => {
 
       {/* ===== ADIANTAMENTOS / SALDO POR CLIENTE ===== */}
       {relAtivo === 'financeiro' && <FinanceiroClientes ctx={ctx} />}
+      {relAtivo === 'pedidos-pagamentos' && <PedidosPagamentos ctx={ctx} />}
 
       {/* ===== RESUMO COMERCIAL DE PEDIDOS (abertos/fechados, unidades, valor, comissão) ===== */}
       {relAtivo === 'comercial' && (
@@ -10969,6 +11133,36 @@ const Embarques = ({ ctx }) => {
   const [busca, setBusca] = useState('');
   const [ordenacao, setOrdenacao] = useState('criacao_desc');
   const [oeExpandida, setOeExpandida] = useState(null);
+  // Status de pagamento por cliente (SAP: carteira aberta vs recebido) — para a
+  // flag PGT Total/Parcial/Sem em cada OE. Busca 1x; não bloqueia a tela.
+  const [pagStatus, setPagStatus] = useState({ byCard: {}, byNome: {} });
+  useEffect(() => {
+    let vivo = true;
+    DNLOG_API.listarPedidosPagamentos().then(r => {
+      if (!vivo) return;
+      const byCard = {}, byNome = {};
+      ((r && r.clientes) || []).forEach(c => {
+        if (c.cardCode) byCard[c.cardCode] = c.status;
+        if (c.cliente) byNome[normLote(c.cliente)] = c.status;
+      });
+      setPagStatus({ byCard, byNome });
+    }).catch(() => {});
+    return () => { vivo = false; };
+  }, []);
+  // Resolve a flag de pagamento de uma OE: tenta pelo CardCode do pedido, senão
+  // pelo nome do cliente da parada.
+  const statusPagOE = (oe) => {
+    const paradas = getParadas(oe);
+    for (const p of paradas) {
+      const cc = cardCodeDoPedido(p.pedido_numero);
+      if (cc && pagStatus.byCard[cc]) return pagStatus.byCard[cc];
+    }
+    for (const p of paradas) {
+      const st = p.cliente && pagStatus.byNome[normLote(p.cliente)];
+      if (st) return st;
+    }
+    return null;
+  };
 
   const ordens = ctx.state.ordens;
 
@@ -11226,12 +11420,17 @@ const Embarques = ({ ctx }) => {
                           {fmtDate(oe.data_prevista)} <span style={{ color: 'var(--text-dim)' }}>{oe.hora_prevista}</span>
                         </td>
                         <td style={{ fontSize: 12 }}>
-                          {paradas.length === 1 ? paradas[0].cliente : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
                             <span>
-                              <strong>{paradas[0].cliente}</strong>
-                              <span style={{ color: 'var(--text-muted)', fontSize: 11 }}> +{paradas.length - 1} parada{paradas.length > 2 ? 's' : ''}</span>
+                              {paradas.length === 1 ? paradas[0].cliente : (
+                                <span>
+                                  <strong>{paradas[0].cliente}</strong>
+                                  <span style={{ color: 'var(--text-muted)', fontSize: 11 }}> +{paradas.length - 1} parada{paradas.length > 2 ? 's' : ''}</span>
+                                </span>
+                              )}
                             </span>
-                          )}
+                            <PagamentoBadge status={statusPagOE(oe)} mini />
+                          </div>
                         </td>
                         <td>
                           <span className={`chip ${oe.modalidade === 'TRIANGULAR' ? 'chip-blue' : 'chip-accent'}`} style={{ fontSize: 10 }}>
