@@ -576,36 +576,6 @@ export class ApiController {
     );
   }
 
-  // DIAG TEMPORÁRIO (read-only): compara a flag calculada por TOTAL RECEBIDO
-  // (critério de hoje) x só ADIANTAMENTO (critério alternativo).
-  @Public()
-  @Get('diag-flag')
-  async diagFlag(@Query('t') t: string) {
-    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const r: any = await this.getPedidosPagamentos();
-    const linhas = r.clientes.map((c: any) => ({
-      cardCode: c.cardCode,
-      cliente: c.cliente,
-      aberto: c.valorPedidosAberto,
-      recebido: c.totalRecebido,
-      adiantamento: c.totalAdiantamento,
-      baixaTitulo: Math.max(0, c.totalRecebido - c.totalAdiantamento),
-      hoje: this.statusPagamento(c.valorPedidosAberto, c.totalRecebido),
-      alt: this.statusPagamento(c.valorPedidosAberto, c.totalAdiantamento),
-    }));
-    const mudam = linhas.filter((l: any) => l.hoje !== l.alt);
-    const cont = (arr: any[], k: string) => arr.reduce((m: any, l: any) => { m[l[k]] = (m[l[k]] || 0) + 1; return m; }, {});
-    return {
-      totalClientes: linhas.length,
-      distribuicao_hoje: cont(linhas, 'hoje'),
-      distribuicao_alt: cont(linhas, 'alt'),
-      qtd_que_mudam: mudam.length,
-      exemplos_que_mudam: mudam
-        .sort((a: any, b: any) => b.aberto - a.aberto)
-        .slice(0, 8),
-    };
-  }
-
   // -------- SALDO / ADIANTAMENTO POR CLIENTE --------
   // CurrentAccountBalance do parceiro: negativo = crédito a favor do cliente
   // (adiantamento pago); positivo = a receber. SOMENTE LEITURA no SAP.
