@@ -105,6 +105,27 @@ export class ApiController {
     };
   }
 
+  // DIAG TEMPORÁRIO (read-only): depósitos presentes no saldo por lote.
+  @Public()
+  @Get('diag-dep')
+  async diagDep(@Query('t') t: string, @Query('lote') lote?: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const linhas = (await this.sap.getSaldoPorLote()) as any[];
+    const porDep: Record<string, any> = {};
+    for (const r of linhas || []) {
+      const cod = r.CodigoDeposito || '(vazio)';
+      if (!porDep[cod]) porDep[cod] = { codigo: cod, nome: r.NomeDeposito, lotes: 0, saldo: 0 };
+      porDep[cod].lotes += 1;
+      porDep[cod].saldo += Number(r.SaldoAtual) || 0;
+    }
+    const achado = lote
+      ? (linhas || [])
+          .filter((r) => String(r.Lote || '').toUpperCase() === String(lote).toUpperCase())
+          .map((r) => ({ item: r.CodigoItem, lote: r.Lote, dep: r.CodigoDeposito, depNome: r.NomeDeposito, saldo: r.SaldoAtual }))
+      : undefined;
+    return { total_linhas: (linhas || []).length, depositos: Object.values(porDep), lote: achado };
+  }
+
 
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
