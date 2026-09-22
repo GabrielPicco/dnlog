@@ -1444,24 +1444,49 @@ const loadState = () => {
 
 let _syncTimer = null;
 let _retryTimer = null;
-let _pendingOrdens = null; // último snapshot ainda não CONFIRMADO no banco
+// SINCRONIZAÇÃO INCREMENTAL: em vez de reenviar TODAS as OEs a cada mudança
+// (payload pesado, estourava o limite do body), mandamos só as que mudaram.
+//  _baseline    = id -> JSON da OE já confirmada no banco (referência p/ diff)
+//  _pendingById = id -> OE alterada localmente, ainda não confirmada
+const _baseline = new Map();
+const _pendingById = new Map();
+const _oeSer = (o) => { try { return JSON.stringify(o); } catch (e) { return 'x' + Math.random(); } };
+const _temPendentes = () => _pendingById.size > 0;
+// Redefine o baseline a partir de uma lista (após hidratar do banco / polling):
+// esses dados vieram do servidor, então passam a ser a nova referência.
+const _resetBaseline = (ordens) => {
+  _baseline.clear();
+  (ordens || []).forEach(o => { if (o && o.id) _baseline.set(o.id, _oeSer(o)); });
+};
 // true enquanto aplicamos dados VINDOS do banco (polling). Evita reenviar de
 // volta ao banco o que acabou de chegar (não é uma mudança local do usuário).
 let _aplicandoRemoto = false;
 // Avisa a UI sobre o estado do sync (o App registra o setter em window).
 const _notifySync = (st) => { try { if (window.__DNLOG_setSyncStatus) window.__DNLOG_setSyncStatus(st); } catch (e) {} };
-// Envia o snapshot pendente e SÓ limpa se o banco confirmar (r.ok). Se falhar,
-// mantém o pendente e reprograma um retry — nada de perder dados em silêncio.
+// Envia SÓ as OEs pendentes (alteradas) e confirma cada uma no baseline. Se
+// falhar, mantém o pendente e reprograma um retry — nada se perde em silêncio.
 const _fazerSyncOEs = async () => {
-  if (!_pendingOrdens || !window.__DNLOG_BACKEND_ON) return;
-  const snap = _pendingOrdens;
+  if (!_temPendentes() || !window.__DNLOG_BACKEND_ON) return;
+  // Snapshot das pendentes deste envio: [id, objeto]. Só o subconjunto alterado.
+  const enviando = Array.from(_pendingById.entries());
+  const ordens = enviando.map(([, o]) => o);
   _notifySync({ estado: 'salvando' });
-  const res = await DNLOG_API.sincronizarOEs(snap);
+  const res = await DNLOG_API.sincronizarOEs(ordens);
   if (res && res.ok) {
-    if (_pendingOrdens === snap) _pendingOrdens = null; // nada novo entrou nesse meio
+    // Confirma cada OE enviada: baseline vira o que foi mandado; remove do
+    // pendente SÓ se não surgiu uma versão mais nova nesse meio-tempo.
+    enviando.forEach(([id, o]) => {
+      _baseline.set(id, _oeSer(o));
+      if (_pendingById.get(id) === o) _pendingById.delete(id);
+    });
     if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
-    try { localStorage.removeItem('dnlog_pending_sync'); } catch (e) {}
-    _notifySync({ estado: 'salvo', em: new Date().toISOString() });
+    if (!_temPendentes()) {
+      try { localStorage.removeItem('dnlog_pending_sync'); } catch (e) {}
+      _notifySync({ estado: 'salvo', em: new Date().toISOString() });
+    } else {
+      // Surgiram novas mudanças durante o envio: manda o restante já.
+      _syncTimer = setTimeout(_fazerSyncOEs, 150);
+    }
   } else {
     const motivo = (res && res.motivo) || 'rede';
     // Marca que há mudança local não confirmada. No próximo login o bootstrap
@@ -1479,15 +1504,25 @@ const saveState = (state) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch(e) { console.error('Erro salvando:', e); }
 
-  // Espelha as OEs no banco. Debounce curto só para agrupar a rajada de setState
-  // de uma mesma ação; a persistência em si é confirmada (retry se falhar).
   if (_aplicandoRemoto) {
-    // Esta mudança veio do próprio banco (polling): consome a flag e NÃO reenvia.
+    // Esta mudança veio do próprio banco (polling): NÃO reenvia; e o que chegou
+    // passa a ser o novo baseline (senão o próximo diff acharia "mudança").
     _aplicandoRemoto = false;
-  } else if (window.__DNLOG_BACKEND_ON && state && Array.isArray(state.ordens)) {
-    _pendingOrdens = state.ordens;
-    if (_syncTimer) clearTimeout(_syncTimer);
-    _syncTimer = setTimeout(_fazerSyncOEs, 400);
+    _resetBaseline(state.ordens);
+    return;
+  }
+  // Espelha as OEs no banco — só as que realmente mudaram vs. o baseline.
+  // Debounce curto agrupa a rajada de setState de uma mesma ação.
+  if (window.__DNLOG_BACKEND_ON && state && Array.isArray(state.ordens)) {
+    let achouMudanca = false;
+    for (const o of state.ordens) {
+      if (!o || !o.id) continue;
+      if (_baseline.get(o.id) !== _oeSer(o)) { _pendingById.set(o.id, o); achouMudanca = true; }
+    }
+    if (achouMudanca) {
+      if (_syncTimer) clearTimeout(_syncTimer);
+      _syncTimer = setTimeout(_fazerSyncOEs, 400);
+    }
   }
 };
 
@@ -1498,15 +1533,17 @@ const saveState = (state) => {
 // durante o unload; sendBeacon não permite o Authorization exigido pela API.
 if (typeof window !== 'undefined') {
   const flushOEs = () => {
-    if (!_pendingOrdens || !window.__DNLOG_BACKEND_ON) return;
+    if (!_temPendentes() || !window.__DNLOG_BACKEND_ON) return;
     try {
+      const ordens = Array.from(_pendingById.values()); // só as alteradas
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `${DNLOG_API_BASE}/oe/sync`, false); // síncrono
       xhr.setRequestHeader('Content-Type', 'application/json');
       const t = localStorage.getItem('dnlog_token') || '';
       if (t) xhr.setRequestHeader('Authorization', 'Bearer ' + t);
-      xhr.send(JSON.stringify({ ordens: _pendingOrdens }));
-      _pendingOrdens = null;
+      xhr.send(JSON.stringify({ ordens }));
+      ordens.forEach(o => { if (o && o.id) _baseline.set(o.id, _oeSer(o)); });
+      _pendingById.clear();
     } catch (e) { /* melhor esforço */ }
   };
   window.addEventListener('pagehide', flushOEs);
@@ -1626,6 +1663,9 @@ const App = ({ usuario, onLogout }) => {
     if (!_jaMontou.current) {
       _jaMontou.current = true;
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+      // Baseline inicial = OEs já hidratadas do banco. Assim o 1º diff só acusa
+      // o que o usuário realmente alterar depois (não reenvia tudo na abertura).
+      _resetBaseline(state.ordens);
       return; // pula o sync na montagem
     }
     saveState(state);
@@ -1643,7 +1683,7 @@ const App = ({ usuario, onLogout }) => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       if (!window.__DNLOG_BACKEND_ON) return;
       // Há mudança local pendente? Não sobrescreve — espera o sync confirmar.
-      if (_pendingOrdens) return;
+      if (_temPendentes()) return;
       try { if (localStorage.getItem('dnlog_pending_sync')) return; } catch (e) {}
       buscando = true;
       try {
@@ -1652,7 +1692,7 @@ const App = ({ usuario, onLogout }) => {
           DNLOG_API.listarAgendamentos().catch(() => null),
         ]);
         if (!vivo) return;
-        if (_pendingOrdens) return; // surgiu mudança local nesse meio
+        if (_temPendentes()) return; // surgiu mudança local nesse meio
         try { if (localStorage.getItem('dnlog_pending_sync')) return; } catch (e) {}
         setState(prev => {
           let novo = prev, mudou = false;
