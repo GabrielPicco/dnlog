@@ -1,10 +1,18 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
+import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
+
+  // Limite do corpo das requisições. O padrão do Express é 100kb — pequeno para
+  // o /api/oe/sync, que envia TODAS as OEs (com paradas/itens/lotes/histórico)
+  // num único POST. Ao passar de 100kb o Express devolvia 413 e o app ficava
+  // preso em "Sem conexão… não salvo". 15mb dá folga de sobra.
+  app.use(json({ limit: '15mb' }));
+  app.use(urlencoded({ extended: true, limit: '15mb' }));
 
   // CORS: respeita a origem configurada no .env (CORS_ORIGIN).
   // Use '*' apenas em desenvolvimento; em produção, informe o domínio do DNLog.
