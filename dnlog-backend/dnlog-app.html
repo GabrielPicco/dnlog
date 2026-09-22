@@ -1843,16 +1843,25 @@ const App = ({ usuario, onLogout }) => {
       }, 0);
       const seq = Math.max(s.proxNumero || 1, maxExistente + 1);
       const numero = `OE-2026-${String(seq).padStart(5, '0')}`;
+      // Conferência de cargas desabilitada (Configurações → Operação): a OE
+      // própria pula Programada/Em conferência e já nasce EMBARCADA, pronta para
+      // marcar como faturada. Triangular mantém o fluxo próprio (troca de nota).
+      const conferenciaOn = !(config && config.conferenciaHabilitada === false);
+      const pularConferencia = !conferenciaOn && oe.modalidade !== 'TRIANGULAR';
+      const agora = new Date().toISOString();
       const novaOE = {
         ...oe,
         id: 'oe_' + Date.now(),
         numero,
-        criado_em: new Date().toISOString(),
+        criado_em: agora,
         criado_por: (usuario && (usuario.nome || usuario.email)) || 'Sistema',
-        status: 'PROGRAMADA'
+        status: pularConferencia ? 'EMBARCADA' : 'PROGRAMADA',
+        ...(pularConferencia ? { embarcada_em: agora, sem_conferencia: true } : {}),
       };
-      showToast('OE criada com sucesso!', `${numero} foi adicionada à fila de embarques`);
-      logAcao('OE criada', `${numero} · ${novaOE.cliente || ''} · ${totalBBs(novaOE)} un`, { entidade_tipo: 'OE', entidade_id: numero });
+      showToast('OE criada com sucesso!', pularConferencia
+        ? `${numero} criada como EMBARCADA (conferência desabilitada)`
+        : `${numero} foi adicionada à fila de embarques`);
+      logAcao('OE criada', `${numero} · ${novaOE.cliente || ''} · ${totalBBs(novaOE)} un${pularConferencia ? ' · sem conferência' : ''}`, { entidade_tipo: 'OE', entidade_id: numero });
       return { ...s, ordens: [...s.ordens, novaOE], proxNumero: seq + 1 };
     });
   };
@@ -9801,6 +9810,13 @@ const Configuracoes = ({ ctx }) => {
     ctx.salvarConfig({ ...(ctx.config || {}), permissoes });
   };
 
+  // Conferência de cargas: habilitada por padrão. Quando desabilitada, novas OEs
+  // (próprias) já nascem EMBARCADAS, prontas para marcar como faturada.
+  const conferenciaOn = !(ctx.config && ctx.config.conferenciaHabilitada === false);
+  const toggleConferencia = () => {
+    ctx.salvarConfig({ ...(ctx.config || {}), conferenciaHabilitada: !conferenciaOn });
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -9815,6 +9831,7 @@ const Configuracoes = ({ ctx }) => {
       <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid var(--border)' }}>
         {[
           { id: 'menu', label: 'Menu lateral', icon: 'ti-menu-2' },
+          { id: 'operacao', label: 'Operação', icon: 'ti-settings-2' },
           { id: 'permissoes', label: 'Permissões por perfil', icon: 'ti-shield-lock' },
           { id: 'usuarios', label: 'Usuários', icon: 'ti-users' },
         ].map(t => (
@@ -9865,6 +9882,38 @@ const Configuracoes = ({ ctx }) => {
               </div>
             );
           })}
+        </div>
+      ) : aba === 'operacao' ? (
+        <div className="panel" style={{ padding: 0 }}>
+          <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>Fluxo de embarque</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+              Ajustes de como as OEs percorrem os status.
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
+            <i className="ti ti-device-tablet" style={{ fontSize: 18, color: 'var(--text-muted)', width: 20, textAlign: 'center' }}></i>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Conferência de cargas</div>
+              <div style={{ fontSize: 11, color: conferenciaOn ? 'var(--green)' : 'var(--orange)', marginTop: 2 }}>
+                {conferenciaOn
+                  ? 'Habilitada — a OE passa por Programada → Em conferência → Embarcada.'
+                  : 'Desabilitada — novas OEs já nascem Embarcadas, prontas para faturar (pula a conferência).'}
+              </div>
+            </div>
+            <button onClick={toggleConferencia} title={conferenciaOn ? 'Desabilitar' : 'Habilitar'} style={{
+              position: 'relative', width: 42, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer',
+              background: conferenciaOn ? 'var(--accent-light)' : 'var(--border)', transition: 'background .15s', flexShrink: 0,
+            }}>
+              <span style={{
+                position: 'absolute', top: 3, left: conferenciaOn ? 21 : 3, width: 18, height: 18,
+                borderRadius: '50%', background: '#fff', transition: 'left .15s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+              }} />
+            </button>
+          </div>
+          <div style={{ padding: '10px 18px', fontSize: 11, color: 'var(--text-dim)' }}>
+            Vale para OEs criadas a partir de agora. OEs já existentes mantêm o status atual. Triangulares seguem o próprio fluxo (troca de nota), independente desta opção.
+          </div>
         </div>
       ) : aba === 'permissoes' ? (
         <div className="panel" style={{ padding: 0, overflowX: 'auto' }}>
