@@ -105,6 +105,26 @@ export class ApiController {
     };
   }
 
+  // DIAG TEMPORÁRIO (read-only): testa a conexão com o banco (Supabase).
+  @Public()
+  @Get('diag-db')
+  async diagDb(@Query('t') t: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const ini = Date.now();
+    try {
+      const oes = await this.oeService.findAll();
+      return { ok: true, banco: 'ok', oes: (oes as any[]).length, ms: Date.now() - ini };
+    } catch (e: any) {
+      return {
+        ok: false,
+        banco: 'falha',
+        ms: Date.now() - ini,
+        erro: e?.message || String(e),
+        code: e?.code || e?.errno || null,
+      };
+    }
+  }
+
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
     return true;
