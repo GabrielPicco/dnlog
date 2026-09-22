@@ -105,50 +105,6 @@ export class ApiController {
     };
   }
 
-  // DIAG TEMPORÁRIO (read-only): depósitos presentes no saldo por lote.
-  @Public()
-  @Get('diag-dep')
-  async diagDep(@Query('t') t: string, @Query('lote') lote?: string) {
-    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const linhas = (await this.sap.getSaldoPorLote()) as any[];
-    const porDep: Record<string, any> = {};
-    for (const r of linhas || []) {
-      const cod = r.CodigoDeposito || '(vazio)';
-      if (!porDep[cod]) porDep[cod] = { codigo: cod, nome: r.NomeDeposito, lotes: 0, saldo: 0 };
-      porDep[cod].lotes += 1;
-      porDep[cod].saldo += Number(r.SaldoAtual) || 0;
-    }
-    const achado = lote
-      ? (linhas || [])
-          .filter((r) => String(r.Lote || '').toUpperCase() === String(lote).toUpperCase())
-          .map((r) => ({ item: r.CodigoItem, lote: r.Lote, dep: r.CodigoDeposito, depNome: r.NomeDeposito, saldo: r.SaldoAtual }))
-      : undefined;
-    return { total_linhas: (linhas || []).length, depositos: Object.values(porDep), lote: achado };
-  }
-
-  // DIAG TEMPORÁRIO (read-only): quais OEs reservam um lote (status/faturada).
-  @Public()
-  @Get('diag-oe-lote')
-  async diagOeLote(@Query('t') t: string, @Query('lote') lote: string) {
-    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const oes = (await this.oeService.findAll()) as any[];
-    const alvo = String(lote || '').toUpperCase();
-    const itensDe = (oe: any) =>
-      Array.isArray(oe.paradas)
-        ? oe.paradas.flatMap((p: any) => (p.itens || []).map((it: any) => ({ ...it, modalidade: p.modalidade || oe.modalidade })))
-        : (oe.itens || []).map((it: any) => ({ ...it, modalidade: oe.modalidade }));
-    const hits: any[] = [];
-    for (const oe of oes) {
-      let qtd = 0;
-      for (const it of itensDe(oe)) {
-        for (const la of it.lotes_alocados || []) {
-          if (String(la.lote_codigo || '').toUpperCase() === alvo) qtd += Number(la.qtd_bb) || 0;
-        }
-      }
-      if (qtd > 0) hits.push({ numero: oe.numero, status: oe.status, faturada: !!oe.faturada, modalidade: oe.modalidade, qtd });
-    }
-    return { lote: alvo, oes: hits };
-  }
 
 
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */

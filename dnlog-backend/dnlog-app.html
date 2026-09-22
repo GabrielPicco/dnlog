@@ -1818,8 +1818,14 @@ const App = ({ usuario, onLogout }) => {
 
   const lotesComSaldo = useMemo(() => {
     return state.lotes.map(l => {
+      // Reserva SÓ as OEs que ainda NÃO baixaram no SAP (não faturadas e não
+      // entregues). O saldo do SAP (qtd_bb) já vem LÍQUIDO das saídas faturadas
+      // (Delivery Note emitida no SAP), então descontar aqui as OEs faturadas/
+      // entregues contava a MESMA baixa duas vezes — e zerava o disponível de
+      // lotes que ainda têm saldo físico (ex.: OE entregue de 16, saldo SAP 8 →
+      // 8-16 = 0). Excluindo-as, o disponível volta a bater com o SAP.
       const reservado = state.ordens
-        .filter(o => o.status !== 'CANCELADA' && o.status !== 'ENTREGUE' && o.id !== (editingOE && editingOE.id))
+        .filter(o => o.status !== 'CANCELADA' && o.status !== 'ENTREGUE' && !o.faturada && o.id !== (editingOE && editingOE.id))
         .reduce((acc, oe) => {
           let qtdDoLote = 0;
           getItensOE(oe).forEach(it => {
@@ -1831,24 +1837,10 @@ const App = ({ usuario, onLogout }) => {
           });
           return acc + qtdDoLote;
         }, 0);
-      const consumido = state.ordens
-        .filter(o => o.status === 'ENTREGUE')
-        .reduce((acc, oe) => {
-          let qtdDoLote = 0;
-          getItensOE(oe).forEach(it => {
-            if (it.modalidade === 'TRIANGULAR') return;
-            if (it.lotes_alocados) {
-              const aloc = it.lotes_alocados.find(la => la.lote_codigo === l.lote_codigo);
-              if (aloc && !aloc.controle_paralelo) qtdDoLote += aloc.qtd_bb;
-            }
-          });
-          return acc + qtdDoLote;
-        }, 0);
       return {
         ...l,
         qtd_reservada: reservado,
-        qtd_consumida: consumido,
-        qtd_disponivel: Math.max(0, l.qtd_bb - reservado - consumido)
+        qtd_disponivel: Math.max(0, l.qtd_bb - reservado)
       };
     });
   }, [state.lotes, state.ordens, editingOE]);
