@@ -113,13 +113,20 @@ export class ApiController {
   async diagLotesSap(@Query('t') t: string, @Query('lotes') lotes: string) {
     if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
     const norm = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
-    const linhas = (await this.sap.getSaldoPorLote()) as any[];
+    const [linhas, cadastro] = await Promise.all([
+      this.sap.getSaldoPorLote() as Promise<any[]>,
+      (this.sap.getPesosPorLote() as Promise<any[]>).catch(() => []),
+    ]);
     const idx: Record<string, any[]> = {};
     for (const r of linhas || []) (idx[norm(r.Lote)] = idx[norm(r.Lote)] || []).push(r);
+    const cad: Record<string, any[]> = {};
+    for (const b of cadastro || []) { const k = norm(b.Batch ?? b.BatchNumber); (cad[k] = cad[k] || []).push(b); }
     return (lotes || '').split(',').map((l) => l.trim()).filter(Boolean).map((l) => ({
       lote: l,
-      no_sap: !!idx[norm(l)],
-      linhas: (idx[norm(l)] || []).map((r) => ({ item: r.CodigoItem, dep: r.CodigoDeposito, saldo: r.SaldoAtual })),
+      com_saldo: !!idx[norm(l)],
+      no_cadastro_sap: !!cad[norm(l)],
+      saldo: (idx[norm(l)] || []).map((r) => ({ item: r.CodigoItem, dep: r.CodigoDeposito, saldo: r.SaldoAtual })),
+      cadastro: (cad[norm(l)] || []).map((b) => ({ item: b.ItemCode, status: b.Status })),
     }));
   }
 
