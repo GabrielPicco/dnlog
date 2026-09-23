@@ -107,6 +107,22 @@ export class ApiController {
 
 
 
+  // DIAG TEMPORÁRIO (read-only): lotes do QCDN existem como lote no SAP?
+  @Public()
+  @Get('diag-lotes-sap')
+  async diagLotesSap(@Query('t') t: string, @Query('lotes') lotes: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const norm = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+    const linhas = (await this.sap.getSaldoPorLote()) as any[];
+    const idx: Record<string, any[]> = {};
+    for (const r of linhas || []) (idx[norm(r.Lote)] = idx[norm(r.Lote)] || []).push(r);
+    return (lotes || '').split(',').map((l) => l.trim()).filter(Boolean).map((l) => ({
+      lote: l,
+      no_sap: !!idx[norm(l)],
+      linhas: (idx[norm(l)] || []).map((r) => ({ item: r.CodigoItem, dep: r.CodigoDeposito, saldo: r.SaldoAtual })),
+    }));
+  }
+
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
     return true;

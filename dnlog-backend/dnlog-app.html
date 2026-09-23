@@ -2078,6 +2078,28 @@ const App = ({ usuario, onLogout }) => {
           });
       }
     }
+
+    // QCDN: baixa AUTOMÁTICA das reservas dos lotes que saíram nesta OE.
+    // Independe do SAP (é outro sistema). Best-effort: falha não desfaz o
+    // faturamento, e o botão "Dar baixa" no painel da OE segue como plano B.
+    const oeQ = state.ordens.find(o => o.id === id);
+    if (oeQ && !oeQ.faturada && oeQ.modalidade !== 'TRIANGULAR' && window.__DNLOG_BACKEND_ON) {
+      baixarReservasQcdnDaOE(oeQ).then(res => {
+        if (!res || res.configurado === false) return; // integração ainda não ligada
+        if (res.feitas > 0) {
+          // Mescla no estado MAIS RECENTE (não sobrescreve baixa manual feita nesse meio).
+          setState(s => ({
+            ...s,
+            ordens: s.ordens.map(o => o.id === id ? { ...o, qcdn_baixas: { ...(o.qcdn_baixas || {}), ...res.novas } } : o),
+          }));
+          showToast('Reservas baixadas no QCDN', `${res.feitas} lote(s) da ${oeQ.numero}`);
+          logAcao('Baixa QCDN automática', `${oeQ.numero} · ${res.feitas} lote(s)`, { entidade_tipo: 'OE', entidade_id: oeQ.numero });
+        }
+        if (res.falhas.length) {
+          showToast('Baixa QCDN com pendência', `${res.falhas.slice(0, 2).join(' · ')} — use "Dar baixa" na OE`);
+        }
+      }).catch(() => {});
+    }
   };
 
   // Desfatura OE: reverte as baixas (caso a NF tenha sido emitida errada)
@@ -6651,6 +6673,8 @@ const NovaOE = ({ ctx, editMode }) => {
                               lotesAlocados={lotesAlocados}
                               lotesDoItem={lotesDoItem}
                               modalidade={modalidade}
+                              clienteCardCode={cardCodeDoPedido(pedidoAtivo.numero) || pedidoAtivo._sap_cliente_codigo || pedidoAtivo.cliente_codigo || ''}
+                              clienteNome={pedidoAtivo.cliente || ''}
                               onChange={(q) => handleSetLotesParadaAtiva(item.codigo, q === 0 ? [] : lotesAlocados, pedidoAtivo.numero)}
                               onSetLotes={(lotes) => handleSetLotesParadaAtiva(item.codigo, lotes, pedidoAtivo.numero)}
                             />
@@ -7032,12 +7056,17 @@ const CaminhaoVisual = ({ paradas }) => {
   );
 };
 
-const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, onSetLotes }) => {
+const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, onSetLotes, clienteCardCode, clienteNome }) => {
   const [showLoteModal, setShowLoteModal] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
   const [showTriangularConfirm, setShowTriangularConfirm] = useState(false);
   const checked = qtd > 0;
   const isTriangular = modalidade === 'TRIANGULAR';
+  // Reservas do cliente no QCDN (lote -> reserva). Triangular não tem reserva DN.
+  const reservasQcdn = useReservasQcdn(isTriangular ? '' : clienteCardCode, isTriangular ? '' : clienteNome);
+  const lotesReservados = reservasQcdn
+    ? lotesDoItem.filter(l => { const r = reservasQcdn.get(normLote(l.lote_codigo)); return r && r.saldo > 0; })
+    : [];
   const totalAlocado = lotesAlocados.reduce((a, l) => a + l.qtd_bb, 0);
   const totalDisponivelEstoque = lotesDoItem.reduce((a, l) => a + l.qtd_disponivel, 0);
   // Em triangular, nunca olha estoque
@@ -7109,6 +7138,13 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
         <div>
           <div className="cell-primary" style={{ fontSize: 13 }}>{item.descricao}</div>
           <div className="cell-muted mono" style={{ fontSize: 11 }}>{item.codigo} · {item.obtentor} · {item.fornecedor}</div>
+          {lotesReservados.length > 0 && (
+            <div style={{ fontSize: 10.5, color: 'var(--purple)', fontWeight: 700, marginTop: 3 }}
+              title={lotesReservados.map(l => l.lote_codigo).join(', ')}>
+              <i className="ti ti-bookmark" style={{ fontSize: 11, verticalAlign: -1 }}></i>
+              {' '}{lotesReservados.length} lote{lotesReservados.length > 1 ? 's' : ''} reservado{lotesReservados.length > 1 ? 's' : ''} p/ este cliente (QCDN)
+            </div>
+          )}
         </div>
         <div className="num" style={{ color: 'var(--accent-light)', fontWeight: 700, fontFamily: 'JetBrains Mono, monospace' }}>
           <div>{item.saldo} {item.unidade || 'un'}</div>
@@ -7226,6 +7262,7 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
         <SeletorLotes
           item={item}
           lotesDoItem={lotesDoItem}
+          reservasQcdn={reservasQcdn}
           lotesAlocadosAtual={lotesAlocados}
           onClose={() => setShowLoteModal(false)}
           onConfirm={(lotes) => {
@@ -7285,7 +7322,12 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
 // ============================================================
 // SELETOR DE LOTES (MODAL)
 // ============================================================
-const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfirm }) => {
+const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfirm, reservasQcdn }) => {
+  // Reserva do QCDN para ESTE cliente neste lote (só conta se ainda tem saldo).
+  const reservaDe = (codigo) => {
+    const r = reservasQcdn && reservasQcdn.get(normLote(codigo));
+    return r && r.saldo > 0 ? r : null;
+  };
   // Estado inicial: mapa lote_codigo -> qtd
   const [alocacao, setAlocacao] = useState(() => {
     const obj = {};
@@ -7306,10 +7348,18 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
   const totalAlocado = Object.values(alocacao).reduce((sum, v) => sum + (Number(v) || 0), 0);
   const pode = totalAlocado > 0 && totalAlocado <= saldoPedido;
 
-  // Lotes ordenados FIFO (mais antigos primeiro). Mostra todos com disp>0 OU já alocados
+  // Lotes reservados no QCDN para este cliente vêm PRIMEIRO (e o "Alocar FIFO"
+  // os usa antes); depois, FIFO (mais antigos primeiro). Mostra todos com
+  // disp>0 OU já alocados.
   const lotesDisponiveis = lotesDoItem
     .filter(l => (l.qtd_disponivel + reservaAnterior(l.lote_codigo)) > 0 || (alocacao[l.lote_codigo] || 0) > 0)
-    .sort((a, b) => (a.data_fabricacao || '').localeCompare(b.data_fabricacao || ''));
+    .sort((a, b) => {
+      const ra = reservaDe(a.lote_codigo) ? 0 : 1;
+      const rb = reservaDe(b.lote_codigo) ? 0 : 1;
+      if (ra !== rb) return ra - rb;
+      return (a.data_fabricacao || '').localeCompare(b.data_fabricacao || '');
+    });
+  const qtdReservados = lotesDisponiveis.filter(l => reservaDe(l.lote_codigo)).length;
 
   // Atualiza quantidade de um lote. Garante limites.
   const atualizarLote = (codigo, novaQtd) => {
@@ -7372,6 +7422,11 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }} className="mono">
               {item.codigo} · Saldo do pedido: <strong style={{ color: 'var(--accent-light)' }}>{saldoPedido} {item.unidade || 'un'}</strong>
             </div>
+            {qtdReservados > 0 && (
+              <div style={{ fontSize: 11, color: 'var(--purple)', marginTop: 4, fontWeight: 700 }}>
+                <i className="ti ti-bookmark" style={{ verticalAlign: -1 }}></i> {qtdReservados} lote{qtdReservados > 1 ? 's' : ''} reservado{qtdReservados > 1 ? 's' : ''} para este cliente no QCDN (aparecem primeiro)
+              </div>
+            )}
           </div>
           <button className="btn btn-ghost" style={{ padding: '4px 8px' }} onClick={onClose}>
             <i className="ti ti-x"></i>
@@ -7421,9 +7476,18 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
                   const alocadoLote = alocacao[l.lote_codigo] || 0;
                   const capacidadeReal = l.qtd_disponivel + reservaAnterior(l.lote_codigo);
                   const noLimite = alocadoLote >= capacidadeReal;
+                  const resQ = reservaDe(l.lote_codigo);
                   return (
-                    <tr key={l.lote_codigo} style={{ background: alocadoLote > 0 ? 'var(--accent-glow)' : 'transparent' }}>
-                      <td className="mono" style={{ color: 'var(--accent-light)', fontWeight: 700, fontSize: 12 }}>{l.lote_codigo}</td>
+                    <tr key={l.lote_codigo} style={{ background: alocadoLote > 0 ? 'var(--accent-glow)' : resQ ? 'var(--purple-bg)' : 'transparent' }}>
+                      <td className="mono" style={{ color: 'var(--accent-light)', fontWeight: 700, fontSize: 12 }}>
+                        {l.lote_codigo}
+                        {resQ && (
+                          <div title={`Reserva QCDN: ${resQ.reservado} reservado · ${resQ.entregue || 0} já entregue`}
+                            style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10, fontWeight: 700, color: 'var(--purple)', marginTop: 2, whiteSpace: 'nowrap' }}>
+                            <i className="ti ti-bookmark" style={{ fontSize: 10, verticalAlign: -1 }}></i> Reservado · {resQ.saldo} bag{resQ.saldo !== 1 ? 's' : ''}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ fontSize: 12 }}>{l.armazem}</td>
                       <td className="mono cell-muted" style={{ fontSize: 12 }}>{l.peneira}</td>
                       <td className="num mono">{l.germinacao}%</td>
@@ -7773,35 +7837,118 @@ const LotesManual = ({ item, lotesAlocadosAtual, onClose, onConfirm }) => {
 // casados com os lotes que estão embarcando, e permite dar baixa (parcial) na
 // reserva do QCDN com um toque. Casamento por CardCode do cliente + nº do lote.
 // ============================================================
-const ReservasQcdn = ({ ctx, oe }) => {
-  // Junta os lotes embarcados (com lote real, do estoque DN) agrupados por cliente.
-  const grupos = useMemo(() => {
-    const map = new Map(); // chave: cardCode||nome -> { cardCode, nome, pedidos:Set, lotes: Map(loteNorm -> {lote, qtd, cultivar, item, pedido}) }
-    getParadas(oe).forEach(parada => {
-      const pedido = parada.pedido_numero;
-      const nome = parada.cliente || oe.cliente || '';
-      const cardCode = cardCodeDoPedido(pedido);
-      const chave = cardCode || ('nome:' + nome);
-      (parada.itens || []).forEach(it => {
-        const pedItem = it.pedido_numero || pedido;
-        const cc = cardCodeDoPedido(pedItem) || cardCode;
-        const ch = cc || ('nome:' + nome);
-        (it.lotes_alocados || []).forEach(la => {
-          if (!la || !la.lote_codigo || la.sem_lotes_triangular) return;
-          const qtd = Number(la.qtd_bb) || 0;
-          if (qtd <= 0) return;
-          if (!map.has(ch)) map.set(ch, { cardCode: cc, nome, pedidos: new Set(), lotes: new Map() });
-          const g = map.get(ch);
-          if (pedItem) g.pedidos.add(pedItem);
-          const k = normLote(la.lote_codigo);
-          const ex = g.lotes.get(k);
-          if (ex) ex.qtd += qtd;
-          else g.lotes.set(k, { lote: la.lote_codigo, qtd, cultivar: it.cultivar_nome || it.descricao || '', item: it.codigo, pedido: pedItem });
-        });
+// Junta os lotes reais de uma OE (estoque DN, sem os "sem lote" de triangular)
+// agrupados por cliente: CardCode do pedido, ou o nome quando não houver código.
+const gruposQcdnDaOE = (oe) => {
+  const map = new Map(); // chave: cardCode||nome -> { cardCode, nome, pedidos:Set, lotes: Map(loteNorm -> {lote, qtd, cultivar, item, pedido}) }
+  getParadas(oe).forEach(parada => {
+    const pedido = parada.pedido_numero;
+    const nome = parada.cliente || oe.cliente || '';
+    const cardCode = cardCodeDoPedido(pedido);
+    (parada.itens || []).forEach(it => {
+      const pedItem = it.pedido_numero || pedido;
+      const cc = cardCodeDoPedido(pedItem) || cardCode;
+      const ch = cc || ('nome:' + nome);
+      (it.lotes_alocados || []).forEach(la => {
+        if (!la || !la.lote_codigo || la.sem_lotes_triangular) return;
+        const qtd = Number(la.qtd_bb) || 0;
+        if (qtd <= 0) return;
+        if (!map.has(ch)) map.set(ch, { cardCode: cc, nome, pedidos: new Set(), lotes: new Map() });
+        const g = map.get(ch);
+        if (pedItem) g.pedidos.add(pedItem);
+        const k = normLote(la.lote_codigo);
+        const ex = g.lotes.get(k);
+        if (ex) ex.qtd += qtd;
+        else g.lotes.set(k, { lote: la.lote_codigo, qtd, cultivar: it.cultivar_nome || it.descricao || '', item: it.codigo, pedido: pedItem });
       });
     });
-    return Array.from(map.values());
-  }, [oe]);
+  });
+  return Array.from(map.values());
+};
+
+// Uma reserva por lote: a mais antiga que ainda tem saldo (o QCDN devolve em
+// ordem de criação). Sem nenhuma com saldo, fica a primeira, só para exibir.
+const reservasPorLoteQcdn = (reservas) => {
+  const m = new Map();
+  (reservas || []).forEach(r => {
+    if (!r || !r.loteNumero) return;
+    const k = normLote(r.loteNumero);
+    const atual = m.get(k);
+    if (!atual || (!(atual.saldo > 0) && r.saldo > 0)) m.set(k, r);
+  });
+  return m;
+};
+
+// Reservas do cliente no QCDN, por lote. Cache de 60s por cliente: todas as
+// linhas de item da mesma parada dividem UMA consulta.
+const _qcdnCache = new Map(); // chave -> { em, promise }
+const qcdnReservasCliente = (cardCode, nome) => {
+  if (!cardCode && !nome) return Promise.resolve(new Map());
+  const chave = cardCode || ('nome:' + nome);
+  const c = _qcdnCache.get(chave);
+  if (c && Date.now() - c.em < 60000) return c.promise;
+  const promise = DNLOG_API.qcdnReservas(cardCode, nome)
+    .then(r => (r && r.ok !== false) ? reservasPorLoteQcdn(r.reservas) : new Map())
+    .catch(() => new Map());
+  _qcdnCache.set(chave, { em: Date.now(), promise });
+  return promise;
+};
+const useReservasQcdn = (cardCode, nome) => {
+  const [mapa, setMapa] = useState(null);
+  useEffect(() => {
+    let vivo = true;
+    if (!window.__DNLOG_BACKEND_ON || (!cardCode && !nome)) { setMapa(null); return; }
+    qcdnReservasCliente(cardCode, nome).then(m => { if (vivo) setMapa(m); });
+    return () => { vivo = false; };
+  }, [cardCode, nome]);
+  return mapa;
+};
+
+// Baixa AUTOMÁTICA no QCDN dos lotes de uma OE que têm reserva com saldo e
+// ainda não foram baixados nela. Idempotente: pula os já baixados aqui, e o
+// QCDN também não duplica (OE + lote). Devolve só as baixas NOVAS.
+const baixarReservasQcdnDaOE = async (oe) => {
+  const jaFeitas = oe.qcdn_baixas || {};
+  const novas = {};
+  const falhas = [];
+  for (const g of gruposQcdnDaOE(oe)) {
+    const linhas = Array.from(g.lotes.values());
+    let r;
+    try { r = await DNLOG_API.qcdnReservas(g.cardCode, g.nome, linhas.map(x => x.lote)); }
+    catch (e) { falhas.push(`${g.nome || g.cardCode}: ${(e && e.message) || 'falha'}`); continue; }
+    if (r && r.configurado === false) return { novas, feitas: 0, falhas, configurado: false };
+    if (!r || r.ok === false) { falhas.push(`${g.nome || g.cardCode}: ${(r && r.erro) || 'falha'}`); continue; }
+    const porLote = reservasPorLoteQcdn(r.reservas);
+    for (const linha of linhas) {
+      const k = normLote(linha.lote);
+      if (jaFeitas[k] || novas[k]) continue;
+      const reserva = porLote.get(k);
+      if (!reserva || !(reserva.saldo > 0)) continue; // lote sem reserva p/ este cliente
+      const bags = Math.min(linha.qtd, reserva.saldo);
+      try {
+        const b = await DNLOG_API.qcdnBaixa({
+          reservaId: reserva.reservaId,
+          quantidadeBags: bags,
+          pedidoSap: linha.pedido || oe.pedido_numero || '',
+          oeNumero: oe.numero,
+          loteNumero: linha.lote,
+        });
+        if (b && b.ok) {
+          novas[k] = { saidaId: b.saidaId, bags: b.quantidadeBags != null ? b.quantidadeBags : bags, reservaId: reserva.reservaId, quando: new Date().toISOString(), auto: true };
+        } else {
+          falhas.push(`${linha.lote}: ${(b && b.erro) || 'falha'}`);
+        }
+      } catch (e) {
+        falhas.push(`${linha.lote}: ${(e && e.message) || 'falha'}`);
+      }
+    }
+  }
+  return { novas, feitas: Object.keys(novas).length, falhas, configurado: true };
+};
+
+const ReservasQcdn = ({ ctx, oe }) => {
+  // Lotes embarcados agrupados por cliente (mesma regra da baixa automática).
+  const grupos = useMemo(() => gruposQcdnDaOE(oe), [oe]);
 
   const [dados, setDados] = useState(null); // { [chaveGrupo]: {reservas, erro, configurado} }
   const [loading, setLoading] = useState(false);
@@ -7882,8 +8029,7 @@ const ReservasQcdn = ({ ctx, oe }) => {
           {grupos.map((g, gi) => {
             const chave = g.cardCode || ('nome:' + g.nome);
             const d = (dados && dados[chave]) || { reservas: [], erro: null };
-            const reservasPorLote = new Map();
-            (d.reservas || []).forEach(r => { if (r.loteNumero) reservasPorLote.set(normLote(r.loteNumero), r); });
+            const reservasPorLote = reservasPorLoteQcdn(d.reservas);
             return (
               <div key={gi} style={{ padding: '8px 16px 14px' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -7917,7 +8063,7 @@ const ReservasQcdn = ({ ctx, oe }) => {
                             <td>
                               {jaBaixado ? (
                                 <span className="chip" style={{ background: 'var(--green-bg)', color: 'var(--green)', fontSize: 10, fontWeight: 700 }}>
-                                  <i className="ti ti-check"></i> Baixado {fmtNum(jaBaixado.bags)}
+                                  <i className="ti ti-check"></i> Baixado {fmtNum(jaBaixado.bags)}{jaBaixado.auto ? ' · auto' : ''}
                                 </span>
                               ) : !reserva ? (
                                 <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>sem reserva</span>
@@ -7940,7 +8086,7 @@ const ReservasQcdn = ({ ctx, oe }) => {
             );
           })}
           <div style={{ padding: '0 16px 12px', fontSize: 10.5, color: 'var(--text-dim)' }}>
-            A baixa registra uma saída parcial na reserva do QCDN (só as bags embarcadas). Idempotente: não baixa em dobro.
+            A baixa é feita automaticamente ao marcar a OE como faturada (só as bags embarcadas, saída parcial na reserva). O botão serve para baixar antes ou refazer uma que falhou. Idempotente: não baixa em dobro.
           </div>
         </div>
       )}
