@@ -107,29 +107,6 @@ export class ApiController {
 
 
 
-  // DIAG TEMPORÁRIO (read-only): lotes do QCDN existem como lote no SAP?
-  @Public()
-  @Get('diag-lotes-sap')
-  async diagLotesSap(@Query('t') t: string, @Query('lotes') lotes: string) {
-    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const norm = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
-    const [linhas, cadastro] = await Promise.all([
-      this.sap.getSaldoPorLote() as Promise<any[]>,
-      (this.sap.getPesosPorLote() as Promise<any[]>).catch(() => []),
-    ]);
-    const idx: Record<string, any[]> = {};
-    for (const r of linhas || []) (idx[norm(r.Lote)] = idx[norm(r.Lote)] || []).push(r);
-    const cad: Record<string, any[]> = {};
-    for (const b of cadastro || []) { const k = norm(b.Batch ?? b.BatchNumber); (cad[k] = cad[k] || []).push(b); }
-    return (lotes || '').split(',').map((l) => l.trim()).filter(Boolean).map((l) => ({
-      lote: l,
-      com_saldo: !!idx[norm(l)],
-      no_cadastro_sap: !!cad[norm(l)],
-      saldo: (idx[norm(l)] || []).map((r) => ({ item: r.CodigoItem, dep: r.CodigoDeposito, saldo: r.SaldoAtual })),
-      cadastro: (cad[norm(l)] || []).map((b) => ({ item: b.ItemCode, status: b.Status })),
-    }));
-  }
-
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
     return true;
