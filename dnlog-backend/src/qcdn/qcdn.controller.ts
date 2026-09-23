@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpException, HttpStatus, Post, Query } from '@nestjs/common';
+import { Public } from '../common/public.decorator';
 import { QcdnService } from './qcdn.service';
 
 /**
@@ -14,6 +15,24 @@ export class QcdnController {
   @Get('status')
   status() {
     return { configurado: this.qcdn.configurado() };
+  }
+
+  // DIAG TEMPORÁRIO: envs presentes? o token autentica no QCDN? (nunca expõe o token)
+  @Public()
+  @Get('diag')
+  async diag(@Query('t') t: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const base = process.env.QCDN_BASE_URL || '';
+    const tok = process.env.QCDN_API_TOKEN || '';
+    const r: any = await this.qcdn.listarReservas({ cardCode: '__ping__' });
+    return {
+      base_url: base || null,
+      token_definido: !!tok,
+      token_tamanho: tok.length,
+      configurado: this.qcdn.configurado(),
+      teste_ok: !!r?.ok,
+      teste_erro: r?.erro || null,
+    };
   }
 
   @Get('reservas')
