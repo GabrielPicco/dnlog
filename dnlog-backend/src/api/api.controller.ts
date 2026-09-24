@@ -107,6 +107,38 @@ export class ApiController {
 
 
 
+  // DIAG TEMPORÁRIO (read-only): por que um pedido sumiu da Nova OE?
+  @Public()
+  @Get('diag-pedido')
+  async diagPedido(@Query('t') t: string, @Query('num') num: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const sap = ((await this.sap.getOrderPorDocNum(num)) as any[]).map((o) => ({
+      docEntry: o.DocEntry, docNum: o.DocNum, cliente: o.CardName, cardCode: o.CardCode,
+      status: o.DocumentStatus, cancelado: o.Cancelled, emissao: o.DocDate, entrega: o.DocDueDate,
+      linhas: (o.DocumentLines || []).map((l: any) => ({
+        item: l.ItemCode, desc: l.ItemDescription, qtd: l.Quantity, aberto: l.OpenQuantity ?? l.RemainingOpenQuantity, status: l.LineStatus,
+      })),
+    }));
+    // Aparece na lista que o DNLog baixa (/api/pedidos)?
+    const lista = (await this.getPedidos()) as any[];
+    const naLista = lista.find((p) => p.numero === `PV-${num}`) || null;
+    // OEs do banco que usam esse pedido
+    const alvo = `PV-${num}`;
+    const oes = ((await this.oeService.findAll()) as any[])
+      .map((oe) => {
+        let qtd = 0;
+        const paradas = Array.isArray(oe.paradas) ? oe.paradas : [{ pedido_numero: oe.pedido_numero, itens: oe.itens || [] }];
+        for (const p of paradas) for (const it of p.itens || []) if ((it.pedido_numero || p.pedido_numero) === alvo) qtd += Number(it.qtd_bb) || 0;
+        return { numero: oe.numero, status: oe.status, faturada: !!oe.faturada, qtd, criado_em: oe.criado_em };
+      })
+      .filter((x) => x.qtd > 0);
+    return {
+      sap,
+      na_lista_dnlog: naLista ? { tem_saldo: naLista.tem_saldo, status_sap: naLista.status_sap, qtd_saldo_bb: naLista.qtd_saldo_bb, itens: (naLista.itens || []).map((i: any) => ({ codigo: i.codigo, qtd: i.qtd_bb, entregue: i.qtd_entregue, saldo: i.saldo })) } : null,
+      oes,
+    };
+  }
+
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
     return true;
