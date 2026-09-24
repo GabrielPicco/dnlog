@@ -2819,15 +2819,18 @@ const PedidosPagamentos = ({ ctx }) => {
     return l;
   }, [clientes, modo, q]);
 
-  const totais = (dados && dados.totais) || { pedidosAberto: 0, recebido: 0, aPagar: 0 };
+  const totais = (dados && dados.totais) || { pedidosTotal: 0, pedidosAberto: 0, entregue: 0, cancelado: 0, recebido: 0, adiantamento: 0, aPagar: 0 };
 
   const exportar = () => {
-    const rows = [['Cliente', 'CardCode', 'Pedidos em aberto', 'Recebido', 'Adiantamento', 'A pagar', 'Status'].join(';')];
+    const rows = [['Cliente', 'CardCode', 'Total em pedidos', 'Fechado/entregue', 'Em aberto', 'Cancelados', 'Recebido total', 'Adiantamento', 'A pagar', 'Status', 'Pedidos (abertos/fechados/cancelados)'].join(';')];
     lista.forEach(c => rows.push([
       (c.cliente || '').replace(/;/g, ','), c.cardCode,
-      (c.valorPedidosAberto || 0).toFixed(2), (c.totalRecebido || 0).toFixed(2),
-      (c.totalAdiantamento || 0).toFixed(2), (c.aPagar || 0).toFixed(2),
+      (c.valorTotal || 0).toFixed(2), (c.valorEntregue || 0).toFixed(2),
+      (c.valorPedidosAberto || 0).toFixed(2), (c.valorCancelado || 0).toFixed(2),
+      (c.totalRecebido || 0).toFixed(2), (c.totalAdiantamento || 0).toFixed(2),
+      (c.aPagar || 0).toFixed(2),
       (PGT_META[c.status] || {}).label || c.status,
+      `${c.qtdAbertos || 0}/${c.qtdFechados || 0}/${c.qtdCancelados || 0}`,
     ].join(';')));
     const blob = new Blob(['﻿' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -2876,14 +2879,20 @@ const PedidosPagamentos = ({ ctx }) => {
       </div>
 
       <div style={{ display: 'flex', gap: 24, padding: '10px 16px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
-        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Pedidos em aberto</div>
-          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--orange)' }}>{fmtMoney(totais.pedidosAberto)}</div></div>
-        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Adiantado</div>
-          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--green)' }}>{fmtMoney(totais.adiantamento)}</div></div>
-        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Recebido total</div>
-          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-muted)' }}>{fmtMoney(totais.recebido)}</div></div>
-        <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>A pagar (saldo)</div>
-          <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>{fmtMoney(totais.aPagar)}</div></div>
+        {[
+          ['Total em pedidos', totais.pedidosTotal, 'var(--text)', 'sem cancelados'],
+          ['Fechado / entregue', totais.entregue, 'var(--text-muted)', null],
+          ['Em aberto', totais.pedidosAberto, 'var(--orange)', null],
+          ['Cancelados', totais.cancelado, 'var(--text-dim)', 'fora do total'],
+          ['Recebido total', totais.recebido, 'var(--green)', `adiantamento ${fmtMoney(totais.adiantamento || 0)}`],
+          ['A pagar (saldo)', totais.aPagar, 'var(--red)', 'total − recebido'],
+        ].map(([rot, val, cor, sub]) => (
+          <div key={rot}>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>{rot}</div>
+            <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: cor }}>{fmtMoney(val || 0)}</div>
+            {sub && <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{sub}</div>}
+          </div>
+        ))}
       </div>
 
       {erro ? (
@@ -2894,11 +2903,13 @@ const PedidosPagamentos = ({ ctx }) => {
         <div className="empty" style={{ padding: 24 }}><i className="ti ti-inbox-off"></i><div>Nenhum cliente neste filtro</div></div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', fontSize: 12.5, minWidth: 640 }}>
+          <table style={{ width: '100%', fontSize: 12.5, minWidth: 980 }}>
             <thead><tr>
               <th>Cliente</th>
-              <th className="num">Pedidos aberto</th>
-              <th className="num">Adiantamento</th>
+              <th className="num">Total pedidos</th>
+              <th className="num">Fechado / entregue</th>
+              <th className="num">Em aberto</th>
+              <th className="num">Cancelados</th>
               <th className="num">Recebido (total)</th>
               <th className="num">A pagar</th>
               <th>Status</th>
@@ -2906,11 +2917,22 @@ const PedidosPagamentos = ({ ctx }) => {
             <tbody>
               {lista.map((c, i) => (
                 <tr key={(c.cardCode || '') + i}>
-                  <td><div className="cell-primary" style={{ fontSize: 13 }}>{c.cliente}</div><div className="cell-muted mono" style={{ fontSize: 11 }}>{c.cardCode}{c.qtdPedidos ? ` · ${c.qtdPedidos} pedido(s)` : ''}</div></td>
+                  <td>
+                    <div className="cell-primary" style={{ fontSize: 13 }}>{c.cliente}</div>
+                    <div className="cell-muted mono" style={{ fontSize: 11 }}>
+                      {c.cardCode}
+                      {(c.qtdPedidos || c.qtdCancelados) ? ` · ${c.qtdAbertos || 0} aberto(s) · ${c.qtdFechados || 0} fechado(s)${c.qtdCancelados ? ` · ${c.qtdCancelados} cancelado(s)` : ''}` : ''}
+                    </div>
+                  </td>
+                  <td className="num mono" style={{ fontWeight: 700 }}>{c.valorTotal > 0 ? fmtMoney(c.valorTotal) : '—'}</td>
+                  <td className="num mono" style={{ color: c.valorEntregue > 0 ? 'var(--text-muted)' : 'var(--text-dim)' }}>{c.valorEntregue > 0 ? fmtMoney(c.valorEntregue) : '—'}</td>
                   <td className="num mono" style={{ color: c.valorPedidosAberto > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{c.valorPedidosAberto > 0 ? fmtMoney(c.valorPedidosAberto) : '—'}</td>
-                  <td className="num mono" style={{ fontWeight: 700, color: c.totalAdiantamento > 0 ? 'var(--green)' : 'var(--text-dim)' }}>{c.totalAdiantamento > 0 ? fmtMoney(c.totalAdiantamento) : '—'}</td>
-                  <td className="num mono" style={{ color: c.totalRecebido > 0 ? 'var(--text-muted)' : 'var(--text-dim)' }}>{c.totalRecebido > 0 ? fmtMoney(c.totalRecebido) : '—'}</td>
-                  <td className="num mono" style={{ fontWeight: 700 }}>{c.aPagar > 0 ? fmtMoney(c.aPagar) : '—'}</td>
+                  <td className="num mono" style={{ color: 'var(--text-dim)', textDecoration: c.valorCancelado > 0 ? 'line-through' : 'none' }}>{c.valorCancelado > 0 ? fmtMoney(c.valorCancelado) : '—'}</td>
+                  <td className="num mono">
+                    <div style={{ fontWeight: 700, color: c.totalRecebido > 0 ? 'var(--green)' : 'var(--text-dim)' }}>{c.totalRecebido > 0 ? fmtMoney(c.totalRecebido) : '—'}</div>
+                    {c.totalAdiantamento > 0 && <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>adiant. {fmtMoney(c.totalAdiantamento)}</div>}
+                  </td>
+                  <td className="num mono" style={{ fontWeight: 800, color: c.aPagar > 0 ? 'var(--red)' : 'var(--text-dim)' }}>{c.aPagar > 0 ? fmtMoney(c.aPagar) : '—'}</td>
                   <td><PagamentoBadge status={c.status} /></td>
                 </tr>
               ))}
@@ -2919,7 +2941,7 @@ const PedidosPagamentos = ({ ctx }) => {
         </div>
       )}
       <div style={{ padding: '8px 16px', fontSize: 10.5, color: 'var(--text-dim)' }}>
-        <strong>Pedidos em aberto</strong> = saldo a faturar dos pedidos de venda abertos no SAP. <strong>Adiantamento</strong> = recebimento aplicado a pedido de adiantamento (dinheiro adiantado antes de faturar). <strong>Recebido (total)</strong> = todos os recebimentos do período (adiantamento + baixa de título já faturado). A <strong>flag</strong> e o <strong>A pagar</strong> (= aberto − adiantamento) usam o <strong>adiantamento</strong>. Read-only.
+        <strong>Total pedidos</strong> = valor dos pedidos de venda no SAP (total do documento), sem os cancelados — abertos + fechados com entrega no ano. <strong>Fechado/entregue</strong> = total − em aberto. <strong>Cancelados</strong> aparecem só para conferência (fora do total). <strong>Recebido</strong> = tudo do Assistente de Recebimentos no período (adiantamento + baixa de título). <strong>A pagar</strong> = total pedidos − recebido; a <strong>flag</strong> (também no embarque) usa a mesma conta. Read-only.
       </div>
     </div>
   );
@@ -3017,7 +3039,7 @@ const Relatorios = ({ ctx }) => {
   const RELATORIOS_CARDS = [
     { id: 'faturamento', titulo: 'Faturamento — NFs por cliente', desc: 'Notas fiscais de saída do SAP por cliente, com item, lote, quantidade e valor.', icon: 'ti-file-invoice', cor: 'var(--green)', bg: 'var(--green-bg)' },
     { id: 'financeiro', titulo: 'Recebimentos por cliente', desc: 'O que cada cliente pagou/adiantou, lançado no Assistente de Recebimentos do SAP.', icon: 'ti-wallet', cor: 'var(--green)', bg: 'var(--green-bg)' },
-    { id: 'pedidos-pagamentos', titulo: 'Pedidos × Pagamentos', desc: 'Carteira aberta de cada cliente vs. o que já foi recebido, com o saldo a pagar e a flag de pagamento.', icon: 'ti-scale', cor: 'var(--orange)', bg: 'var(--orange-bg)' },
+    { id: 'pedidos-pagamentos', titulo: 'Pedidos × Pagamentos', desc: 'Total em pedidos de cada cliente (fechados, em aberto e cancelados) vs. tudo o que já foi recebido, com o saldo a pagar e a flag de pagamento.', icon: 'ti-scale', cor: 'var(--orange)', bg: 'var(--orange-bg)' },
     { id: 'comercial', titulo: 'Resumo comercial de pedidos', desc: 'Abertos/fechados, unidades, valor e comissão por representante.', icon: 'ti-report-money', cor: 'var(--accent-light)', bg: 'var(--bg-hover)' },
     { id: 'carteira', titulo: 'Carteira aberta', desc: 'Saldo a embarcar por cultivar e por vendedor, OEs por status e pedidos atrasados.', icon: 'ti-chart-bar', cor: 'var(--blue)', bg: 'var(--blue-bg)' },
     { id: 'divergencias', titulo: 'Divergências de entrega', desc: 'Conferência SAP × DNLog (entregue × faturado).', icon: 'ti-scale', cor: 'var(--orange)', bg: 'var(--orange-bg)' },

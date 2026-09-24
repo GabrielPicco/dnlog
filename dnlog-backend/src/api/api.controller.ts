@@ -105,6 +105,17 @@ export class ApiController {
     };
   }
 
+  // DIAG TEMPORÁRIO (read-only): confere a nova conciliação Pedidos x Pagamentos.
+  @Public()
+  @Get('diag-pedpag2')
+  async diagPedPag2(@Query('t') t: string, @Query('q') q?: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const r: any = await this.getPedidosPagamentos();
+    const porStatus = r.clientes.reduce((m: any, c: any) => { m[c.status] = (m[c.status] || 0) + 1; return m; }, {});
+    const alvo = String(q || 'LAVROBRAS').toUpperCase();
+    return { totais: r.totais, clientes: r.clientes.length, porStatus, amostra: r.clientes.filter((c: any) => String(c.cliente).toUpperCase().includes(alvo)) };
+  }
+
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
     return true;
@@ -498,14 +509,16 @@ export class ApiController {
   }
 
   // -------- PEDIDOS x PAGAMENTOS (conciliação por cliente) --------
-  // Junta o valor dos pedidos de venda EM ABERTO com o que já foi recebido
-  // (Assistente de Recebimentos), por cliente. SOMENTE LEITURA no SAP.
+  // Compara TUDO o que o cliente comprou (total dos pedidos, sem cancelados) com
+  // TUDO o que pagou (Assistente de Recebimentos: adiantamento + baixa de
+  // título). Assim um pedido fechar (sair do "em aberto") não distorce a conta.
+  // SOMENTE LEITURA no SAP.
 
-  /** Flag de pagamento a partir do valor em aberto e do total recebido. */
-  private statusPagamento(valorAberto: number, recebido: number): 'total' | 'parcial' | 'sem' {
+  /** Flag de pagamento: total dos pedidos (sem cancelados) x total recebido. */
+  private statusPagamento(valorDevido: number, recebido: number): 'total' | 'parcial' | 'sem' {
     if (recebido <= 0.005) return 'sem';
-    if (valorAberto <= 0.005) return 'total'; // sem pedido em aberto e já recebeu
-    if (recebido + 0.005 >= valorAberto) return 'total';
+    if (valorDevido <= 0.005) return 'total'; // sem pedido e já recebeu
+    if (recebido + 0.005 >= valorDevido) return 'total';
     return 'parcial';
   }
 
@@ -520,58 +533,76 @@ export class ApiController {
           this.sap.getRecebimentos(per.desde, per.ate),
         ]);
 
-        // Pedidos EM ABERTO agregados por cliente (valor do saldo a faturar).
+        // Pedidos agregados por cliente. Os pedidos vêm como: todos os ABERTOS +
+        // os FECHADOS/cancelados com entrega no ano corrente (getPedidosAbertos).
+        // Valor = total do documento no SAP (DocTotal: o que o cliente deve, com
+        // descontos/despesas). O "em aberto" é a fração do DocTotal proporcional
+        // ao saldo dos itens. Pedido fechado conta como entregue (mesma regra do
+        // resto do app). Cancelados ficam à parte e NÃO entram no total.
+        const novoCliente = (cc: string, nome: string) => ({
+          cardCode: cc, cliente: nome || cc,
+          valorTotal: 0, valorPedidosAberto: 0, valorEntregue: 0, valorCancelado: 0,
+          qtdPedidos: 0, qtdAbertos: 0, qtdFechados: 0, qtdCancelados: 0,
+          totalRecebido: 0, totalAdiantamento: 0, aPagar: 0, status: 'sem',
+        });
         const porCliente: Record<string, any> = {};
         for (const p of (pedidosSap as any[]) || []) {
-          if (p.Cancelled === 'tYES' || p.DocumentStatus !== 'bost_Open') continue;
-          const linhas: any[] = Array.isArray(p.DocumentLines) ? p.DocumentLines : [];
-          const valorAberto = linhas.reduce((a, l) => a + saldoLinha(l) * (Number(l.Price) || 0), 0);
           const cc = p.CardCode || '—';
-          if (!porCliente[cc]) {
-            porCliente[cc] = {
-              cardCode: cc, cliente: p.CardName || cc,
-              valorPedidosAberto: 0, qtdPedidos: 0,
-              totalRecebido: 0, totalAdiantamento: 0, aPagar: 0, status: 'sem',
-            };
+          if (!porCliente[cc]) porCliente[cc] = novoCliente(cc, p.CardName);
+          const g = porCliente[cc];
+          const linhas: any[] = Array.isArray(p.DocumentLines) ? p.DocumentLines : [];
+          const valorItens = linhas.reduce((a, l) => a + (Number(l.Quantity) || 0) * (Number(l.Price) || 0), 0);
+          const docTotal = Number(p.DocTotal) || valorItens;
+          if (p.Cancelled === 'tYES') {
+            g.valorCancelado += docTotal;
+            g.qtdCancelados += 1;
+            continue;
           }
-          porCliente[cc].valorPedidosAberto += valorAberto;
-          porCliente[cc].qtdPedidos += 1;
+          g.valorTotal += docTotal;
+          g.qtdPedidos += 1;
+          if (p.DocumentStatus === 'bost_Open') {
+            const abertoItens = linhas.reduce((a, l) => a + saldoLinha(l) * (Number(l.Price) || 0), 0);
+            const fator = valorItens > 0 ? docTotal / valorItens : 1;
+            g.valorPedidosAberto += Math.min(docTotal, abertoItens * fator);
+            g.qtdAbertos += 1;
+          } else {
+            g.qtdFechados += 1;
+          }
         }
 
         // Recebimentos agregados por cliente (mesma lógica do relatório de recebimentos).
         const agg = this.agregarRecebimentos(recebs as any[]);
         for (const r of agg.clientes) {
           const cc = r.cardCode || '—';
-          if (!porCliente[cc]) {
-            porCliente[cc] = {
-              cardCode: cc, cliente: r.cliente || cc,
-              valorPedidosAberto: 0, qtdPedidos: 0,
-              totalRecebido: 0, totalAdiantamento: 0, aPagar: 0, status: 'sem',
-            };
-          }
+          if (!porCliente[cc]) porCliente[cc] = novoCliente(cc, r.cliente);
           porCliente[cc].totalRecebido = r.totalRecebido;
           porCliente[cc].totalAdiantamento = r.totalAdiantamento;
           if (!porCliente[cc].cliente || porCliente[cc].cliente === cc) porCliente[cc].cliente = r.cliente || cc;
         }
 
         const clientes = Object.values(porCliente).map((c: any) => {
-          // A flag/status e o "a pagar" usam o ADIANTAMENTO (dinheiro adiantado
-          // sobre o pedido em aberto). O total recebido segue no payload para a
-          // tela mostrar as duas colunas lado a lado.
-          c.aPagar = Math.max(0, c.valorPedidosAberto - c.totalAdiantamento);
-          c.status = this.statusPagamento(c.valorPedidosAberto, c.totalAdiantamento);
+          c.valorEntregue = Math.max(0, c.valorTotal - c.valorPedidosAberto);
+          // A pagar e a flag: TOTAL dos pedidos (sem cancelados) − TUDO recebido.
+          c.aPagar = Math.max(0, c.valorTotal - c.totalRecebido);
+          c.status = this.statusPagamento(c.valorTotal, c.totalRecebido);
           return c;
-        }).sort((a: any, b: any) => b.valorPedidosAberto - a.valorPedidosAberto || b.totalAdiantamento - a.totalAdiantamento);
+        })
+          // Some quem só tem pedido cancelado e nenhum recebimento (não há o que conciliar).
+          .filter((c: any) => c.valorTotal > 0 || c.totalRecebido > 0)
+          .sort((a: any, b: any) => b.valorTotal - a.valorTotal || b.totalRecebido - a.totalRecebido);
 
         const totais = clientes.reduce(
           (t: any, c: any) => {
+            t.pedidosTotal += c.valorTotal;
             t.pedidosAberto += c.valorPedidosAberto;
+            t.entregue += c.valorEntregue;
+            t.cancelado += c.valorCancelado;
             t.recebido += c.totalRecebido;
             t.adiantamento += c.totalAdiantamento;
             t.aPagar += c.aPagar;
             return t;
           },
-          { pedidosAberto: 0, recebido: 0, adiantamento: 0, aPagar: 0 },
+          { pedidosTotal: 0, pedidosAberto: 0, entregue: 0, cancelado: 0, recebido: 0, adiantamento: 0, aPagar: 0 },
         );
 
         return { periodo: per, totais, clientes };
