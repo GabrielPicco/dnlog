@@ -590,18 +590,6 @@ export class SapClientService implements OnModuleDestroy {
     }
   }
 
-  /** [DIAG/LEITURA] Pedido de venda pelo DocNum (número que aparece como PV-xxx). */
-  async getOrderPorDocNum(docNum: number | string): Promise<any[]> {
-    await this.ensureSession();
-    const resp = await this.axios.get('/Orders', {
-      params: {
-        $filter: `DocNum eq ${Number(docNum)}`,
-        $select: 'DocEntry,DocNum,CardCode,CardName,DocDate,DocDueDate,DocumentStatus,Cancelled,DocumentLines',
-      },
-    });
-    return resp.data?.value || [];
-  }
-
   /** [LEITURA] Pedido de venda (Order) completo — para inspecionar campos (Project etc.). */
   async getOrderFull(docEntry: number | string): Promise<any> {
     await this.ensureSession();
