@@ -56,6 +56,25 @@ export class QcdnService {
     }
   }
 
+  /** Reservas em aberto POR LOTE (todos os clientes) — telas de estoque. */
+  async listarReservasPorLote(params: { lotes?: string[]; todas?: boolean }) {
+    const http = this.client();
+    if (!http) return { ok: false, configurado: false, reservas: [], erro: 'Integração QCDN não configurada.' };
+    try {
+      const resp = await http.get('/api/integ/reservas-lotes', {
+        params: {
+          lotes: params.lotes && params.lotes.length ? params.lotes.join(',') : undefined,
+          todas: params.todas ? '1' : undefined,
+        },
+      });
+      return { ok: true, configurado: true, ...resp.data };
+    } catch (e: any) {
+      const msg = e?.response?.data?.error || e?.message || 'erro';
+      this.logger.warn(`listarReservasPorLote falhou: ${msg}`);
+      return { ok: false, configurado: true, reservas: [], erro: msg };
+    }
+  }
+
   /** Registra uma baixa (parcial) contra uma reserva do QCDN. Idempotente por OE+lote. */
   async darBaixa(payload: {
     reservaId: string;

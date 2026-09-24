@@ -1342,6 +1342,12 @@ const DNLOG_API = {
     if (!r.ok) throw new Error('GET /qcdn/reservas ' + r.status);
     return r.json();
   },
+  // Reservas em aberto POR LOTE, de todos os clientes (telas de estoque).
+  async qcdnReservasLotes() {
+    const r = await fetch(`${DNLOG_API_BASE}/qcdn/reservas-lotes`, { headers: dnlogAuthHeaders() });
+    if (!r.ok) throw new Error('GET /qcdn/reservas-lotes ' + r.status);
+    return r.json();
+  },
   async qcdnBaixa(payload) {
     const r = await fetch(`${DNLOG_API_BASE}/qcdn/baixa`, {
       method: 'POST',
@@ -4695,6 +4701,7 @@ const EstoqueSAP = () => {
 // RESUMO DE ESTOQUE (visão mobile: físico / em terceiros / de terceiros)
 // ============================================================
 const ResumoEstoque = ({ ctx }) => {
+  const reservasLote = useReservasPorLote(); // QCDN: lote -> reservas em aberto
   const [cat, setCat] = useState('fisico');
   const [q, setQ] = useState('');
   const [filtroGrupo, setFiltroGrupo] = useState('todos');
@@ -4838,6 +4845,7 @@ const ResumoEstoque = ({ ctx }) => {
                 <div style={{ minWidth: 0, flex: 1 }}>
                   {/* LOTE em destaque (fonte grande) */}
                   <div className="mono" style={{ fontSize: 19, fontWeight: 800, color: 'var(--accent-light)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.15 }}>{l.lote || '—'}</div>
+                  <ReservaLoteTag lote={l.lote} mapa={reservasLote} grande />
                   <div style={{ fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 3 }}>{l.descricao || l.item_codigo}</div>
                   <div className="mono" style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 1 }}>
                     {l.item_codigo}
@@ -4865,6 +4873,7 @@ const Estoque = ({ ctx }) => {
   //    receber de compra (aba "Compromissos"). Somar as duas juntas contaria o
   //    saldo em dobro — por isso ficam em abas separadas.
   const [aba, setAba] = useState('lotes'); // 'lotes' | 'compromissos' | 'terceiros'
+  const reservasLote = useReservasPorLote(); // QCDN: lote -> reservas em aberto
   const [q, setQ] = useState('');
   const [filtroArmazem, setFiltroArmazem] = useState('todos');
   const [filtroGrupo, setFiltroGrupo] = useState('todos');
@@ -5068,7 +5077,10 @@ const Estoque = ({ ctx }) => {
               const sv = statusValidade(l.validade);
               return (
                 <tr key={(l.item_codigo || '') + '|' + (l.lote || '') + '|' + i}>
-                  <td className="cell-primary mono" style={{ fontSize: 12, color: 'var(--accent-light)' }}>{l.lote}</td>
+                  <td className="cell-primary mono" style={{ fontSize: 12, color: 'var(--accent-light)' }}>
+                    {l.lote}
+                    <div><ReservaLoteTag lote={l.lote} mapa={reservasLote} /></div>
+                  </td>
                   <td className="mono cell-muted" style={{ fontSize: 11 }}>{l.item_codigo}</td>
                   <td><div className="cell-primary" style={{ fontSize: 13 }}>{l.descricao}</div></td>
                   <td style={{ fontSize: 12 }}>{l.armazem_nome || l.armazem}</td>
@@ -5128,7 +5140,10 @@ const Estoque = ({ ctx }) => {
                       ? <span className="chip" style={{ background: 'var(--blue-bg)', color: 'var(--blue)' }}>Em terceiros</span>
                       : <span className="chip chip-orange">De terceiros</span>}
                   </td>
-                  <td className="cell-primary mono" style={{ fontSize: 12, color: l.lote ? 'var(--accent-light)' : 'var(--text-dim)' }}>{l.lote || '—'}</td>
+                  <td className="cell-primary mono" style={{ fontSize: 12, color: l.lote ? 'var(--accent-light)' : 'var(--text-dim)' }}>
+                    {l.lote || '—'}
+                    {l.lote && <div><ReservaLoteTag lote={l.lote} mapa={reservasLote} /></div>}
+                  </td>
                   <td className="mono cell-muted" style={{ fontSize: 11 }}>{l.item_codigo}</td>
                   <td><div className="cell-primary" style={{ fontSize: 13 }}>{l.descricao}</div></td>
                   <td style={{ fontSize: 12 }}>{l.armazem_nome || l.armazem}</td>
@@ -7902,6 +7917,104 @@ const useReservasQcdn = (cardCode, nome) => {
     return () => { vivo = false; };
   }, [cardCode, nome]);
   return mapa;
+};
+
+// Reservas EM ABERTO do QCDN agrupadas POR LOTE (todos os clientes), para as
+// telas de estoque. Cache de 60s compartilhado entre as telas.
+let _qcdnLotesCache = null; // { em, promise }
+const qcdnReservasPorLote = () => {
+  if (_qcdnLotesCache && Date.now() - _qcdnLotesCache.em < 60000) return _qcdnLotesCache.promise;
+  const promise = DNLOG_API.qcdnReservasLotes()
+    .then(r => {
+      const m = new Map(); // loteNorm -> [reservas]
+      if (!r || r.ok === false) return m;
+      (r.reservas || []).forEach(x => {
+        if (!x || !x.loteNumero || !(x.saldo > 0)) return;
+        const k = normLote(x.loteNumero);
+        if (!m.has(k)) m.set(k, []);
+        m.get(k).push(x);
+      });
+      return m;
+    })
+    .catch(() => new Map());
+  _qcdnLotesCache = { em: Date.now(), promise };
+  return promise;
+};
+const useReservasPorLote = () => {
+  const [mapa, setMapa] = useState(null);
+  useEffect(() => {
+    let vivo = true;
+    if (!window.__DNLOG_BACKEND_ON) return;
+    qcdnReservasPorLote().then(m => { if (vivo) setMapa(m); });
+    return () => { vivo = false; };
+  }, []);
+  return mapa;
+};
+
+// Selo "Possui reservas · N bags" do lote. Ao clicar, mostra cada cliente com
+// reserva em aberto nesse lote (reservado / entregue / saldo). Sem reserva = nada.
+const ReservaLoteTag = ({ lote, mapa, grande }) => {
+  const [aberto, setAberto] = useState(false);
+  const lista = (mapa && lote) ? (mapa.get(normLote(lote)) || []) : [];
+  if (!lista.length) return null;
+  const total = lista.reduce((a, r) => a + (r.saldo || 0), 0);
+  return (
+    <>
+      <button type="button" onClick={(e) => { e.stopPropagation(); setAberto(true); }}
+        title="Ver os clientes com reserva neste lote"
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 4,
+          background: 'var(--purple-bg)', color: 'var(--purple)', border: '1px solid var(--purple)',
+          borderRadius: 20, padding: grande ? '3px 10px' : '1px 8px', fontSize: grande ? 12 : 10.5,
+          fontWeight: 700, fontFamily: 'Manrope, sans-serif', cursor: 'pointer', whiteSpace: 'nowrap',
+        }}>
+        <i className="ti ti-bookmark"></i> Possui reservas · {fmtNum(total)} bag{total !== 1 ? 's' : ''}
+      </button>
+      {aberto && (
+        <div className="modal-backdrop" onClick={(e) => { e.stopPropagation(); setAberto(false); }}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 520 }}>
+            <div className="modal-header">
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>Reservas do lote · QCDN</div>
+                <div className="mono" style={{ fontSize: 17, fontWeight: 800, marginTop: 2, color: 'var(--accent-light)' }}>{lote}</div>
+                {lista[0].cultivar && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{lista[0].cultivar}</div>}
+              </div>
+              <button className="btn btn-ghost" style={{ padding: '4px 8px' }} onClick={() => setAberto(false)}><i className="ti ti-x"></i></button>
+            </div>
+            <div className="modal-body" style={{ padding: 0 }}>
+              <table style={{ width: '100%', fontSize: 13 }}>
+                <thead><tr>
+                  <th>Cliente</th><th className="num">Reservado</th><th className="num">Entregue</th><th className="num">Saldo</th>
+                </tr></thead>
+                <tbody>
+                  {lista.map((r, i) => (
+                    <tr key={r.reservaId || i}>
+                      <td>
+                        <div className="cell-primary" style={{ fontSize: 13 }}>{r.clienteNome || '—'}</div>
+                        {r.clienteCardCode && <div className="cell-muted mono" style={{ fontSize: 11 }}>{r.clienteCardCode}</div>}
+                      </td>
+                      <td className="num mono">{fmtNum(r.reservado || 0)}</td>
+                      <td className="num mono cell-muted">{fmtNum(r.entregue || 0)}</td>
+                      <td className="num mono" style={{ fontWeight: 800, color: 'var(--purple)' }}>{fmtNum(r.saldo || 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                {lista.length > 1 && (
+                  <tfoot><tr>
+                    <td style={{ fontWeight: 700 }}>Total reservado</td><td></td><td></td>
+                    <td className="num mono" style={{ fontWeight: 800, color: 'var(--purple)' }}>{fmtNum(total)}</td>
+                  </tr></tfoot>
+                )}
+              </table>
+              <div style={{ padding: '8px 16px 12px', fontSize: 10.5, color: 'var(--text-dim)' }}>
+                Saldo = reservado − já entregue. Só reservas em aberto. Fonte: QCDN.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
 };
 
 // Baixa AUTOMÁTICA no QCDN dos lotes de uma OE que têm reserva com saldo e
