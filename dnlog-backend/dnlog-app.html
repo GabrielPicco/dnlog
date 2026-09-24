@@ -6642,6 +6642,15 @@ const NovaOE = ({ ctx, editMode }) => {
                   </div>
                 </div>
 
+                {/* Reservas do cliente no QCDN — inclusive lotes fora do nosso poder */}
+                {pedidosAtivos.length > 0 && (
+                  <ReservasClientePainel
+                    lotesProprios={ctx.lotes}
+                    cardCode={cardCodeDoPedido(pedidosAtivos[0].numero) || pedidosAtivos[0]._sap_cliente_codigo || pedidosAtivos[0].cliente_codigo || ''}
+                    nome={pedidosAtivos[0].cliente || ''}
+                  />
+                )}
+
                 {/* Itens — agrupados por pedido se houver múltiplos */}
                 {pedidosAtivos.length > 0 && (
                   <div style={{ padding: '14px 18px' }}>
@@ -7082,6 +7091,10 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
   const lotesReservados = reservasQcdn
     ? lotesDoItem.filter(l => { const r = reservasQcdn.get(normLote(l.lote_codigo)); return r && r.saldo > 0; })
     : [];
+  // Reservas do cliente para ESTE item cujo lote NÃO está no nosso estoque (DN_EST).
+  const listaResCliente = useReservasQcdnLista(isTriangular ? '' : clienteCardCode, isTriangular ? '' : clienteNome);
+  const reservasForaEstoque = (listaResCliente || []).filter(r =>
+    reservaDoItem(r, item.codigo) && !lotesDoItem.some(l => normLote(l.lote_codigo) === normLote(r.loteNumero)));
   const totalAlocado = lotesAlocados.reduce((a, l) => a + l.qtd_bb, 0);
   const totalDisponivelEstoque = lotesDoItem.reduce((a, l) => a + l.qtd_disponivel, 0);
   // Em triangular, nunca olha estoque
@@ -7153,11 +7166,16 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
         <div>
           <div className="cell-primary" style={{ fontSize: 13 }}>{item.descricao}</div>
           <div className="cell-muted mono" style={{ fontSize: 11 }}>{item.codigo} · {item.obtentor} · {item.fornecedor}</div>
-          {lotesReservados.length > 0 && (
+          {(lotesReservados.length > 0 || reservasForaEstoque.length > 0) && (
             <div style={{ fontSize: 10.5, color: 'var(--purple)', fontWeight: 700, marginTop: 3 }}
-              title={lotesReservados.map(l => l.lote_codigo).join(', ')}>
+              title={[...lotesReservados.map(l => l.lote_codigo), ...reservasForaEstoque.map(r => r.loteNumero + ' (fora do nosso poder)')].join(', ')}>
               <i className="ti ti-bookmark" style={{ fontSize: 11, verticalAlign: -1 }}></i>
-              {' '}{lotesReservados.length} lote{lotesReservados.length > 1 ? 's' : ''} reservado{lotesReservados.length > 1 ? 's' : ''} p/ este cliente (QCDN)
+              {lotesReservados.length > 0 && <> {lotesReservados.length} lote{lotesReservados.length > 1 ? 's' : ''} reservado{lotesReservados.length > 1 ? 's' : ''} p/ este cliente (QCDN)</>}
+              {reservasForaEstoque.length > 0 && (
+                <span style={{ color: 'var(--orange)' }}>
+                  {lotesReservados.length > 0 ? ' · ' : ' '}{reservasForaEstoque.length} reservado{reservasForaEstoque.length > 1 ? 's' : ''} fora do nosso poder
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -7278,6 +7296,7 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
           item={item}
           lotesDoItem={lotesDoItem}
           reservasQcdn={reservasQcdn}
+          reservasForaEstoque={reservasForaEstoque}
           lotesAlocadosAtual={lotesAlocados}
           onClose={() => setShowLoteModal(false)}
           onConfirm={(lotes) => {
@@ -7337,7 +7356,7 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
 // ============================================================
 // SELETOR DE LOTES (MODAL)
 // ============================================================
-const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfirm, reservasQcdn }) => {
+const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfirm, reservasQcdn, reservasForaEstoque }) => {
   // Reserva do QCDN para ESTE cliente neste lote (só conta se ainda tem saldo).
   const reservaDe = (codigo) => {
     const r = reservasQcdn && reservasQcdn.get(normLote(codigo));
@@ -7556,6 +7575,24 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
                 })}
               </tbody>
             </table>
+          )}
+          {(reservasForaEstoque || []).length > 0 && (
+            <div style={{ borderTop: '1px solid var(--border)', background: 'var(--orange-bg)' }}>
+              <div style={{ padding: '10px 16px 6px', fontSize: 11.5, fontWeight: 700, color: 'var(--orange)' }}>
+                <i className="ti ti-alert-triangle" style={{ verticalAlign: -1 }}></i> Reservados para este cliente, mas fora do nosso estoque — não dá para alocar
+              </div>
+              <table style={{ width: '100%', fontSize: 12 }}>
+                <tbody>
+                  {reservasForaEstoque.map((r, i) => (
+                    <tr key={r.reservaId || i} style={{ opacity: 0.9 }}>
+                      <td className="mono" style={{ fontWeight: 700, color: 'var(--text-muted)' }}>{r.loteNumero}</td>
+                      <td className="num mono" style={{ color: 'var(--purple)', fontWeight: 700 }}>{fmtNum(r.saldo || 0)} bag{r.saldo !== 1 ? 's' : ''} reservad{r.saldo !== 1 ? 'as' : 'a'}</td>
+                      <td style={{ textAlign: 'right' }}><SituacaoLoteBadge sit={situacaoLoteQcdn(r.loteNumero, lotesDoItem)} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
@@ -7896,17 +7933,128 @@ const reservasPorLoteQcdn = (reservas) => {
 
 // Reservas do cliente no QCDN, por lote. Cache de 60s por cliente: todas as
 // linhas de item da mesma parada dividem UMA consulta.
-const _qcdnCache = new Map(); // chave -> { em, promise }
-const qcdnReservasCliente = (cardCode, nome) => {
-  if (!cardCode && !nome) return Promise.resolve(new Map());
+const _qcdnCache = new Map(); // chave -> { em, promise (-> lista crua de reservas) }
+const qcdnReservasClienteLista = (cardCode, nome) => {
+  if (!cardCode && !nome) return Promise.resolve([]);
   const chave = cardCode || ('nome:' + nome);
   const c = _qcdnCache.get(chave);
   if (c && Date.now() - c.em < 60000) return c.promise;
   const promise = DNLOG_API.qcdnReservas(cardCode, nome)
-    .then(r => (r && r.ok !== false) ? reservasPorLoteQcdn(r.reservas) : new Map())
-    .catch(() => new Map());
+    .then(r => (r && r.ok !== false) ? (r.reservas || []) : [])
+    .catch(() => []);
   _qcdnCache.set(chave, { em: Date.now(), promise });
   return promise;
+};
+const qcdnReservasCliente = (cardCode, nome) =>
+  qcdnReservasClienteLista(cardCode, nome).then(reservasPorLoteQcdn);
+
+// Reservas EM ABERTO do cliente (lista, inclusive lotes fora do nosso estoque).
+// null enquanto carrega.
+const useReservasQcdnLista = (cardCode, nome) => {
+  const [lista, setLista] = useState(null);
+  useEffect(() => {
+    let vivo = true;
+    if (!window.__DNLOG_BACKEND_ON || (!cardCode && !nome)) { setLista(null); return; }
+    qcdnReservasClienteLista(cardCode, nome).then(l => { if (vivo) setLista(l.filter(r => r && r.loteNumero && r.saldo > 0)); });
+    return () => { vivo = false; };
+  }, [cardCode, nome]);
+  return lista;
+};
+
+// A reserva é deste item? O QCDN informa os códigos SAP da cultivar (itemSap,
+// separados por vírgula — uma cultivar tem vários itens/embalagens).
+const reservaDoItem = (r, itemCodigo) =>
+  String((r && r.itemSap) || '').split(',').map(s => s.trim().toUpperCase()).includes(String(itemCodigo || '').toUpperCase());
+
+// Onde o lote está AGORA segundo o SAP:
+//  'estoque'  → no nosso armazém (DN_EST), dá pra embarcar (disp = disponível)
+//  'de'       → no nosso armazém, mas é estoque DE terceiros (DN_DETER)
+//  'em'       → é nosso, mas está guardado EM terceiros (DN_EMTER) — fora do nosso poder
+//  'outro'    → em outro armazém do SAP
+//  'fora'     → não aparece em nenhum estoque do SAP — não está em nosso poder
+const situacaoLoteQcdn = (loteNumero, lotesProprios) => {
+  const k = normLote(loteNumero);
+  const proprios = (lotesProprios || []).filter(l => normLote(l.lote_codigo) === k);
+  if (proprios.length) {
+    return { tipo: 'estoque', disp: proprios.reduce((a, l) => a + (l.qtd_disponivel != null ? l.qtd_disponivel : (l.qtd_bb || 0)), 0) };
+  }
+  const terc = (DADOS_ESTOQUE_TERCEIROS || []).find(l => l.lote && normLote(l.lote) === k && (l.saldo || 0) > 0);
+  if (terc) return { tipo: terc.tipo === 'em' ? 'em' : 'de', saldo: terc.saldo, armazem: terc.armazem_nome || terc.armazem };
+  const outro = (DADOS_ESTOQUE_LOTES || []).find(l => l.lote && normLote(l.lote) === k && (l.saldo || 0) > 0);
+  if (outro) return { tipo: 'outro', saldo: outro.saldo, armazem: outro.armazem_nome || outro.armazem };
+  return { tipo: 'fora' };
+};
+const SITUACAO_LOTE_META = {
+  estoque: { cor: 'var(--green)', bg: 'var(--green-bg)', icon: 'ti-building-warehouse', texto: s => `Em estoque · ${fmtNum(s.disp || 0)} disp.` },
+  de: { cor: 'var(--blue)', bg: 'var(--blue-bg)', icon: 'ti-building-warehouse', texto: s => `No nosso armazém (de terceiros) · ${fmtNum(s.saldo || 0)}` },
+  outro: { cor: 'var(--blue)', bg: 'var(--blue-bg)', icon: 'ti-building', texto: s => `Em ${s.armazem} · ${fmtNum(s.saldo || 0)}` },
+  em: { cor: 'var(--orange)', bg: 'var(--orange-bg)', icon: 'ti-alert-triangle', texto: s => `Não está em nosso poder · em terceiros (${fmtNum(s.saldo || 0)})` },
+  fora: { cor: 'var(--orange)', bg: 'var(--orange-bg)', icon: 'ti-alert-triangle', texto: () => 'Não está em nosso poder' },
+};
+const SituacaoLoteBadge = ({ sit }) => {
+  const m = SITUACAO_LOTE_META[sit.tipo] || SITUACAO_LOTE_META.fora;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, color: m.cor, background: m.bg, padding: '2px 8px', borderRadius: 20, whiteSpace: 'nowrap' }}>
+      <i className={'ti ' + m.icon}></i>{m.texto(sit)}
+    </span>
+  );
+};
+
+// Painel "Reservas do cliente no QCDN": TODAS as reservas em aberto do cliente,
+// inclusive de lotes que não estão no nosso armazém — cada uma com a situação.
+const ReservasClientePainel = ({ lotesProprios, cardCode, nome, compacto }) => {
+  const lista = useReservasQcdnLista(cardCode, nome);
+  const [aberto, setAberto] = useState(true);
+  const linhas = useMemo(() => {
+    const ordem = { estoque: 0, de: 1, outro: 2, em: 3, fora: 4 };
+    return (lista || [])
+      .map(r => ({ r, sit: situacaoLoteQcdn(r.loteNumero, lotesProprios) }))
+      .sort((a, b) => (ordem[a.sit.tipo] - ordem[b.sit.tipo]) || String(a.r.loteNumero).localeCompare(String(b.r.loteNumero)));
+  }, [lista, lotesProprios]);
+  if (!lista || !lista.length) return null;
+  const totalBags = linhas.reduce((a, x) => a + (x.r.saldo || 0), 0);
+  const emPoder = linhas.filter(x => x.sit.tipo === 'estoque' || x.sit.tipo === 'de' || x.sit.tipo === 'outro').length;
+  const foraPoder = linhas.length - emPoder;
+  return (
+    <div className="no-print" style={{ border: '1px solid var(--purple)', borderRadius: 8, background: 'var(--purple-bg)', margin: compacto ? '0 0 16px' : '14px 18px 0', overflow: 'hidden' }}>
+      <div onClick={() => setAberto(a => !a)} style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', cursor: 'pointer' }}>
+        <i className="ti ti-bookmark" style={{ color: 'var(--purple)', fontSize: 16 }}></i>
+        <strong style={{ fontSize: 13 }}>Reservas do cliente no QCDN</strong>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{nome}{cardCode ? ` · ${cardCode}` : ''}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>· {linhas.length} lote{linhas.length > 1 ? 's' : ''} · {fmtNum(totalBags)} bags</span>
+        {foraPoder > 0 && (
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--orange)', background: 'var(--orange-bg)', padding: '2px 8px', borderRadius: 20 }}>
+            <i className="ti ti-alert-triangle"></i> {foraPoder} fora do nosso poder
+          </span>
+        )}
+        <i className={'ti ' + (aberto ? 'ti-chevron-up' : 'ti-chevron-down')} style={{ marginLeft: 'auto', color: 'var(--text-muted)' }}></i>
+      </div>
+      {aberto && (
+        <div style={{ background: 'var(--bg-elev)', maxHeight: 260, overflowY: 'auto', overflowX: 'auto' }}>
+          <table style={{ width: '100%', fontSize: 12, minWidth: 560 }}>
+            <thead style={{ position: 'sticky', top: 0 }}><tr>
+              <th style={{ background: 'var(--bg-elev)' }}>Lote</th>
+              <th style={{ background: 'var(--bg-elev)' }}>Cultivar</th>
+              <th className="num" style={{ background: 'var(--bg-elev)' }}>Reservado</th>
+              <th className="num" style={{ background: 'var(--bg-elev)' }}>Saldo</th>
+              <th style={{ background: 'var(--bg-elev)' }}>Situação</th>
+            </tr></thead>
+            <tbody>
+              {linhas.map(({ r, sit }, i) => (
+                <tr key={r.reservaId || i}>
+                  <td className="mono" style={{ fontWeight: 700, color: 'var(--accent-light)' }}>{r.loteNumero}</td>
+                  <td style={{ color: 'var(--text-muted)' }}>{r.cultivar || '—'}</td>
+                  <td className="num mono">{fmtNum(r.reservado || 0)}</td>
+                  <td className="num mono" style={{ fontWeight: 800, color: 'var(--purple)' }}>{fmtNum(r.saldo || 0)}</td>
+                  <td><SituacaoLoteBadge sit={sit} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 };
 const useReservasQcdn = (cardCode, nome) => {
   const [mapa, setMapa] = useState(null);
@@ -8375,6 +8523,20 @@ const DetalheOE = ({ ctx }) => {
       {oeAtual.modalidade !== 'TRIANGULAR' && oeAtual.status !== 'CANCELADA' && (
         <ReservasQcdn ctx={ctx} oe={oeAtual} />
       )}
+
+      {/* Todas as reservas em aberto dos clientes desta OE — inclusive de lotes
+          que não estão no nosso poder (um painel por cliente). */}
+      {oeAtual.status !== 'CANCELADA' && (() => {
+        const vistos = new Set();
+        return getParadas(oeAtual).map(p => {
+          const cc = cardCodeDoPedido(p.pedido_numero) || '';
+          const nome = p.cliente || oeAtual.cliente || '';
+          const k = cc || ('nome:' + nome);
+          if ((!cc && !nome) || vistos.has(k)) return null;
+          vistos.add(k);
+          return <ReservasClientePainel key={k} lotesProprios={ctx.lotes} cardCode={cc} nome={nome} compacto />;
+        });
+      })()}
 
       {/* DOCUMENTO IMPRIMÍVEL */}
       <DocumentoOE oe={oeAtual} totais={totais} />
