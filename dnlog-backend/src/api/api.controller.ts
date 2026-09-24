@@ -105,17 +105,6 @@ export class ApiController {
     };
   }
 
-  // DIAG TEMPORÁRIO (read-only): confere a nova conciliação Pedidos x Pagamentos.
-  @Public()
-  @Get('diag-pedpag2')
-  async diagPedPag2(@Query('t') t: string, @Query('q') q?: string) {
-    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const r: any = await this.getPedidosPagamentos();
-    const porStatus = r.clientes.reduce((m: any, c: any) => { m[c.status] = (m[c.status] || 0) + 1; return m; }, {});
-    const alvo = String(q || 'LAVROBRAS').toUpperCase();
-    return { totais: r.totais, clientes: r.clientes.length, porStatus, amostra: r.clientes.filter((c: any) => String(c.cliente).toUpperCase().includes(alvo)) };
-  }
-
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
     return true;
