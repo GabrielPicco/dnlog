@@ -206,7 +206,9 @@ export class SapClientService implements OnModuleDestroy {
       $filter: `DocumentStatus eq 'bost_Open' or (DocumentStatus eq 'bost_Close' and DocDueDate ge '${anoInicio}')`,
       $select:
         'DocEntry,DocNum,DocDate,DocDueDate,CardCode,CardName,DocTotal,Comments,DocumentStatus,Cancelled,SalesPersonCode,DocumentLines',
-      $orderby: 'DocDueDate asc',
+      // DocEntry (único) desempata: a paginação do SL é por $skip, e ordenar só
+      // pela data (que se repete) fazia um pedido "pular" entre as páginas.
+      $orderby: 'DocDueDate asc,DocEntry asc',
     };
 
     try {
@@ -309,7 +311,9 @@ export class SapClientService implements OnModuleDestroy {
       $filter: `DocumentStatus eq 'bost_Open' or (DocumentStatus eq 'bost_Close' and DocDueDate ge '${anoInicio}')`,
       $select:
         'DocEntry,DocNum,DocDate,DocDueDate,CardCode,CardName,DocTotal,Comments,DocumentStatus,Cancelled,DocumentLines',
-      $orderby: 'DocDueDate asc',
+      // DocEntry (único) desempata: a paginação do SL é por $skip, e ordenar só
+      // pela data (que se repete) fazia um pedido "pular" entre as páginas.
+      $orderby: 'DocDueDate asc,DocEntry asc',
     };
     try {
       return await this.getAllPages('/PurchaseOrders', params);
@@ -627,7 +631,7 @@ export class SapClientService implements OnModuleDestroy {
       const conds: string[] = [];
       if (desde) conds.push(`DocDate ge ${q}${desde}${q}`);
       if (ate) conds.push(`DocDate le ${q}${ate}${q}`);
-      const params: any = { $select: select, $orderby: 'DocDate desc' };
+      const params: any = { $select: select, $orderby: 'DocDate desc,DocEntry desc' }; // DocEntry desempata (paginação estável)
       if (conds.length) params.$filter = conds.join(' and ');
       return params;
     };
@@ -660,7 +664,7 @@ export class SapClientService implements OnModuleDestroy {
       const conds: string[] = ["DocType eq 'rCustomer'"];
       if (desde) conds.push(`DocDate ge ${q}${desde}${q}`);
       if (ate) conds.push(`DocDate le ${q}${ate}${q}`);
-      return { $filter: conds.join(' and '), $orderby: 'DocDate desc' };
+      return { $filter: conds.join(' and '), $orderby: 'DocDate desc,DocEntry desc' }; // DocEntry desempata (paginação estável)
     };
     try {
       return await this.getAllPages('/IncomingPayments', build(true));

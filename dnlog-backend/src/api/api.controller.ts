@@ -128,6 +128,7 @@ export class ApiController {
     const diagLista = {
       lista_cacheada: lista.length,
       consulta_crua: cru.length,
+      distintos: new Set(cru.map((o: any) => o.DocEntry)).size,
       abertos_na_crua: abertosCru,
       tem_na_crua: cru.some((o: any) => Number(o.DocNum) === Number(num)),
       docnum_min: docNums[0], docnum_max: docNums[docNums.length - 1],
