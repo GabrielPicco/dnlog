@@ -119,9 +119,20 @@ export class ApiController {
         item: l.ItemCode, desc: l.ItemDescription, qtd: l.Quantity, aberto: l.OpenQuantity ?? l.RemainingOpenQuantity, status: l.LineStatus,
       })),
     }));
-    // Aparece na lista que o DNLog baixa (/api/pedidos)?
+    // Aparece na lista que o DNLog baixa (/api/pedidos)? E na consulta crua ao SAP (sem cache)?
     const lista = (await this.getPedidos()) as any[];
     const naLista = lista.find((p) => p.numero === `PV-${num}`) || null;
+    const cru = (await this.sap.getPedidosAbertos()) as any[];
+    const docNums = cru.map((o: any) => Number(o.DocNum)).sort((a, b) => a - b);
+    const abertosCru = cru.filter((o: any) => o.DocumentStatus === 'bost_Open').length;
+    const diagLista = {
+      lista_cacheada: lista.length,
+      consulta_crua: cru.length,
+      abertos_na_crua: abertosCru,
+      tem_na_crua: cru.some((o: any) => Number(o.DocNum) === Number(num)),
+      docnum_min: docNums[0], docnum_max: docNums[docNums.length - 1],
+      multiplo_de_200: cru.length % 200 === 0,
+    };
     // OEs do banco que usam esse pedido
     const alvo = `PV-${num}`;
     const oes = ((await this.oeService.findAll()) as any[])
@@ -133,6 +144,7 @@ export class ApiController {
       })
       .filter((x) => x.qtd > 0);
     return {
+      diagLista,
       sap,
       na_lista_dnlog: naLista ? { tem_saldo: naLista.tem_saldo, status_sap: naLista.status_sap, qtd_saldo_bb: naLista.qtd_saldo_bb, itens: (naLista.itens || []).map((i: any) => ({ codigo: i.codigo, qtd: i.qtd_bb, entregue: i.qtd_entregue, saldo: i.saldo })) } : null,
       oes,
