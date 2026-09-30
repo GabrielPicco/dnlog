@@ -6087,6 +6087,32 @@ const NovaOE = ({ ctx, editMode }) => {
   // Cliente da parada ativa (do primeiro pedido)
   const clienteParadaAtiva = pedidosAtivos[0]?.cliente || null;
 
+  // Lotes JÁ alocados NESTA OE (em montagem/edição), linha a linha. ctx.lotes só
+  // desconta as OEs SALVAS — esta ainda não está (ou está em edição, e o App a
+  // ignora de propósito). Sem isso, o lote pego na parada 1 continuava com saldo
+  // na parada 2 da mesma OE (e em outro pedido da mesma parada).
+  const alocacoesNestaOE = useMemo(() => {
+    const out = []; // { paradaIdx, codigo, pedido, lote, qtd }
+    paradas.forEach((p, pIdx) => (p.itensSelecionados || []).forEach(it =>
+      (it.lotes_alocados || []).forEach(la => {
+        if (!la || !la.lote_codigo || la.controle_paralelo || la.sem_lotes_triangular) return;
+        const q = Number(la.qtd_bb) || 0;
+        if (q > 0) out.push({ paradaIdx: pIdx, codigo: it.codigo, pedido: it.pedido_numero, lote: la.lote_codigo, qtd: q });
+      })));
+    return out;
+  }, [paradas]);
+  // Lotes do item para UMA linha (parada ativa + pedido + item): o disponível
+  // desconta o que as OUTRAS linhas desta OE já pegaram do mesmo lote. A própria
+  // linha não é descontada (é a alocação que está sendo editada).
+  const lotesParaLinha = (itemCodigo, pedidoNumero) =>
+    ctx.lotes.filter(l => l.item_codigo === itemCodigo).map(l => {
+      const outras = alocacoesNestaOE
+        .filter(a => a.lote === l.lote_codigo &&
+          !(a.paradaIdx === paradaAtivaIdx && a.codigo === itemCodigo && (a.pedido === pedidoNumero || !a.pedido)))
+        .reduce((s, a) => s + a.qtd, 0);
+      return outras > 0 ? { ...l, qtd_disponivel: Math.max(0, l.qtd_disponivel - outras), qtd_outras_linhas: outras } : l;
+    });
+
   // Toggle pedido na parada ativa (clique alterna)
   // Validação: todos os pedidos da mesma parada devem ser do mesmo cliente
   const togglePedidoParadaAtiva = (numero) => {
@@ -6710,7 +6736,7 @@ const NovaOE = ({ ctx, editMode }) => {
                           const sel = paradaAtiva.itensSelecionados.find(i => i.codigo === item.codigo && i.pedido_numero === pedidoAtivo.numero);
                           const qtd = sel ? sel.qtd_bb : 0;
                           const lotesAlocados = sel?.lotes_alocados || [];
-                          const lotesDoItem = ctx.lotes.filter(l => l.item_codigo === item.codigo);
+                          const lotesDoItem = lotesParaLinha(item.codigo, pedidoAtivo.numero);
                           return (
                             <ItemRow
                               key={`${pedidoAtivo.numero}_${item.codigo}`}
@@ -7393,12 +7419,12 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
 
   const saldoPedido = item.saldo;
 
-  // Quantidade que JÁ estava reservada deste lote ANTES de abrir o modal (parte do qtd_disponivel)
-  // Isso ocorre quando editamos uma OE: o estoque desconta essa reserva, então ela faz parte da nossa capacidade real.
-  const reservaAnterior = (codigo) => {
-    const la = lotesAlocadosAtual.find(x => x.lote_codigo === codigo);
-    return la ? la.qtd_bb : 0;
-  };
+  // Capacidade REAL de um lote para esta linha = qtd_disponivel. Ele já vem
+  // descontado das OEs salvas E das outras linhas/paradas desta OE, e NÃO inclui
+  // a alocação desta própria linha (a OE em edição é ignorada no cálculo do App).
+  // Antes somávamos de novo a alocação atual da linha — isso inflava a capacidade
+  // ao reabrir o seletor e deixava pegar o mesmo lote além do saldo.
+  const capacidadeDe = (l) => Math.max(0, Number(l.qtd_disponivel) || 0);
 
   // Soma total alocado neste momento
   const totalAlocado = Object.values(alocacao).reduce((sum, v) => sum + (Number(v) || 0), 0);
@@ -7408,7 +7434,7 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
   // os usa antes); depois, FIFO (mais antigos primeiro). Mostra todos com
   // disp>0 OU já alocados.
   const lotesDisponiveis = lotesDoItem
-    .filter(l => (l.qtd_disponivel + reservaAnterior(l.lote_codigo)) > 0 || (alocacao[l.lote_codigo] || 0) > 0)
+    .filter(l => capacidadeDe(l) > 0 || (alocacao[l.lote_codigo] || 0) > 0)
     .sort((a, b) => {
       const ra = reservaDe(a.lote_codigo) ? 0 : 1;
       const rb = reservaDe(b.lote_codigo) ? 0 : 1;
@@ -7421,9 +7447,9 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
   const atualizarLote = (codigo, novaQtd) => {
     const lote = lotesDoItem.find(l => l.lote_codigo === codigo);
     if (!lote) return;
-    // Capacidade REAL = qtd_disponivel (já desconta reservas em outras OEs) + reserva anterior deste mesmo modal
+    // Capacidade REAL = qtd_disponivel (já desconta outras OEs e as outras paradas desta OE)
     // NÃO somar o que está sendo digitado agora (alocacao[codigo]) senão o limite "infla"
-    const capacidadeLote = lote.qtd_disponivel + reservaAnterior(codigo);
+    const capacidadeLote = capacidadeDe(lote);
     // Quanto está alocado em OUTROS lotes?
     const alocadoOutros = totalAlocado - (alocacao[codigo] || 0);
     // Máximo permitido neste campo agora:
@@ -7439,7 +7465,7 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
     const nova = {};
     for (const l of lotesDisponiveis) {
       if (restante <= 0) break;
-      const capacidade = l.qtd_disponivel + reservaAnterior(l.lote_codigo);
+      const capacidade = capacidadeDe(l);
       const q = Math.min(capacidade, restante);
       if (q > 0) {
         nova[l.lote_codigo] = q;
@@ -7530,7 +7556,7 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
               <tbody>
                 {lotesDisponiveis.map(l => {
                   const alocadoLote = alocacao[l.lote_codigo] || 0;
-                  const capacidadeReal = l.qtd_disponivel + reservaAnterior(l.lote_codigo);
+                  const capacidadeReal = capacidadeDe(l);
                   const noLimite = alocadoLote >= capacidadeReal;
                   const resQ = reservaDe(l.lote_codigo);
                   return (
@@ -7548,7 +7574,15 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
                       <td className="mono cell-muted" style={{ fontSize: 12 }}>{l.peneira}</td>
                       <td className="num mono">{l.germinacao}%</td>
                       <td className="num mono cell-muted" style={{ fontSize: 11 }}>{fmtDate(l.data_fabricacao)}</td>
-                      <td className="num mono cell-primary" style={{ color: noLimite ? 'var(--orange)' : 'var(--green)' }}>{capacidadeReal}</td>
+                      <td className="num mono cell-primary" style={{ color: noLimite ? 'var(--orange)' : 'var(--green)' }}>
+                        {capacidadeReal}
+                        {l.qtd_outras_linhas > 0 && (
+                          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}
+                            title="Quantidade deste lote já alocada em outra parada/pedido desta mesma OE">
+                            −{l.qtd_outras_linhas} nesta OE
+                          </div>
+                        )}
+                      </td>
                       <td>
                         <div style={{ display: 'flex', gap: 4, alignItems: 'center', justifyContent: 'flex-end' }}>
                           <button
