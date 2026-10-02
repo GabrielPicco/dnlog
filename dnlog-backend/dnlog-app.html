@@ -1127,6 +1127,31 @@ const getParadas = (oe) => {
   }];
 };
 
+// Pedidos distintos de uma parada / de uma OE inteira (uma parada pode ter vários
+// pedidos do mesmo cliente; cada item guarda o seu pedido_numero).
+const pedidosDaParada = (p) => Array.from(new Set([
+  ...((p && p.pedidos_numeros) || []),
+  p && p.pedido_numero,
+  ...((p && p.itens) || []).map(it => it && (it.pedido_numero || p.pedido_numero)),
+].filter(Boolean)));
+const pedidosDaOE = (oe) => Array.from(new Set(getParadas(oe).flatMap(pedidosDaParada)));
+// "PV-141" -> "141"
+const numPedidoCurto = (n) => String(n || '').replace(/^PV-?/i, '');
+// Selo "PD 141" ao lado do código do item — usado quando a OE tem mais de um
+// pedido, para identificar de qual pedido é cada linha. `doc` = versão impressa.
+const PedidoTag = ({ numero, doc }) => {
+  if (!numero) return null;
+  return (
+    <span title={`Pedido ${numero}`} style={doc ? {
+      display: 'inline-block', marginLeft: 6, padding: '0 4px', border: '1px solid #1A1A1A', borderRadius: 3,
+      fontSize: 9, fontWeight: 800, color: '#1A1A1A', fontFamily: 'JetBrains Mono, monospace', verticalAlign: 1, whiteSpace: 'nowrap',
+    } : {
+      display: 'inline-block', marginLeft: 6, padding: '1px 6px', borderRadius: 4, background: 'var(--blue-bg)',
+      fontSize: 10, fontWeight: 800, color: 'var(--blue)', fontFamily: 'JetBrains Mono, monospace', verticalAlign: 1, whiteSpace: 'nowrap',
+    }}>PD {numPedidoCurto(numero)}</span>
+  );
+};
+
 // CardCode (código do cliente no SAP) a partir do número do pedido — usado na
 // integração com o QCDN, que casa as reservas pelo CardCode do cliente.
 const cardCodeDoPedido = (pedidoNumero) => {
@@ -8718,7 +8743,7 @@ const DocumentoOE = ({ oe, totais }) => {
                 <div className="doc-block-header"><i className="ti ti-file-invoice"></i> PEDIDO DE VENDA</div>
                 <div className="doc-block-body">
                   <div className="doc-fourcol">
-                    <div><span className="lbl">Pedido SAP</span><span className="val-big mono">{oe.pedido_numero}</span></div>
+                    <div><span className="lbl">{pedidosDaOE(oe).length > 1 ? 'Pedidos SAP' : 'Pedido SAP'}</span><span className="val-big mono" style={pedidosDaOE(oe).length > 1 ? { fontSize: 13 } : undefined}>{pedidosDaOE(oe).length > 1 ? pedidosDaOE(oe).join(', ') : oe.pedido_numero}</span></div>
                     <div><span className="lbl">Emissão</span><span className="val mono">{fmtDate(oe.pedido_data_emissao)}</span></div>
                     <div><span className="lbl">Vendedor</span><span className="val">{oe.vendedor}</span></div>
                     <div><span className="lbl">Local entrega</span><span className="val" style={{ fontSize: 11 }}>{oe.pedido_local_entrega || '—'}</span></div>
@@ -8781,6 +8806,8 @@ const DocumentoOE = ({ oe, totais }) => {
       {(() => {
         const paradas = getParadas(oe);
         const multiplas = paradas.length > 1;
+        // OE com mais de um pedido: cada linha mostra "PD nnn" ao lado do código.
+        const mostrarPD = pedidosDaOE(oe).length > 1;
 
         if (multiplas) {
           return (
@@ -8799,13 +8826,13 @@ const DocumentoOE = ({ oe, totais }) => {
                       </span>
                     </div>
                     <div style={{ background: '#F4F4F2', padding: '6px 12px', fontSize: 9, color: '#555', borderBottom: '1px solid #1A1A1A', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-                      <span><strong>Pedido:</strong> <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{p.pedido_numero}</span></span>
+                      <span><strong>{pedidosDaParada(p).length > 1 ? 'Pedidos:' : 'Pedido:'}</strong> <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{pedidosDaParada(p).join(', ') || p.pedido_numero}</span></span>
                       <span><strong>Vendedor:</strong> {p.vendedor || '—'}</span>
                       <span><strong>Local entrega:</strong> {p.pedido_local_entrega || '—'}</span>
                     </div>
                     <table className="doc-table-v2">
                       <thead><tr>
-                        <th style={{ width: 90 }}>Código</th>
+                        <th style={{ width: mostrarPD ? 140 : 90 }}>Código</th>
                         <th>Descrição</th>
                         <th>Lotes</th>
                         <th style={{ width: 60, textAlign: 'right' }}>QTD</th>
@@ -8815,7 +8842,7 @@ const DocumentoOE = ({ oe, totais }) => {
                       <tbody>
                         {p.itens.map((it, idx) => (
                           <tr key={idx}>
-                            <td className="mono">{it.codigo}</td>
+                            <td className="mono" style={{ whiteSpace: 'nowrap' }}>{it.codigo}{mostrarPD && <PedidoTag doc numero={it.pedido_numero || p.pedido_numero} />}</td>
                             <td>
                               <strong>{it.descricao}</strong>
                               {it.obtentor && <div style={{ fontSize: 9, color: '#777' }}>{it.obtentor}{it.tsi ? ` · ${it.tsi}` : ''}</div>}
@@ -8892,7 +8919,7 @@ const DocumentoOE = ({ oe, totais }) => {
             <div className="doc-block-header"><i className="ti ti-package"></i> ITENS A EMBARCAR</div>
             <table className="doc-table-v2">
               <thead><tr>
-                <th style={{ width: 90 }}>Código</th>
+                <th style={{ width: mostrarPD ? 140 : 90 }}>Código</th>
                 <th>Descrição</th>
                 <th>Lotes</th>
                 <th style={{ width: 60, textAlign: 'right' }}>QTD</th>
@@ -8902,7 +8929,7 @@ const DocumentoOE = ({ oe, totais }) => {
               <tbody>
                 {oe.itens.map((it,idx) => (
                   <tr key={idx}>
-                    <td className="mono">{it.codigo}</td>
+                    <td className="mono" style={{ whiteSpace: 'nowrap' }}>{it.codigo}{mostrarPD && <PedidoTag doc numero={it.pedido_numero || oe.pedido_numero} />}</td>
                     <td>
                       <strong>{it.descricao}</strong>
                       {it.obtentor && <div style={{ fontSize: 9, color: '#777' }}>{it.obtentor}{it.tsi ? ` · ${it.tsi}` : ''}</div>}
@@ -9724,6 +9751,7 @@ const ConferenciaDetalhe = ({ ctx }) => {
                             <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: conferido ? (isControleParalelo ? 'var(--blue)' : 'var(--green)') : 'var(--text)' }}>
                               {it.codigo}
                             </span>
+                            {pedidosDaOE(oe).length > 1 && <PedidoTag numero={it.pedido_numero || p.pedido_numero} />}
                             {isControleParalelo ? (
                               <span className="chip chip-blue"><i className="ti ti-shield-check"></i> Conferido pelo fornecedor</span>
                             ) : conferido ? (
@@ -12117,10 +12145,10 @@ const Embarques = ({ ctx }) => {
                                   <span style={{ fontSize: 11, color: 'var(--orange)' }}>Nenhum lote informado</span>
                                 ) : (
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                                    {getAllItens(oe).flatMap(it => (it.lotes_alocados || []).map(la => (
-                                      <div key={`${it.codigo}-${la.lote_codigo}`} className="mono" style={{ fontSize: 10 }}>
+                                    {getParadas(oe).flatMap(p => (p.itens || []).map(it => ({ ...it, _ped: it.pedido_numero || p.pedido_numero }))).flatMap((it, ii) => (it.lotes_alocados || []).map(la => (
+                                      <div key={`${ii}-${it.codigo}-${la.lote_codigo}`} className="mono" style={{ fontSize: 10 }}>
                                         <span style={{ color: 'var(--accent-light)', fontWeight: 700 }}>{la.lote_codigo}</span>
-                                        <span style={{ color: 'var(--text-muted)' }}> · {it.codigo} · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span>
+                                        <span style={{ color: 'var(--text-muted)' }}> · {it.codigo}{pedidosDaOE(oe).length > 1 && it._ped ? ` · PD ${numPedidoCurto(it._ped)}` : ''} · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span>
                                         {la.controle_paralelo && <span className="chip chip-blue" style={{ fontSize: 8, marginLeft: 4, padding: '0 4px' }}>CTRL PAR.</span>}
                                       </div>
                                     )))}
