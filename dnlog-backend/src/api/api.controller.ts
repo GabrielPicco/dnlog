@@ -105,6 +105,34 @@ export class ApiController {
     };
   }
 
+  // DIAG TEMPORÁRIO (read-only): lote x OEs x entregue no SAP.
+  @Public()
+  @Get('diag-lote-oe')
+  async diagLoteOe(@Query('t') t: string, @Query('lote') lote: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const norm = (s: any) => String(s || '').trim().toUpperCase();
+    const alvo = norm(lote);
+    const saldo = ((await this.sap.getSaldoPorLote()) as any[])
+      .filter((r) => norm(r.Lote) === alvo)
+      .map((r) => ({ item: r.CodigoItem, dep: r.CodigoDeposito, saldo: r.SaldoAtual }));
+    const pedidos = (await this.getPedidos()) as any[];
+    const oes: any[] = [];
+    for (const oe of (await this.oeService.findAll()) as any[]) {
+      const paradas = Array.isArray(oe.paradas) ? oe.paradas : [{ pedido_numero: oe.pedido_numero, itens: oe.itens || [] }];
+      for (const p of paradas) for (const it of p.itens || []) for (const la of it.lotes_alocados || []) {
+        if (norm(la.lote_codigo) !== alvo) continue;
+        const ped = it.pedido_numero || p.pedido_numero;
+        const pi = (pedidos.find((x) => x.numero === ped)?.itens || []).find((x: any) => x.codigo === it.codigo);
+        oes.push({
+          oe: oe.numero, status: oe.status, faturada: !!oe.faturada, faturada_em: oe.faturada_em || null, nf: oe.nf_numero || null,
+          pedido: ped, item: it.codigo, qtd_lote: la.qtd_bb, qtd_linha: it.qtd_bb,
+          sap_pedido_linha: pi ? { qtd: pi.qtd_bb, entregue_sap: pi.qtd_entregue, aberto_sap: pi.saldo } : 'pedido nao encontrado',
+        });
+      }
+    }
+    return { lote: alvo, saldo_sap: saldo, oes };
+  }
+
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
     return true;
