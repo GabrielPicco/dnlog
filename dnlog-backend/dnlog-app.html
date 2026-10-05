@@ -1847,15 +1847,56 @@ const App = ({ usuario, onLogout }) => {
     return (oe.itens || []).map(it => ({ ...it, modalidade: oe.modalidade }));
   };
 
+  // OEs FATURADAS/ENTREGUES no DNLog cuja saída AINDA NÃO aparece no SAP: os
+  // lotes delas continuam reservados. O DNLog não grava no SAP — o estoque só cai
+  // quando a NF é lançada lá. Sem isso, entre "faturar" aqui e a NF baixar o SAP,
+  // o lote voltava a ter saldo e podia ser alocado de novo em outra OE.
+  // Como saber se o SAP já baixou: o "entregue" da linha do pedido no SAP (vem da
+  // MESMA leitura do SAP que o estoque, então os dois ficam coerentes). O entregue
+  // cobre as OEs na ordem em que foram faturadas; o que sobrar está pendente.
+  // Pedido que não está na lista (fechado em anos anteriores) = já baixado.
+  const pendenteSapPorLote = useMemo(() => {
+    const entregueSap = {}; // 'PV-x|ITEM' -> entregue no SAP
+    const pedidosConhecidos = new Set();
+    (DADOS_PEDIDOS || []).forEach(p => {
+      pedidosConhecidos.add(p.numero);
+      (p.itens || []).forEach(it => {
+        const k = p.numero + '|' + it.codigo;
+        entregueSap[k] = (entregueSap[k] || 0) + (Number(it.qtd_entregue) || 0);
+      });
+    });
+    const baixadas = state.ordens
+      .filter(o => o.status !== 'CANCELADA' && (o.faturada || o.status === 'ENTREGUE') && o.id !== (editingOE && editingOE.id))
+      .sort((a, b) => String(a.faturada_em || a.criado_em || '').localeCompare(String(b.faturada_em || b.criado_em || '')));
+    const restante = { ...entregueSap };
+    const pend = {}; // lote_codigo -> qtd ainda não baixada no SAP
+    baixadas.forEach(oe => getParadas(oe).forEach(p => (p.itens || []).forEach(it => {
+      if ((p.modalidade || oe.modalidade) === 'TRIANGULAR') return; // triangular não usa nosso estoque
+      const ped = it.pedido_numero || p.pedido_numero;
+      if (!ped || !pedidosConhecidos.has(ped)) return; // sem como conferir → considera baixado
+      const k = ped + '|' + it.codigo;
+      const qtd = Number(it.qtd_bb) || 0;
+      const cobre = Math.min(qtd, Math.max(0, restante[k] || 0));
+      restante[k] = (restante[k] || 0) - cobre;
+      let pendente = qtd - cobre;
+      (it.lotes_alocados || []).forEach(la => {
+        if (pendente <= 0 || !la || !la.lote_codigo || la.controle_paralelo || la.sem_lotes_triangular) return;
+        const q = Math.min(pendente, Number(la.qtd_bb) || 0);
+        pend[la.lote_codigo] = (pend[la.lote_codigo] || 0) + q;
+        pendente -= q;
+      });
+    })));
+    return pend;
+  }, [state.ordens, editingOE]);
+
   const lotesComSaldo = useMemo(() => {
     return state.lotes.map(l => {
-      // Reserva SÓ as OEs que ainda NÃO baixaram no SAP (não faturadas e não
-      // entregues). O saldo do SAP (qtd_bb) já vem LÍQUIDO das saídas faturadas
-      // (Delivery Note emitida no SAP), então descontar aqui as OEs faturadas/
-      // entregues contava a MESMA baixa duas vezes — e zerava o disponível de
-      // lotes que ainda têm saldo físico (ex.: OE entregue de 16, saldo SAP 8 →
-      // 8-16 = 0). Excluindo-as, o disponível volta a bater com o SAP.
-      const reservado = state.ordens
+      // Reserva = (a) OEs ATIVAS não faturadas, inteiras, + (b) a parte das OEs
+      // faturadas/entregues que o SAP AINDA NÃO baixou (pendenteSapPorLote).
+      // O que o SAP já baixou NÃO é descontado de novo: o saldo do SAP (qtd_bb)
+      // já vem líquido dessa saída — descontar contaria a mesma baixa 2x (ex.: OE
+      // entregue de 16, saldo SAP 8 → mostrava 0).
+      const ativas = state.ordens
         .filter(o => o.status !== 'CANCELADA' && o.status !== 'ENTREGUE' && !o.faturada && o.id !== (editingOE && editingOE.id))
         .reduce((acc, oe) => {
           let qtdDoLote = 0;
@@ -1868,13 +1909,16 @@ const App = ({ usuario, onLogout }) => {
           });
           return acc + qtdDoLote;
         }, 0);
+      const pendenteSap = pendenteSapPorLote[l.lote_codigo] || 0;
+      const reservado = ativas + pendenteSap;
       return {
         ...l,
         qtd_reservada: reservado,
+        qtd_pendente_sap: pendenteSap,
         qtd_disponivel: Math.max(0, l.qtd_bb - reservado)
       };
     });
-  }, [state.lotes, state.ordens, editingOE]);
+  }, [state.lotes, state.ordens, editingOE, pendenteSapPorLote]);
 
   const showToast = (title, msg) => {
     setToast({ title, msg });
