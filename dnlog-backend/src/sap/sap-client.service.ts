@@ -636,6 +636,49 @@ export class SapClientService implements OnModuleDestroy {
   }
 
   /**
+   * [LEITURA] Notas Fiscais de ENTRADA (PurchaseInvoices/OPCH) do período, para o
+   * relatório de NFs de entrada por fornecedor. Mesmo formato do faturamento.
+   * NumAtCard = nº da NF informado do fornecedor (fallback quando o SequenceSerial
+   * não vem preenchido na nota de terceiro).
+   */
+  async getNotasEntrada(desde?: string, ate?: string): Promise<any[]> {
+    await this.ensureSession();
+    const select =
+      'DocEntry,DocNum,SequenceSerial,SeriesString,SequenceModel,NumAtCard,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,CancelStatus,DocumentStatus,SalesPersonCode,DocumentLines';
+    const build = (comAspas: boolean) => {
+      const q = comAspas ? "'" : '';
+      const conds: string[] = [];
+      if (desde) conds.push(`DocDate ge ${q}${desde}${q}`);
+      if (ate) conds.push(`DocDate le ${q}${ate}${q}`);
+      const params: any = { $select: select, $orderby: 'DocDate desc,DocEntry desc' }; // DocEntry desempata (paginação estável)
+      if (conds.length) params.$filter = conds.join(' and ');
+      return params;
+    };
+    try {
+      return await this.getAllPages('/PurchaseInvoices', build(true));
+    } catch (err1) {
+      this.logger.warn('NFs de entrada: filtro com aspas falhou, tentando sem aspas…');
+      try {
+        return await this.getAllPages('/PurchaseInvoices', build(false));
+      } catch (err2) {
+        this.handleError(err2, 'listar NFs de entrada (PurchaseInvoices)');
+      }
+    }
+  }
+
+  /** [LEITURA] NF de entrada completa (linhas + BatchNumbers) pelo DocEntry. */
+  async getNotaEntradaFull(docEntry: number | string): Promise<any> {
+    await this.ensureSession();
+    try {
+      const resp = await this.axios.get(`/PurchaseInvoices(${Number(docEntry)})`);
+      return resp.data;
+    } catch (err) {
+      if (err?.response?.status === 404) return null;
+      this.handleError(err, 'buscar NF de entrada completa');
+    }
+  }
+
+  /**
    * [LEITURA] Recebimentos de clientes (IncomingPayments / "Assistente de
    * Recebimentos" — frmAssistRc) do período. É o que foi efetivamente dado
    * entrada como pagamento/adiantamento do cliente no SAP. SOMENTE LEITURA.

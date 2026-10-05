@@ -133,37 +133,131 @@ export class ApiController {
         // Venda = todas as linhas com CFOP de venda (51xx/61xx nas faixas 5101-5123).
         // O que não é venda (remessa simbólica 5934/6934, transferência 5152 etc.)
         // fica marcado como não-venda para poder ser filtrado.
-        const CFOP_VENDA = /^[56]1(0[1-9]|1[0-9]|2[0-3])$/;
-        return (invs as any[]).map((i) => {
-          const linhas = Array.isArray(i.DocumentLines) ? i.DocumentLines : [];
-          const cfops = Array.from(new Set(linhas.map((l: any) => l.CFOPCode).filter(Boolean)));
-          const projetos = Array.from(new Set(linhas.map((l: any) => l.ProjectCode).filter(Boolean)));
-          const ehVenda = cfops.length > 0 && cfops.every((c: any) => CFOP_VENDA.test(String(c)));
-          return {
-            docNum: i.DocNum,
-            nfe: i.SequenceSerial,
-            serie: i.SeriesString,
-            cardCode: i.CardCode,
-            cliente: i.CardName,
-            data: i.DocDate,
-            vencimento: i.DocDueDate,
-            total: Number(i.DocTotal) || 0,
-            moeda: i.DocCurrency,
-            vendedor: nomeVend[String(i.SalesPersonCode)] || '',
-            // Cancelada = original cancelado (Cancelled tYES / CancelStatus csYes)
-            // OU a nota de cancelamento (CancelStatus csCancellation). Qualquer
-            // CancelStatus != csNo entra aqui — some por padrão no relatório.
-            cancelada: i.Cancelled === 'tYES' || (i.CancelStatus && i.CancelStatus !== 'csNo'),
-            status: i.DocumentStatus === 'bost_Close' ? 'fechada' : 'aberta',
-            cfop: cfops.join(', '),
-            cfops,
-            projeto: projetos.join(', '),
-            ehVenda,
-          };
-        });
+        return (invs as any[]).map((i) => this.mapNotaFiscal(i, nomeVend, /^[56]1(0[1-9]|1[0-9]|2[0-3])$/));
       },
       300000,
     );
+  }
+
+  /**
+   * Cabeçalho de uma NF (saída ou entrada) no formato dos relatórios. `cfopPrincipal`
+   * marca a operação "principal" (venda na saída, compra na entrada) em `ehVenda`
+   * — o resto (remessa, retorno, transferência…) pode ser filtrado na tela.
+   */
+  private mapNotaFiscal(i: any, nomeVend: Record<string, string>, cfopPrincipal: RegExp) {
+    const linhas = Array.isArray(i.DocumentLines) ? i.DocumentLines : [];
+    const cfops = Array.from(new Set(linhas.map((l: any) => l.CFOPCode).filter(Boolean)));
+    const projetos = Array.from(new Set(linhas.map((l: any) => l.ProjectCode).filter(Boolean)));
+    return {
+      docEntry: i.DocEntry,
+      docNum: i.DocNum,
+      // Entrada: nota de terceiro — se o SequenceSerial não vier, usa o nº informado (NumAtCard).
+      nfe: i.SequenceSerial || i.NumAtCard || null,
+      serie: i.SeriesString,
+      cardCode: i.CardCode,
+      cliente: i.CardName, // na entrada é o FORNECEDOR (mesmo campo, a tela troca o rótulo)
+      data: i.DocDate,
+      vencimento: i.DocDueDate,
+      total: Number(i.DocTotal) || 0,
+      moeda: i.DocCurrency,
+      vendedor: nomeVend[String(i.SalesPersonCode)] || '', // na entrada = comprador
+      // Cancelada = original cancelado (Cancelled tYES / CancelStatus csYes)
+      // OU a nota de cancelamento (CancelStatus csCancellation). Qualquer
+      // CancelStatus != csNo entra aqui — some por padrão no relatório.
+      cancelada: i.Cancelled === 'tYES' || (i.CancelStatus && i.CancelStatus !== 'csNo'),
+      status: i.DocumentStatus === 'bost_Close' ? 'fechada' : 'aberta',
+      cfop: cfops.join(', '),
+      cfops,
+      projeto: projetos.join(', '),
+      ehVenda: cfops.length > 0 && cfops.every((c: any) => cfopPrincipal.test(String(c))),
+    };
+  }
+
+  /** Linhas de uma NF completa (item, qtd, valor, CFOP e lotes) — saída e entrada. */
+  private mapLinhasNota(full: any) {
+    return (full.DocumentLines || []).map((l: any) => ({
+      itemCode: l.ItemCode,
+      descricao: l.ItemDescription,
+      quantidade: Number(l.Quantity) || 0,
+      precoUnitario: Number(l.Price) || 0,
+      valorLinha: Number(l.LineTotal) || (Number(l.Price) || 0) * (Number(l.Quantity) || 0),
+      cfop: l.CFOPCode || '',
+      projeto: l.ProjectCode || '',
+      armazem: l.WarehouseCode,
+      lotes: (l.BatchNumbers || []).map((b: any) => ({
+        lote: b.BatchNumber,
+        quantidade: Number(b.Quantity) || 0,
+        valor: (Number(l.Price) || 0) * (Number(b.Quantity) || 0),
+      })),
+    }));
+  }
+
+  // -------- NFs DE ENTRADA (PurchaseInvoices) POR PERÍODO --------
+  // Mesmo formato do faturamento, por FORNECEDOR. SOMENTE LEITURA no SAP.
+  @Get('notas-entrada')
+  async notasEntrada(@Query('desde') desde?: string, @Query('ate') ate?: string) {
+    const d = desde || new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+    const a = ate || '';
+    return this.cache.wrap(
+      `notas-entrada:${d}:${a}`,
+      async () => {
+        const [notas, compradores] = await Promise.all([
+          this.sap.getNotasEntrada(d, a || undefined),
+          this.sap.getSalesPersons?.().catch(() => []) ?? [],
+        ]);
+        const nome: Record<string, string> = {};
+        for (const v of compradores as any[]) nome[String(v.SalesEmployeeCode)] = v.SalesEmployeeName;
+        // Compra = CFOPs de compra (1101-1129 / 2101-2129 / 3101-3129). O resto
+        // (remessa, retorno de armazém, devolução, transferência…) fica "outra".
+        return (notas as any[]).map((i) => this.mapNotaFiscal(i, nome, /^[123]1(0[1-9]|1[0-9]|2[0-9])$/));
+      },
+      300000,
+    );
+  }
+
+  // Itens/lotes de UMA NF de entrada — pelo DocEntry (o nº da NF é do fornecedor
+  // e pode repetir entre fornecedores, então não serve de chave). Cache 1h.
+  @Get('nf-entrada-detalhe')
+  async nfEntradaDetalhe(@Query('docEntry') docEntry?: string) {
+    if (!docEntry) throw new HttpException('Informe o docEntry da NF (?docEntry=)', HttpStatus.BAD_REQUEST);
+    return this.cache.wrap(
+      `nf-entrada:${docEntry}`,
+      async () => {
+        const full = await this.sap.getNotaEntradaFull(docEntry);
+        if (!full) return { encontrada: false, docEntry };
+        return {
+          encontrada: true,
+          docEntry: full.DocEntry,
+          docNum: full.DocNum,
+          nfe: full.SequenceSerial || full.NumAtCard || null,
+          serie: full.SeriesString,
+          modelo: full.SequenceModel,
+          cardCode: full.CardCode,
+          cliente: full.CardName,
+          data: full.DocDate,
+          cancelada: full.Cancelled === 'tYES',
+          linhas: this.mapLinhasNota(full),
+        };
+      },
+      3600000,
+      (v: any) => v && v.encontrada,
+    );
+  }
+
+  // DIAG TEMPORÁRIO (read-only): campos reais das NFs de entrada.
+  @Public()
+  @Get('diag-nfe-entrada')
+  async diagNfeEntrada(@Query('t') t: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const desde = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+    const raw = (await this.sap.getNotasEntrada(desde)) as any[];
+    const amostra = raw.slice(0, 6).map((i: any) => ({
+      docEntry: i.DocEntry, docNum: i.DocNum, seqSerial: i.SequenceSerial, serie: i.SeriesString, modelo: i.SequenceModel,
+      numAtCard: i.NumAtCard, fornecedor: i.CardName, data: i.DocDate, total: i.DocTotal, cancel: i.CancelStatus,
+      cfops: Array.from(new Set((i.DocumentLines || []).map((l: any) => l.CFOPCode))),
+    }));
+    const det: any = raw[0] ? await this.nfEntradaDetalhe(String(raw[0].DocEntry)) : null;
+    return { total_ano: raw.length, amostra, detalhe_primeira: det ? { nfe: det.nfe, linhas: (det.linhas || []).slice(0, 3) } : null };
   }
 
   // -------- LOTES DE UMA NOTA FISCAL DE SAÍDA (por número da NFe) --------
@@ -187,21 +281,7 @@ export class ApiController {
   private async nfLotesSap(nfe: string, serie?: string) {
     const full = await this.sap.getFaturaPorNFe(nfe, serie);
     if (!full) return { encontrada: false, nfe };
-    const linhas = (full.DocumentLines || []).map((l: any) => ({
-      itemCode: l.ItemCode,
-      descricao: l.ItemDescription,
-      quantidade: Number(l.Quantity) || 0,
-      precoUnitario: Number(l.Price) || 0,
-      valorLinha: Number(l.LineTotal) || (Number(l.Price) || 0) * (Number(l.Quantity) || 0),
-      cfop: l.CFOPCode || '',
-      projeto: l.ProjectCode || '',
-      armazem: l.WarehouseCode,
-      lotes: (l.BatchNumbers || []).map((b: any) => ({
-        lote: b.BatchNumber,
-        quantidade: Number(b.Quantity) || 0,
-        valor: (Number(l.Price) || 0) * (Number(b.Quantity) || 0),
-      })),
-    }));
+    const linhas = this.mapLinhasNota(full);
     return {
       encontrada: true,
       docNum: full.DocNum,
