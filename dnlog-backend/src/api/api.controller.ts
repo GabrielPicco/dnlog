@@ -244,22 +244,6 @@ export class ApiController {
     );
   }
 
-  // DIAG TEMPORÁRIO (read-only): campos reais das NFs de entrada.
-  @Public()
-  @Get('diag-nfe-entrada')
-  async diagNfeEntrada(@Query('t') t: string) {
-    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const desde = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
-    const raw = (await this.sap.getNotasEntrada(desde)) as any[];
-    const amostra = raw.slice(0, 6).map((i: any) => ({
-      docEntry: i.DocEntry, docNum: i.DocNum, seqSerial: i.SequenceSerial, serie: i.SeriesString, modelo: i.SequenceModel,
-      numAtCard: i.NumAtCard, fornecedor: i.CardName, data: i.DocDate, total: i.DocTotal, cancel: i.CancelStatus,
-      cfops: Array.from(new Set((i.DocumentLines || []).map((l: any) => l.CFOPCode))),
-    }));
-    const det: any = raw[0] ? await this.nfEntradaDetalhe(String(raw[0].DocEntry)) : null;
-    return { total_ano: raw.length, amostra, detalhe_primeira: det ? { nfe: det.nfe, linhas: (det.linhas || []).slice(0, 3) } : null };
-  }
-
   // -------- LOTES DE UMA NOTA FISCAL DE SAÍDA (por número da NFe) --------
   // Lê da Invoice (OINV) os lotes efetivamente faturados: casa a NF pelo
   // SequenceSerial (= nº da NFe) + Série, e devolve DocumentLines.BatchNumbers.
