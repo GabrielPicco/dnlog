@@ -1902,6 +1902,28 @@ const App = ({ usuario, onLogout }) => {
     return pend;
   }, [state.ordens, editingOE]);
 
+  // Quanto de cada lote já está alocado em OEs ATIVAS, por CLIENTE (CardCode do
+  // pedido). Usado no seletor: a reserva QCDN de outro cliente que já está sendo
+  // atendida por uma OE dele não deve ser descontada de novo do "livre".
+  const alocadoPorLoteCliente = useMemo(() => {
+    const m = {}; // lote_codigo -> { cardCode: qtd }
+    state.ordens
+      .filter(o => o.status !== 'CANCELADA' && o.status !== 'ENTREGUE' && !o.faturada && o.id !== (editingOE && editingOE.id))
+      .forEach(oe => getParadas(oe).forEach(p => (p.itens || []).forEach(it => {
+        if ((p.modalidade || oe.modalidade) === 'TRIANGULAR') return;
+        const cc = cardCodeDoPedido(it.pedido_numero || p.pedido_numero);
+        if (!cc) return;
+        (it.lotes_alocados || []).forEach(la => {
+          if (!la || !la.lote_codigo || la.controle_paralelo || la.sem_lotes_triangular) return;
+          const q = Number(la.qtd_bb) || 0;
+          if (q <= 0) return;
+          m[la.lote_codigo] = m[la.lote_codigo] || {};
+          m[la.lote_codigo][cc] = (m[la.lote_codigo][cc] || 0) + q;
+        });
+      })));
+    return m;
+  }, [state.ordens, editingOE]);
+
   const lotesComSaldo = useMemo(() => {
     return state.lotes.map(l => {
       // Reserva = (a) OEs ATIVAS não faturadas, inteiras, + (b) a parte das OEs
@@ -1928,10 +1950,11 @@ const App = ({ usuario, onLogout }) => {
         ...l,
         qtd_reservada: reservado,
         qtd_pendente_sap: pendenteSap,
-        qtd_disponivel: Math.max(0, l.qtd_bb - reservado)
+        qtd_disponivel: Math.max(0, l.qtd_bb - reservado),
+        alocado_por_cliente: alocadoPorLoteCliente[l.lote_codigo] || {},
       };
     });
-  }, [state.lotes, state.ordens, editingOE, pendenteSapPorLote]);
+  }, [state.lotes, state.ordens, editingOE, pendenteSapPorLote, alocadoPorLoteCliente]);
 
   const showToast = (title, msg) => {
     setToast({ title, msg });
@@ -7463,6 +7486,8 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
           lotesDoItem={lotesDoItem}
           reservasQcdn={reservasQcdn}
           reservasForaEstoque={reservasForaEstoque}
+          clienteCardCode={clienteCardCode}
+          clienteNome={clienteNome}
           lotesAlocadosAtual={lotesAlocados}
           onClose={() => setShowLoteModal(false)}
           onConfirm={(lotes) => {
@@ -7522,7 +7547,7 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
 // ============================================================
 // SELETOR DE LOTES (MODAL)
 // ============================================================
-const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfirm, reservasQcdn, reservasForaEstoque }) => {
+const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfirm, reservasQcdn, reservasForaEstoque, clienteCardCode, clienteNome }) => {
   // Reserva do QCDN para ESTE cliente neste lote (só conta se ainda tem saldo).
   const reservaDe = (codigo) => {
     const r = reservasQcdn && reservasQcdn.get(normLote(codigo));
@@ -7544,22 +7569,39 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
   // ao reabrir o seletor e deixava pegar o mesmo lote além do saldo.
   const capacidadeDe = (l) => Math.max(0, Number(l.qtd_disponivel) || 0);
 
+  // Reservas QCDN de OUTROS clientes neste lote — para não mandar a este cliente
+  // um lote prometido a outro. A parte da reserva que já está alocada numa OE
+  // ativa DAQUELE cliente não conta de novo (já está sendo atendida).
+  const reservasLote = useReservasPorLote();
+  const normNome = (x) => String(x || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  const ehDesteCliente = (r) =>
+    (!!clienteCardCode && !!r.clienteCardCode && r.clienteCardCode === clienteCardCode) ||
+    (!!clienteNome && normNome(r.clienteNome) === normNome(clienteNome));
+  const reservasOutrosDe = (l) => ((reservasLote && reservasLote.get(normLote(l.lote_codigo))) || [])
+    .filter(r => !ehDesteCliente(r))
+    .map(r => ({ ...r, pend: Math.max(0, (r.saldo || 0) - (((l.alocado_por_cliente || {})[r.clienteCardCode]) || 0)) }))
+    .filter(r => r.pend > 0);
+  const qtdOutrosDe = (l) => reservasOutrosDe(l).reduce((a, r) => a + r.pend, 0);
+  // Parte do lote LIVRE de reserva de outros clientes (dá para usar sem conflito).
+  const livreDe = (l) => Math.max(0, capacidadeDe(l) - qtdOutrosDe(l));
+
   // Soma total alocado neste momento
   const totalAlocado = Object.values(alocacao).reduce((sum, v) => sum + (Number(v) || 0), 0);
   const pode = totalAlocado > 0 && totalAlocado <= saldoPedido;
 
-  // Lotes reservados no QCDN para este cliente vêm PRIMEIRO (e o "Alocar FIFO"
-  // os usa antes); depois, FIFO (mais antigos primeiro). Mostra todos com
-  // disp>0 OU já alocados.
+  // Ordem: (1) reservados no QCDN para ESTE cliente, (2) lotes livres,
+  // (3) lotes com reserva de OUTRO cliente (por último). Dentro de cada grupo,
+  // FIFO (mais antigos primeiro). Mostra todos com disp>0 OU já alocados.
+  const grupoDe = (l) => reservaDe(l.lote_codigo) ? 0 : (qtdOutrosDe(l) > 0 ? 2 : 1);
   const lotesDisponiveis = lotesDoItem
     .filter(l => capacidadeDe(l) > 0 || (alocacao[l.lote_codigo] || 0) > 0)
     .sort((a, b) => {
-      const ra = reservaDe(a.lote_codigo) ? 0 : 1;
-      const rb = reservaDe(b.lote_codigo) ? 0 : 1;
-      if (ra !== rb) return ra - rb;
+      const ga = grupoDe(a), gb = grupoDe(b);
+      if (ga !== gb) return ga - gb;
       return (a.data_fabricacao || '').localeCompare(b.data_fabricacao || '');
     });
   const qtdReservados = lotesDisponiveis.filter(l => reservaDe(l.lote_codigo)).length;
+  const qtdComOutros = lotesDisponiveis.filter(l => qtdOutrosDe(l) > 0).length;
 
   // Atualiza quantidade de um lote. Garante limites.
   const atualizarLote = (codigo, novaQtd) => {
@@ -7583,7 +7625,7 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
     const nova = {};
     for (const l of lotesDisponiveis) {
       if (restante <= 0) break;
-      const capacidade = capacidadeDe(l);
+      const capacidade = livreDe(l); // FIFO NUNCA usa bags reservadas a outro cliente
       const q = Math.min(capacidade, restante);
       if (q > 0) {
         nova[l.lote_codigo] = q;
@@ -7596,6 +7638,21 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
   const limpar = () => setAlocacao({});
 
   const handleConfirm = () => {
+    // Alocou acima do livre num lote reservado para OUTRO cliente? Pede confirmação.
+    const conflitos = Object.entries(alocacao)
+      .filter(([, q]) => (Number(q) || 0) > 0)
+      .map(([codigo, q]) => {
+        const l = lotesDoItem.find(x => x.lote_codigo === codigo);
+        if (!l) return null;
+        const excesso = (Number(q) || 0) - livreDe(l);
+        return excesso > 0 ? { codigo, excesso, clientes: reservasOutrosDe(l) } : null;
+      })
+      .filter(Boolean);
+    if (conflitos.length) {
+      const msg = conflitos.map(c =>
+        `• Lote ${c.codigo}: ${c.excesso} bag(s) reservada(s) para ${c.clientes.map(r => `${r.clienteNome} (${r.pend})`).join(', ')}`).join('\n');
+      if (!window.confirm(`ATENÇÃO — lote reservado para OUTRO cliente no QCDN:\n\n${msg}\n\nEnviar para este cliente mesmo assim?`)) return;
+    }
     const lotes = Object.entries(alocacao)
       .filter(([_, qtd]) => (Number(qtd) || 0) > 0)
       .map(([lote_codigo, qtd_bb]) => {
@@ -7625,6 +7682,11 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
             {qtdReservados > 0 && (
               <div style={{ fontSize: 11, color: 'var(--purple)', marginTop: 4, fontWeight: 700 }}>
                 <i className="ti ti-bookmark" style={{ verticalAlign: -1 }}></i> {qtdReservados} lote{qtdReservados > 1 ? 's' : ''} reservado{qtdReservados > 1 ? 's' : ''} para este cliente no QCDN (aparecem primeiro)
+              </div>
+            )}
+            {qtdComOutros > 0 && (
+              <div style={{ fontSize: 11, color: 'var(--orange)', marginTop: 4, fontWeight: 700 }}>
+                <i className="ti ti-alert-triangle" style={{ verticalAlign: -1 }}></i> {qtdComOutros} lote{qtdComOutros > 1 ? 's' : ''} com reserva para OUTRO cliente — vão para o fim da lista e o "Alocar FIFO" não usa as bags reservadas
               </div>
             )}
           </div>
@@ -7677,10 +7739,20 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
                   const capacidadeReal = capacidadeDe(l);
                   const noLimite = alocadoLote >= capacidadeReal;
                   const resQ = reservaDe(l.lote_codigo);
+                  const outros = reservasOutrosDe(l);
+                  const qOutros = outros.reduce((a, r) => a + r.pend, 0);
+                  const livre = livreDe(l);
+                  const acimaDoLivre = qOutros > 0 && alocadoLote > livre; // pegando bags de outro cliente
                   return (
-                    <tr key={l.lote_codigo} style={{ background: alocadoLote > 0 ? 'var(--accent-glow)' : resQ ? 'var(--purple-bg)' : 'transparent' }}>
+                    <tr key={l.lote_codigo} style={{ background: acimaDoLivre ? 'var(--red-bg)' : alocadoLote > 0 ? 'var(--accent-glow)' : resQ ? 'var(--purple-bg)' : qOutros > 0 ? 'var(--orange-bg)' : 'transparent' }}>
                       <td className="mono" style={{ color: 'var(--accent-light)', fontWeight: 700, fontSize: 12 }}>
                         {l.lote_codigo}
+                        {qOutros > 0 && (
+                          <div title={outros.map(r => `${r.clienteNome}${r.clienteCardCode ? ' · ' + r.clienteCardCode : ''}: ${r.pend} bag(s) reservada(s)`).join('\n')}
+                            style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10, fontWeight: 700, color: acimaDoLivre ? 'var(--red)' : 'var(--orange)', marginTop: 2, lineHeight: 1.3, maxWidth: 260 }}>
+                            <i className="ti ti-alert-triangle" style={{ fontSize: 10, verticalAlign: -1 }}></i> Reservado p/ outro cliente: {outros.length === 1 ? `${outros[0].clienteNome} (${outros[0].pend})` : `${outros.length} clientes (${qOutros})`}
+                          </div>
+                        )}
                         {resQ && (
                           <div title={`Reserva QCDN: ${resQ.reservado} reservado · ${resQ.entregue || 0} já entregue`}
                             style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10, fontWeight: 700, color: 'var(--purple)', marginTop: 2, whiteSpace: 'nowrap' }}>
@@ -7694,6 +7766,12 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
                       <td className="num mono cell-muted" style={{ fontSize: 11 }}>{fmtDate(l.data_fabricacao)}</td>
                       <td className="num mono cell-primary" style={{ color: noLimite ? 'var(--orange)' : 'var(--green)' }}>
                         {capacidadeReal}
+                        {qOutros > 0 && (
+                          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10, fontWeight: 700, color: livre > 0 ? 'var(--text-muted)' : 'var(--orange)', whiteSpace: 'nowrap' }}
+                            title="Disponível sem pegar bags reservadas para outro cliente">
+                            livre {livre}
+                          </div>
+                        )}
                         {l.qtd_outras_linhas > 0 && (
                           <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}
                             title="Quantidade deste lote já alocada em outra parada/pedido desta mesma OE">
@@ -7723,9 +7801,9 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
                             style={{
                               width: 54, padding: '4px 6px',
                               background: 'var(--bg-card)',
-                              border: '1px solid ' + (noLimite && alocadoLote > 0 ? 'var(--orange)' : 'var(--border-strong)'),
+                              border: '1px solid ' + (acimaDoLivre ? 'var(--red)' : noLimite && alocadoLote > 0 ? 'var(--orange)' : 'var(--border-strong)'),
                               borderRadius: 3,
-                              color: noLimite && alocadoLote > 0 ? 'var(--orange)' : 'var(--text)',
+                              color: acimaDoLivre ? 'var(--red)' : noLimite && alocadoLote > 0 ? 'var(--orange)' : 'var(--text)',
                               fontFamily: 'JetBrains Mono, monospace', fontSize: 13, textAlign: 'center', outline: 'none',
                               fontWeight: 700
                             }}
