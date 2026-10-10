@@ -655,16 +655,16 @@ tbody tr:last-child td { border-bottom: none; }
 .doc-id-block { text-align: right; border-left: 3px solid var(--accent); padding-left: 16px; }
 .doc-type { font-size: 16px; font-weight: 800; color: #1A1A1A; }
 .doc-type-sub { font-size: 9px; color: #888; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 8px; font-weight: 600; }
-.doc-id-number { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 800; background: #1A1A1A; color: white; display: inline-block; padding: 4px 10px; border-radius: 4px; margin-bottom: 6px; }
+.doc-id-number { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 800; background: white; color: #1A1A1A; border: 2px solid #1A1A1A; display: inline-block; padding: 3px 10px; border-radius: 4px; margin-bottom: 6px; }
 .doc-id-meta { font-size: 10px; color: #555; line-height: 1.5; }
 .doc-vias { display: grid; grid-template-columns: 1fr 1fr; background: #F4F4F2; border-bottom: 1px solid #1A1A1A; }
 .via-item { padding: 8px 12px; font-size: 10px; font-weight: 700; text-align: center; color: #777; letter-spacing: 0.1em; border-right: 1px solid #D5D5D0; }
 .via-item:last-child { border-right: none; }
-.via-active { background: #1A1A1A; color: white; }
+.via-active { background: white; color: #1A1A1A; box-shadow: inset 0 -3px 0 #1A1A1A; }
 .doc-twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; margin-bottom: 12px; }
 .doc-block, .doc-block-wide { border: 1px solid #1A1A1A; border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
-.doc-block-header { background: #1A1A1A; color: white; padding: 7px 12px; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; display: flex; align-items: center; gap: 6px; }
-.doc-block-header i { font-size: 14px; color: var(--accent-light); }
+.doc-block-header { background: white; color: #1A1A1A; border-bottom: 1.5px solid #1A1A1A; padding: 7px 12px; font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; display: flex; align-items: center; gap: 6px; }
+.doc-block-header i { font-size: 14px; color: #0E6048; }
 .doc-block-body { padding: 12px 14px; background: white; }
 .kv { display: grid; grid-template-columns: 110px 1fr; gap: 10px; padding: 4px 0; font-size: 11px; }
 .kv .k { color: #888; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; padding-top: 2px; }
@@ -676,10 +676,10 @@ tbody tr:last-child td { border-bottom: none; }
 .val-big { font-size: 16px; color: #1A1A1A; font-weight: 700; }
 .sub-section-title { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; margin-bottom: 8px; background: #F4F4F2; padding: 3px 8px; border-left: 3px solid var(--accent); display: inline-block; }
 .doc-table-v2 { width: 100%; border-collapse: collapse; font-size: 11px; }
-.doc-table-v2 th { background: #2A2A2A; color: white; padding: 7px 10px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
+.doc-table-v2 th { background: white; color: #1A1A1A; border-bottom: 1.5px solid #1A1A1A; padding: 7px 10px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 800; }
 .doc-table-v2 td { padding: 10px; border-bottom: 1px solid #E5E5E0; color: #1A1A1A; }
 .doc-table-v2 tr:nth-child(even) td { background: #FAFAF8; }
-.doc-table-total td { background: #1A1A1A !important; color: white !important; font-weight: 800 !important; }
+.doc-table-total td { background: white !important; color: #1A1A1A !important; font-weight: 800 !important; font-size: 13px; border-top: 2px solid #1A1A1A; border-bottom: none; }
 .doc-signatures-v2 { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 28px; padding-top: 16px; }
 .sig-block { text-align: center; }
 .sig-line-v2 { border-top: 1.5px solid #1A1A1A; margin-bottom: 6px; }
@@ -8886,8 +8886,8 @@ const DocumentoOE = ({ oe, totais }) => {
                       }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                           <span style={{
-                            width: 22, height: 22, borderRadius: 11, background: '#1A1A1A',
-                            color: 'white', fontSize: 10, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace',
+                            width: 22, height: 22, borderRadius: 11, background: 'white', border: '1.5px solid #1A1A1A',
+                            color: '#1A1A1A', fontSize: 10, fontWeight: 800, fontFamily: 'JetBrains Mono, monospace',
                             display: 'flex', alignItems: 'center', justifyContent: 'center'
                           }}>{p.ordem_carga}</span>
                           <strong style={{ fontSize: 12 }}>{p.cliente}</strong>
@@ -8987,12 +8987,12 @@ const DocumentoOE = ({ oe, totais }) => {
                 const totalBBParada = p.itens.reduce((a, i) => a + i.qtd_bb, 0);
                 return (
                   <div key={p.id || idxParada} className="doc-block-wide">
-                    <div className="doc-block-header" style={{ background: '#2A2A2A' }}>
+                    <div className="doc-block-header">
                       <i className="ti ti-package"></i>
                       <span style={{ flex: 1 }}>
                         ITENS · PARADA {p.ordem_carga} · {p.cliente.toUpperCase()}
                       </span>
-                      <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--accent-light)' }}>
+                      <span style={{ fontSize: 9, fontWeight: 800, color: '#0E6048' }}>
                         CARGA {p.ordem_carga}º · DESCARGA {p.ordem_descarga}º
                       </span>
                     </div>
@@ -9035,9 +9035,9 @@ const DocumentoOE = ({ oe, totais }) => {
                                   return (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                       {it.lotes_alocados.map(la => (
-                                        <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A', fontSize: 13, lineHeight: 1.55 }}>
-                                          <strong>{la.lote_codigo}</strong>
-                                          <span style={{ color: '#777' }}> · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span>
+                                        <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A', fontSize: 16, lineHeight: 1.5 }}>
+                                          <strong style={{ fontWeight: 800 }}>{la.lote_codigo}</strong>
+                                          <span style={{ color: '#333', fontWeight: 600 }}> · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span>
                                           {la.origem_fornecedor && <span style={{ color: '#555' }}> · orig: {la.origem_fornecedor}</span>}
                                           {la.controle_paralelo && <span style={{ color: '#B85A1A', fontSize: 10, marginLeft: 4, fontWeight: 700 }}>(CTRL PAR.)</span>}
                                         </div>
@@ -9051,14 +9051,14 @@ const DocumentoOE = ({ oe, totais }) => {
                                 </span>
                               )}
                             </td>
-                            <td style={{ textAlign: 'right', fontWeight: 700, fontSize: 13 }} className="mono">{it.qtd_bb}</td>
+                            <td style={{ textAlign: 'right', fontWeight: 800, fontSize: 18 }} className="mono">{it.qtd_bb}</td>
                             <td className="mono" style={{ fontSize: 11 }}>{it.embalagem || it.unidade || 'un'}</td>
                             <td style={{ textAlign: 'right' }} className="mono">{pesoBrutoLabel(it)}</td>
                           </tr>
                         ))}
                         <tr style={{ background: '#FFFAEC' }}>
                           <td colSpan="3" style={{ textAlign: 'right', fontWeight: 700, fontSize: 11, color: '#1A1A1A' }}>SUBTOTAL PARADA {p.ordem_carga}</td>
-                          <td style={{ textAlign: 'right', fontWeight: 700, fontSize: 13, color: '#1A1A1A' }} className="mono">{totalBBParada}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 800, fontSize: 18, color: '#1A1A1A' }} className="mono">{totalBBParada}</td>
                           <td></td>
                           <td style={{ textAlign: 'right', fontWeight: 700, color: '#1A1A1A' }} className="mono">{fmtNum(pesoBrutoLista(p.itens))} kg</td>
                         </tr>
@@ -9074,7 +9074,7 @@ const DocumentoOE = ({ oe, totais }) => {
                   <tbody>
                     <tr className="doc-table-total">
                       <td colSpan="3" style={{ textAlign: 'right', width: 'auto' }}>TOTAL GERAL DA CARGA ({paradas.length} PARADAS)</td>
-                      <td style={{ textAlign: 'right', width: 70 }} className="mono">{totais.bb}</td>
+                      <td style={{ textAlign: 'right', width: 70, fontSize: 18 }} className="mono">{totais.bb}</td>
                       <td style={{ textAlign: 'right', width: 100 }} className="mono">~ {fmtNum(totais.peso)} kg</td>
                     </tr>
                   </tbody>
@@ -9122,9 +9122,9 @@ const DocumentoOE = ({ oe, totais }) => {
                           return (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                               {it.lotes_alocados.map(la => (
-                                <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A' }}>
-                                  <strong>{la.lote_codigo}</strong>
-                                  <span style={{ color: '#777' }}> · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span>
+                                <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A', fontSize: 16, lineHeight: 1.5 }}>
+                                  <strong style={{ fontWeight: 800 }}>{la.lote_codigo}</strong>
+                                  <span style={{ color: '#333', fontWeight: 600 }}> · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span>
                                   {la.controle_paralelo && <span style={{ color: '#B85A1A', fontSize: 8, marginLeft: 4, fontWeight: 700 }}>(CTRL PAR.)</span>}
                                 </div>
                               ))}
@@ -9142,14 +9142,14 @@ const DocumentoOE = ({ oe, totais }) => {
                         </span>
                       )}
                     </td>
-                    <td style={{ textAlign: 'right', fontWeight: 700, fontSize: 13 }} className="mono">{it.qtd_bb}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 800, fontSize: 18 }} className="mono">{it.qtd_bb}</td>
                     <td className="mono" style={{ fontSize: 11 }}>{it.embalagem || it.unidade || 'un'}</td>
                     <td style={{ textAlign: 'right' }} className="mono">{pesoBrutoLabel(it)}</td>
                   </tr>
                 ))}
                 <tr className="doc-table-total">
                   <td colSpan="3" style={{ textAlign: 'right' }}>TOTAL DA CARGA</td>
-                  <td style={{ textAlign: 'right' }} className="mono">{totais.bb}</td>
+                  <td style={{ textAlign: 'right', fontSize: 18 }} className="mono">{totais.bb}</td>
                   <td></td>
                   <td style={{ textAlign: 'right' }} className="mono">~ {fmtNum(totais.peso)} kg</td>
                 </tr>
