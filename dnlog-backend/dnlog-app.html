@@ -663,7 +663,7 @@ tbody tr:last-child td { border-bottom: none; }
 .via-active { background: white; color: #1A1A1A; box-shadow: inset 0 -3px 0 #1A1A1A; }
 .doc-twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; margin-bottom: 12px; }
 .doc-block, .doc-block-wide { border: 1px solid #1A1A1A; border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
-.doc-block-header { background: white; color: #1A1A1A; border-bottom: 1.5px solid #1A1A1A; padding: 7px 12px; font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; display: flex; align-items: center; gap: 6px; }
+.doc-block-header { background: #EDEDEA; color: #1A1A1A; border-bottom: 1.5px solid #1A1A1A; padding: 7px 12px; font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; display: flex; align-items: center; gap: 6px; }
 .doc-block-header i { font-size: 14px; color: #0E6048; }
 .doc-block-body { padding: 12px 14px; background: white; }
 .kv { display: grid; grid-template-columns: 110px 1fr; gap: 10px; padding: 4px 0; font-size: 11px; }
@@ -676,9 +676,10 @@ tbody tr:last-child td { border-bottom: none; }
 .val-big { font-size: 16px; color: #1A1A1A; font-weight: 700; }
 .sub-section-title { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; margin-bottom: 8px; background: #F4F4F2; padding: 3px 8px; border-left: 3px solid var(--accent); display: inline-block; }
 .doc-table-v2 { width: 100%; border-collapse: collapse; font-size: 11px; }
-.doc-table-v2 th { background: white; color: #1A1A1A; border-bottom: 1.5px solid #1A1A1A; padding: 7px 10px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 800; }
+.doc-table-v2 th { background: #F4F4F2; color: #1A1A1A; border-bottom: 1.5px solid #1A1A1A; padding: 7px 10px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 800; }
 .doc-table-v2 td { padding: 10px; border-bottom: 1px solid #E5E5E0; color: #1A1A1A; }
 .doc-table-v2 tr:nth-child(even) td { background: #FAFAF8; }
+.doc-table-v2 td.mono { white-space: nowrap; }
 .doc-table-total td { background: white !important; color: #1A1A1A !important; font-weight: 800 !important; font-size: 13px; border-top: 2px solid #1A1A1A; border-bottom: none; }
 .doc-signatures-v2 { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 28px; padding-top: 16px; }
 .sig-block { text-align: center; }
@@ -724,13 +725,15 @@ tbody tr:last-child td { border-bottom: none; }
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
-  html, body { background: white !important; width: 210mm !important; }
+  /* Largura = área útil da folha (A4 menos as margens do @page). Forçar 210mm
+     estourava a margem e CORTAVA a borda direita das caixas. */
+  html, body { background: white !important; width: auto !important; }
   .sidebar, .page-header, .nav-item, .toast, .btn, button { display: none !important; }
   .app { display: block !important; }
   .main { padding: 0 !important; max-width: 100% !important; }
   #print-only-doc { display: block !important; }
   .no-print { display: none !important; }
-  #printable-doc { box-shadow: none !important; padding: 0 !important; border-radius: 0 !important; }
+  #printable-doc { box-shadow: none !important; padding: 0 !important; border-radius: 0 !important; width: 100% !important; max-width: 100% !important; }
 }
 
 /* CONF (CONFERÊNCIA) */
@@ -9035,11 +9038,11 @@ const DocumentoOE = ({ oe, totais }) => {
                                   return (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                       {it.lotes_alocados.map(la => (
-                                        <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A', fontSize: 16, lineHeight: 1.5 }}>
+                                        <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A', fontSize: 16, lineHeight: 1.5, whiteSpace: 'nowrap' }}>
                                           <strong style={{ fontWeight: 800 }}>{la.lote_codigo}</strong>
                                           <span style={{ color: '#333', fontWeight: 600 }}> · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span>
                                           {la.origem_fornecedor && <span style={{ color: '#555' }}> · orig: {la.origem_fornecedor}</span>}
-                                          {la.controle_paralelo && <span style={{ color: '#B85A1A', fontSize: 10, marginLeft: 4, fontWeight: 700 }}>(CTRL PAR.)</span>}
+                                          {la.controle_paralelo && <span style={{ display: 'inline-block', whiteSpace: 'nowrap', color: '#B85A1A', fontSize: 10, marginLeft: 6, fontWeight: 700, fontFamily: 'Manrope, sans-serif', verticalAlign: 2 }}>(CTRL PAR.)</span>}
                                         </div>
                                       ))}
                                     </div>
@@ -9122,10 +9125,10 @@ const DocumentoOE = ({ oe, totais }) => {
                           return (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                               {it.lotes_alocados.map(la => (
-                                <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A', fontSize: 16, lineHeight: 1.5 }}>
+                                <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A', fontSize: 16, lineHeight: 1.5, whiteSpace: 'nowrap' }}>
                                   <strong style={{ fontWeight: 800 }}>{la.lote_codigo}</strong>
                                   <span style={{ color: '#333', fontWeight: 600 }}> · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span>
-                                  {la.controle_paralelo && <span style={{ color: '#B85A1A', fontSize: 8, marginLeft: 4, fontWeight: 700 }}>(CTRL PAR.)</span>}
+                                  {la.controle_paralelo && <span style={{ display: 'inline-block', whiteSpace: 'nowrap', color: '#B85A1A', fontSize: 10, marginLeft: 6, fontWeight: 700, fontFamily: 'Manrope, sans-serif', verticalAlign: 2 }}>(CTRL PAR.)</span>}
                                 </div>
                               ))}
                               {it.lotes_alocados.some(la => la.controle_paralelo) && (
