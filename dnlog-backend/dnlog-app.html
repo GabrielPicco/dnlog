@@ -638,7 +638,7 @@ tbody tr:last-child td { border-bottom: none; }
   margin-bottom: 24px;
   box-shadow: 0 12px 40px rgba(0,0,0,0.4);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.35;
 }
 .doc-header-v2 {
   display: grid;
@@ -661,12 +661,12 @@ tbody tr:last-child td { border-bottom: none; }
 .via-item { padding: 8px 12px; font-size: 10px; font-weight: 700; text-align: center; color: #777; letter-spacing: 0.1em; border-right: 1px solid #D5D5D0; }
 .via-item:last-child { border-right: none; }
 .via-active { background: white; color: #1A1A1A; box-shadow: inset 0 -3px 0 #1A1A1A; }
-.doc-twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; margin-bottom: 12px; }
-.doc-block, .doc-block-wide { border: 1px solid #1A1A1A; border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
-.doc-block-header { background: #EDEDEA; color: #1A1A1A; border-bottom: 1.5px solid #1A1A1A; padding: 7px 12px; font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; display: flex; align-items: center; gap: 6px; }
+.doc-twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; margin-bottom: 7px; }
+.doc-block, .doc-block-wide { border: 1px solid #1A1A1A; border-radius: 4px; overflow: hidden; margin-bottom: 7px; }
+.doc-block-header { background: #EDEDEA; color: #1A1A1A; border-bottom: 1.5px solid #1A1A1A; padding: 4px 10px; font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; display: flex; align-items: center; gap: 6px; }
 .doc-block-header i { font-size: 14px; color: #0E6048; }
-.doc-block-body { padding: 12px 14px; background: white; }
-.kv { display: grid; grid-template-columns: 110px 1fr; gap: 10px; padding: 4px 0; font-size: 11px; }
+.doc-block-body { padding: 7px 12px; background: white; }
+.kv { display: grid; grid-template-columns: 100px 1fr; gap: 8px; padding: 2px 0; font-size: 11px; }
 .kv .k { color: #888; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; padding-top: 2px; }
 .kv .v { color: #1A1A1A; font-weight: 500; }
 .doc-fourcol { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
@@ -676,17 +676,17 @@ tbody tr:last-child td { border-bottom: none; }
 .val-big { font-size: 16px; color: #1A1A1A; font-weight: 700; }
 .sub-section-title { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; margin-bottom: 8px; background: #F4F4F2; padding: 3px 8px; border-left: 3px solid var(--accent); display: inline-block; }
 .doc-table-v2 { width: 100%; border-collapse: collapse; font-size: 11px; }
-.doc-table-v2 th { background: #F4F4F2; color: #1A1A1A; border-bottom: 1.5px solid #1A1A1A; padding: 7px 6px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 800; }
-.doc-table-v2 td { padding: 8px 6px; border-bottom: 1px solid #E5E5E0; color: #1A1A1A; }
+.doc-table-v2 th { background: #F4F4F2; color: #1A1A1A; border-bottom: 1.5px solid #1A1A1A; padding: 4px 6px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 800; }
+.doc-table-v2 td { padding: 3px 6px; border-bottom: 1px solid #E5E5E0; color: #1A1A1A; line-height: 1.25; }
 .doc-table-v2 tr:nth-child(even) td { background: #FAFAF8; }
 .doc-table-v2 td.mono { white-space: nowrap; }
 .doc-table-total td { background: white !important; color: #1A1A1A !important; font-weight: 800 !important; font-size: 13px; border-top: 2px solid #1A1A1A; border-bottom: none; }
-.doc-signatures-v2 { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 28px; padding-top: 16px; }
+.doc-signatures-v2 { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 18px; padding-top: 8px; }
 .sig-block { text-align: center; }
 .sig-line-v2 { border-top: 1.5px solid #1A1A1A; margin-bottom: 6px; }
 .sig-name-v2 { font-size: 11px; font-weight: 700; color: #1A1A1A; margin-bottom: 2px; }
 .sig-role-v2 { font-size: 9px; color: #777; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; margin-bottom: 6px; }
-.doc-footer-v2 { margin-top: 20px; padding-top: 12px; border-top: 1px solid #1A1A1A; font-size: 9px; color: #777; display: flex; justify-content: space-between; font-family: 'JetBrains Mono', monospace; }
+.doc-footer-v2 { margin-top: 10px; padding-top: 6px; border-top: 1px solid #1A1A1A; font-size: 9px; color: #777; display: flex; justify-content: space-between; font-family: 'JetBrains Mono', monospace; }
 
 /* MODALIDADE */
 .modality-card {
@@ -8870,7 +8870,7 @@ const DocumentoOE = ({ oe, totais }) => {
                       <div className="kv"><span className="k">CNPJ</span><span className="v mono">62.255.734/0001-79</span></div>
                       <div className="kv"><span className="k">IE</span><span className="v mono">234.584.158</span></div>
                       <div className="kv"><span className="k">Endereço</span><span className="v">Av. JK, 4777 · Jardim das Acácias · Luís Eduardo Magalhães/BA · CEP 47862-146</span></div>
-                      <div className="kv"><span className="k">Doca</span><span className="v"><strong>{oe.doca || '—'}</strong></span></div>
+                      {oe.doca && <div className="kv"><span className="k">Doca</span><span className="v"><strong>{oe.doca}</strong></span></div>}
                     </>
                   )}
                 </div>
@@ -8879,23 +8879,23 @@ const DocumentoOE = ({ oe, totais }) => {
                 <div className="doc-block-header">
                   <i className="ti ti-arrow-down-right"></i> {multiplas ? `DESTINATÁRIOS (${paradas.length})` : 'DESTINATÁRIO'}
                 </div>
-                <div className="doc-block-body" style={{ padding: multiplas ? 0 : '12px 14px' }}>
+                <div className="doc-block-body" style={{ padding: multiplas ? 0 : '7px 12px' }}>
                   {multiplas ? (
                     paradas.map((p, idx) => (
                       <div key={p.id || idx} style={{
-                        padding: '10px 14px',
+                        padding: '5px 12px',
                         borderBottom: idx < paradas.length - 1 ? '1px solid #E5E5E0' : 'none',
                         background: idx % 2 === 0 ? 'white' : '#FAFAF8'
                       }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 1 }}>
                           <span style={{
-                            width: 22, height: 22, borderRadius: 11, background: 'white', border: '1.5px solid #1A1A1A',
+                            width: 18, height: 18, borderRadius: 9, background: 'white', border: '1.5px solid #1A1A1A',
                             color: '#1A1A1A', fontSize: 10, fontWeight: 800, fontFamily: 'JetBrains Mono, monospace',
                             display: 'flex', alignItems: 'center', justifyContent: 'center'
                           }}>{p.ordem_carga}</span>
                           <strong style={{ fontSize: 12 }}>{p.cliente}</strong>
                         </div>
-                        <div style={{ fontSize: 10, color: '#555', marginLeft: 30 }}>
+                        <div style={{ fontSize: 10, color: '#555', marginLeft: 26 }}>
                           {p.pedido_local_entrega || '—'} · Carrega <strong style={{ color: '#1A1A1A' }}>{p.ordem_carga}º</strong> · Descarrega <strong style={{ color: '#B85A1A' }}>{p.ordem_descarga}º</strong>
                         </div>
                       </div>
@@ -8932,7 +8932,7 @@ const DocumentoOE = ({ oe, totais }) => {
       {/* TRANSPORTE */}
       <div className="doc-block-wide">
         <div className="doc-block-header"><i className="ti ti-truck"></i> TRANSPORTE E PROGRAMAÇÃO</div>
-        <div className="doc-block-body" style={{ padding: '8px 12px' }}>
+        <div className="doc-block-body" style={{ padding: '5px 10px' }}>
           {/* Tudo numa grade densa: motorista | veículo | programação */}
           <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.4fr 1fr', gap: 14, alignItems: 'start' }}>
             {/* Motorista */}
@@ -8999,7 +8999,7 @@ const DocumentoOE = ({ oe, totais }) => {
                         CARGA {p.ordem_carga}º · DESCARGA {p.ordem_descarga}º
                       </span>
                     </div>
-                    <div style={{ background: '#F4F4F2', padding: '6px 12px', fontSize: 9, color: '#555', borderBottom: '1px solid #1A1A1A', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                    <div style={{ background: '#F4F4F2', padding: '3px 10px', fontSize: 9, color: '#555', borderBottom: '1px solid #1A1A1A', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
                       <span><strong>{pedidosDaParada(p).length > 1 ? 'Pedidos:' : 'Pedido:'}</strong> <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{pedidosDaParada(p).join(', ') || p.pedido_numero}</span></span>
                       <span><strong>Vendedor:</strong> {p.vendedor || '—'}</span>
                       <span><strong>Local entrega:</strong> {p.pedido_local_entrega || '—'}</span>
@@ -9038,7 +9038,7 @@ const DocumentoOE = ({ oe, totais }) => {
                                   return (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                       {it.lotes_alocados.map(la => (
-                                        <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A', fontSize: 14, lineHeight: 1.45 }}>
+                                        <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A', fontSize: 14, lineHeight: 1.2 }}>
                                           <span style={{ whiteSpace: 'nowrap' }}><strong style={{ fontWeight: 800 }}>{la.lote_codigo}</strong>
                                           <span style={{ color: '#333', fontWeight: 600 }}> · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span></span>
                                           {la.origem_fornecedor && <span style={{ color: '#555' }}> · orig: {la.origem_fornecedor}</span>}
@@ -9054,14 +9054,14 @@ const DocumentoOE = ({ oe, totais }) => {
                                 </span>
                               )}
                             </td>
-                            <td style={{ textAlign: 'right', fontWeight: 800, fontSize: 18 }} className="mono">{it.qtd_bb}</td>
+                            <td style={{ textAlign: 'right', fontWeight: 800, fontSize: 18, lineHeight: 1 }} className="mono">{it.qtd_bb}</td>
                             <td className="mono" style={{ fontSize: 11 }}>{it.embalagem || it.unidade || 'un'}</td>
                             <td style={{ textAlign: 'right' }} className="mono">{pesoBrutoLabel(it)}</td>
                           </tr>
                         ))}
                         <tr style={{ background: '#FFFAEC' }}>
                           <td colSpan="3" style={{ textAlign: 'right', fontWeight: 700, fontSize: 11, color: '#1A1A1A' }}>SUBTOTAL PARADA {p.ordem_carga}</td>
-                          <td style={{ textAlign: 'right', fontWeight: 800, fontSize: 18, color: '#1A1A1A' }} className="mono">{totalBBParada}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 800, fontSize: 18, lineHeight: 1, color: '#1A1A1A' }} className="mono">{totalBBParada}</td>
                           <td></td>
                           <td style={{ textAlign: 'right', fontWeight: 700, color: '#1A1A1A' }} className="mono">{fmtNum(pesoBrutoLista(p.itens))} kg</td>
                         </tr>
@@ -9125,7 +9125,7 @@ const DocumentoOE = ({ oe, totais }) => {
                           return (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                               {it.lotes_alocados.map(la => (
-                                <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A', fontSize: 14, lineHeight: 1.45 }}>
+                                <div key={la.lote_codigo} style={{ fontFamily: 'JetBrains Mono, monospace', color: '#1A1A1A', fontSize: 14, lineHeight: 1.2 }}>
                                   <span style={{ whiteSpace: 'nowrap' }}><strong style={{ fontWeight: 800 }}>{la.lote_codigo}</strong>
                                   <span style={{ color: '#333', fontWeight: 600 }}> · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span></span>
                                   {la.controle_paralelo && <span style={{ display: 'inline-block', whiteSpace: 'nowrap', color: '#B85A1A', fontSize: 10, marginLeft: 6, fontWeight: 700, fontFamily: 'Manrope, sans-serif', verticalAlign: 2 }}>(CTRL PAR.)</span>}
@@ -9145,7 +9145,7 @@ const DocumentoOE = ({ oe, totais }) => {
                         </span>
                       )}
                     </td>
-                    <td style={{ textAlign: 'right', fontWeight: 800, fontSize: 18 }} className="mono">{it.qtd_bb}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 800, fontSize: 18, lineHeight: 1 }} className="mono">{it.qtd_bb}</td>
                     <td className="mono" style={{ fontSize: 11 }}>{it.embalagem || it.unidade || 'un'}</td>
                     <td style={{ textAlign: 'right' }} className="mono">{pesoBrutoLabel(it)}</td>
                   </tr>
@@ -9167,7 +9167,7 @@ const DocumentoOE = ({ oe, totais }) => {
         <div className="doc-block-wide">
           <div className="doc-block-header"><i className="ti ti-message"></i> OBSERVAÇÕES E INSTRUÇÕES</div>
           <div className="doc-block-body" style={{ background: '#FFFAEC' }}>
-            <div style={{ fontSize: 12, lineHeight: 1.6, color: '#333' }}>{oe.observacoes}</div>
+            <div style={{ fontSize: 12, lineHeight: 1.4, color: '#333' }}>{oe.observacoes}</div>
           </div>
         </div>
       )}
