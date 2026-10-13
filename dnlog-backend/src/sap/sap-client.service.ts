@@ -666,6 +666,101 @@ export class SapClientService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * [LEITURA] Movimentações de UM lote em todos os documentos de estoque do SAP.
+   * O Service Layer não expõe o log de transações de lote (OITL), então: acha o
+   * item do lote (BatchNumberDetails), lista os documentos de cada tipo desde a
+   * entrada do lote (só cabeçalho + linhas, sem lotes), filtra os que têm o item
+   * e abre SÓ esses para ler os BatchNumbers. Somente leitura (GET).
+   */
+  async getMovimentosLote(lote: string): Promise<any> {
+    await this.ensureSession();
+    const alvo = String(lote || '').trim().toUpperCase();
+    const cadResp = await this.axios.get('/BatchNumberDetails', {
+      params: { $filter: `Batch eq '${this.odataLiteral(String(lote).trim())}'` },
+    });
+    const cadastro = (cadResp.data?.value || []).map((b: any) => ({
+      item: b.ItemCode, descricao: b.ItemDescription, lote: b.Batch, status: b.Status,
+      entrada: b.AdmissionDate, fabricacao: b.ManufacturingDate, validade: b.ExpirationDate,
+    }));
+    const itens = Array.from(new Set(cadastro.map((c: any) => c.item).filter(Boolean)));
+    if (!itens.length) return { lote: alvo, cadastro, movimentos: [], erros: ['lote não encontrado no cadastro do SAP'] };
+    // A partir de 60 dias antes da entrada do lote (folga p/ documentos com data anterior).
+    const entrada = cadastro.map((c: any) => c.entrada).filter(Boolean).sort()[0];
+    const desde = entrada
+      ? new Date(new Date(entrada).getTime() - 60 * 86400000).toISOString().slice(0, 10)
+      : `${new Date().getFullYear() - 1}-01-01`;
+
+    const tipos = [
+      { ent: 'PurchaseDeliveryNotes', nome: 'Recebimento de mercadoria', sinal: +1, mkt: true },
+      { ent: 'PurchaseInvoices', nome: 'NF de entrada', sinal: +1, mkt: true },
+      { ent: 'PurchaseReturns', nome: 'Devolução ao fornecedor', sinal: -1, mkt: true },
+      { ent: 'DeliveryNotes', nome: 'Entrega (saída)', sinal: -1, mkt: true },
+      { ent: 'Invoices', nome: 'NF de saída', sinal: -1, mkt: true },
+      { ent: 'Returns', nome: 'Devolução de cliente', sinal: +1, mkt: true },
+      { ent: 'CreditNotes', nome: 'Nota de crédito (devolução)', sinal: +1, mkt: true },
+      { ent: 'InventoryGenEntries', nome: 'Entrada de estoque (manual)', sinal: +1, mkt: false },
+      { ent: 'InventoryGenExits', nome: 'Saída de estoque (manual)', sinal: -1, mkt: false },
+      { ent: 'StockTransfers', nome: 'Transferência entre armazéns', sinal: 0, mkt: false, linhas: 'StockTransferLines' },
+    ];
+    const movimentos: any[] = [];
+    const erros: string[] = [];
+    const resumo: any[] = [];
+    for (const t of tipos) {
+      const lp = (t as any).linhas || 'DocumentLines';
+      const sel = t.mkt
+        ? `DocEntry,DocNum,DocDate,CardCode,CardName,SequenceSerial,SeriesString,Cancelled,CancelStatus,${lp}`
+        : t.ent === 'StockTransfers'
+          ? `DocEntry,DocNum,DocDate,CardCode,CardName,FromWarehouse,ToWarehouse,${lp}`
+          : `DocEntry,DocNum,DocDate,${lp}`;
+      let docs: any[] = [];
+      let ok = false;
+      for (const q of ["'", '']) {
+        try {
+          docs = await this.getAllPages('/' + t.ent, { $select: sel, $filter: `DocDate ge ${q}${desde}${q}`, $orderby: 'DocEntry asc' });
+          ok = true;
+          break;
+        } catch (e: any) {
+          if (q === '') erros.push(`${t.ent}: ${e?.response?.data?.error?.message?.value || e?.message}`);
+        }
+      }
+      if (!ok) continue;
+      const candidatos = docs.filter((d) => (d[lp] || []).some((l: any) => itens.includes(l.ItemCode)));
+      resumo.push({ tipo: t.ent, documentos_periodo: docs.length, com_o_item: candidatos.length });
+      for (const d of candidatos) {
+        let full: any;
+        try { full = (await this.axios.get(`/${t.ent}(${d.DocEntry})`)).data; }
+        catch (e: any) { erros.push(`${t.ent}(${d.DocEntry}): ${e?.message}`); continue; }
+        const ehCancelamento = full.CancelStatus === 'csCancellation';
+        for (const l of full[lp] || []) {
+          for (const b of l.BatchNumbers || []) {
+            if (String(b.BatchNumber || '').trim().toUpperCase() !== alvo) continue;
+            movimentos.push({
+              data: (full.DocDate || '').slice(0, 10),
+              tipo: t.nome + (ehCancelamento ? ' — CANCELAMENTO' : ''),
+              entidade: t.ent,
+              docNum: full.DocNum,
+              docEntry: full.DocEntry,
+              nf: full.SequenceSerial || null,
+              serie: full.SeriesString || null,
+              parceiro: full.CardName || null,
+              cardCode: full.CardCode || null,
+              item: l.ItemCode,
+              armazem: l.WarehouseCode || null,
+              armazemOrigem: l.FromWarehouseCode || full.FromWarehouse || null,
+              qtd: Number(b.Quantity) || 0,
+              sinal: ehCancelamento ? -t.sinal : t.sinal,
+              cancelado: full.Cancelled === 'tYES',
+              comentario: full.Comments || null,
+            });
+          }
+        }
+      }
+    }
+    movimentos.sort((a, b) => (a.data || '').localeCompare(b.data || '') || (a.docEntry - b.docEntry));
+    return { lote: alvo, desde, cadastro, resumo, movimentos, erros };
+  }
+
   /** [LEITURA] NF de entrada completa (linhas + BatchNumbers) pelo DocEntry. */
   async getNotaEntradaFull(docEntry: number | string): Promise<any> {
     await this.ensureSession();
