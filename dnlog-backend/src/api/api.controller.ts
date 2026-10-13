@@ -131,6 +131,15 @@ export class ApiController {
     return { ...hist, saldo_atual: saldo, oes_dnlog: oes };
   }
 
+  // DIAG TEMPORÁRIO (read-only): contagem/paginação + um documento pelo DocNum.
+  @Public()
+  @Get('diag-doc')
+  async diagDoc(@Query('t') t: string, @Query('ent') ent: string, @Query('docnum') docnum: string, @Query('desde') desde: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    if (!/^[A-Za-z]+$/.test(ent || '')) throw new HttpException('ent inválido', HttpStatus.BAD_REQUEST);
+    return this.sap.diagDocumento(ent, Number(docnum), desde || '2026-07-26');
+  }
+
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
     return true;

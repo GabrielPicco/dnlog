@@ -761,6 +761,39 @@ export class SapClientService implements OnModuleDestroy {
     return { lote: alvo, desde, cadastro, resumo, movimentos, erros };
   }
 
+  /** [DIAG/LEITURA] Contagem de um tipo de documento no período + um documento pelo DocNum (linhas e lotes). */
+  async diagDocumento(ent: string, docNum: number, desde: string): Promise<any> {
+    await this.ensureSession();
+    const out: any = {};
+    try {
+      const c = await this.axios.get(`/${ent}/$count`, { params: { $filter: `DocDate ge '${desde}'` } });
+      out.contagem_periodo = c.data;
+    } catch (e: any) { out.contagem_erro = e?.response?.data?.error?.message?.value || e?.message; }
+    try {
+      const l = await this.axios.get(`/${ent}`, { params: { $filter: `DocNum eq ${Number(docNum)}`, $select: 'DocEntry,DocNum,DocDate,Series,SequenceSerial,CardName,Cancelled,CancelStatus' } });
+      out.documentos = l.data?.value || [];
+      out.detalhe = [];
+      for (const d of out.documentos) {
+        const f = (await this.axios.get(`/${ent}(${d.DocEntry})`)).data;
+        out.detalhe.push({
+          docEntry: f.DocEntry, docNum: f.DocNum, serie_doc: f.Series, nf: f.SequenceSerial, data: f.DocDate, cliente: f.CardName,
+          linhas: (f.DocumentLines || []).map((x: any) => ({ item: x.ItemCode, qtd: x.Quantity, armazem: x.WarehouseCode, lotes: (x.BatchNumbers || []).map((b: any) => `${b.BatchNumber}:${b.Quantity}`) })),
+        });
+      }
+    } catch (e: any) { out.doc_erro = e?.response?.data?.error?.message?.value || e?.message; }
+    // A paginação: quantos vêm por getAllPages com o mesmo filtro?
+    try {
+      const todos = await this.getAllPages(`/${ent}`, { $select: 'DocEntry,DocNum', $filter: `DocDate ge '${desde}'`, $orderby: 'DocEntry asc' });
+      out.getAllPages_qtd = todos.length;
+      out.tem_docnum = todos.some((x: any) => Number(x.DocNum) === Number(docNum));
+    } catch (e: any) { out.pag_erro = e?.message; }
+    try {
+      const comLinhas = await this.getAllPages(`/${ent}`, { $select: 'DocEntry,DocNum,DocumentLines', $filter: `DocDate ge '${desde}'`, $orderby: 'DocEntry asc' });
+      out.getAllPages_com_linhas_qtd = comLinhas.length;
+    } catch (e: any) { out.pag2_erro = e?.message; }
+    return out;
+  }
+
   /** [LEITURA] NF de entrada completa (linhas + BatchNumbers) pelo DocEntry. */
   async getNotaEntradaFull(docEntry: number | string): Promise<any> {
     await this.ensureSession();
