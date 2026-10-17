@@ -46,12 +46,19 @@ function construirItemInfo(itens: any[], grupos: any[]): ItemInfo {
  */
 function resumirLinhas(p: any, itemInfo: ItemInfo) {
   const linhas: any[] = Array.isArray(p.DocumentLines) ? p.DocumentLines : [];
+  // Pedido CANCELADO no SAP: nada foi entregue (o SAP B1 só permite cancelar um
+  // pedido sem documentos de entrega/fatura) e não há saldo. Sem esta regra, o
+  // "restante" zerado do cancelado fazia o pedido parecer 100% ENTREGUE.
+  const cancelado = p.Cancelled === 'tYES';
+  const saldoDe = (l: any) => (cancelado ? 0 : saldoLinha(l));
+  const entregueDe = (l: any) => (cancelado ? 0 : (Number(l.Quantity) || 0) - saldoLinha(l));
   // Projeto (usado como SAFRA) — vem por linha (ProjectCode). Guarda os distintos.
   const projetos = Array.from(new Set(linhas.map((l: any) => l.ProjectCode).filter(Boolean)));
   return {
     qtd_total_bb: linhas.reduce((a: number, l: any) => a + (Number(l.Quantity) || 0), 0),
-    qtd_saldo_bb: linhas.reduce((a: number, l: any) => a + saldoLinha(l), 0),
-    saldo_aberto: linhas.reduce((a: number, l: any) => a + saldoLinha(l) * (Number(l.Price) || 0), 0),
+    qtd_saldo_bb: linhas.reduce((a: number, l: any) => a + saldoDe(l), 0),
+    qtd_entregue_bb: linhas.reduce((a: number, l: any) => a + entregueDe(l), 0),
+    saldo_aberto: linhas.reduce((a: number, l: any) => a + saldoDe(l) * (Number(l.Price) || 0), 0),
     projeto: projetos.join(', '),
     itens: linhas.map((l: any) => {
       const info = itemInfo[l.ItemCode] || { grupo_codigo: null, grupo_nome: '' };
@@ -63,8 +70,8 @@ function resumirLinhas(p: any, itemInfo: ItemInfo) {
         grupo_nome: info.grupo_nome,
         embalagem: l.MeasureUnit || l.UoMCode || '',
         qtd_bb: Number(l.Quantity) || 0,
-        qtd_entregue: (Number(l.Quantity) || 0) - saldoLinha(l),
-        saldo: saldoLinha(l),
+        qtd_entregue: entregueDe(l),
+        saldo: saldoDe(l),
         valor_unitario: Number(l.Price) || 0,
         armazem: l.WarehouseCode,
         projeto: l.ProjectCode || '',
@@ -105,33 +112,21 @@ export class ApiController {
     };
   }
 
-  // DIAG TEMPORÁRIO (read-only): como o SAP devolve pedidos cancelados/encerrados.
+  // DIAG TEMPORÁRIO (read-only): confere como o app recebe pedidos cancelados.
   @Public()
   @Get('diag-ped-cancel')
   async diagPedCancel(@Query('t') t: string) {
     if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const peds = (await this.sap.getPedidosAbertos()) as any[];
-    const grupos: Record<string, number> = {};
-    for (const p of peds) { const k = `${p.DocumentStatus}|Cancelled=${p.Cancelled}`; grupos[k] = (grupos[k] || 0) + 1; }
-    const resumoLinhas = (p: any) => (p.DocumentLines || []).map((l: any) => ({ item: l.ItemCode, qtd: l.Quantity, aberto: l.OpenQuantity, restante: l.RemainingOpenQuantity, status: l.LineStatus }));
-    const cancelados = peds.filter((p) => p.Cancelled === 'tYES');
-    const fechados = peds.filter((p) => p.DocumentStatus === 'bost_Close' && p.Cancelled !== 'tYES');
-    const camposQtd = async (p: any) => {
-      if (!p) return null;
-      const f = await this.sap.getOrderFull(p.DocEntry);
-      const l = (f.DocumentLines || [])[0] || {};
-      const campos: Record<string, any> = {};
-      for (const [k, v] of Object.entries(l)) if (/quant|deliv|open|status|close/i.test(k) && typeof v !== 'object') campos[k] = v;
-      return { docNum: f.DocNum, status: f.DocumentStatus, cancelado: f.Cancelled, cancelStatus: f.CancelStatus, campos_linha: campos };
-    };
+    const peds = (await this.getPedidos()) as any[];
+    const canc = peds.filter((p) => p.cancelado);
+    const pv39 = peds.find((p) => p.numero === 'PV-39');
     return {
       total: peds.length,
-      grupos,
-      cancelados: cancelados.slice(0, 15).map((p) => ({ docNum: p.DocNum, cliente: p.CardName, data: p.DocDate, linhas: resumoLinhas(p) })),
-      qtd_cancelados: cancelados.length,
-      fechados_amostra: fechados.slice(0, 5).map((p) => ({ docNum: p.DocNum, cliente: p.CardName, linhas: resumoLinhas(p) })),
-      campos_cancelado: await camposQtd(cancelados[0]),
-      campos_fechado: await camposQtd(fechados[0]),
+      cancelados: canc.length,
+      cancelados_com_entregue: canc.filter((p) => (p.itens || []).some((i: any) => i.qtd_entregue > 0)).length,
+      cancelados_com_saldo: canc.filter((p) => p.qtd_saldo_bb > 0 || p.tem_saldo).length,
+      pv39: pv39 && { numero: pv39.numero, cliente: pv39.cliente, status_sap: pv39.status_sap, cancelado: pv39.cancelado, tem_saldo: pv39.tem_saldo,
+        itens: (pv39.itens || []).map((i: any) => ({ codigo: i.codigo, qtd: i.qtd_bb, entregue: i.qtd_entregue, saldo: i.saldo })) },
     };
   }
 

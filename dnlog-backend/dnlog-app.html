@@ -1823,6 +1823,8 @@ const App = ({ usuario, onLogout }) => {
       return 0;
     };
     return DADOS_PEDIDOS.map(p => {
+      // Cancelado no SAP: sem saldo (não vai p/ OE) e sem entrega pelo SAP.
+      const cancelado = p.cancelado || p.status_sap === 'cancelado';
       const itens = p.itens.map(it => {
         // BAIXA (faturado) das OEs FATURADAS do DNLog (fonte no banco).
         const baixaFaturada = state.ordens
@@ -1844,12 +1846,12 @@ const App = ({ usuario, onLogout }) => {
         return {
           ...it,
           qtd_entregue_total: qtdEntregueTotal,  // útil pra exibição
-          saldo: Math.max(0, saldoOriginal - consumido)
+          saldo: cancelado ? 0 : Math.max(0, saldoOriginal - consumido)
         };
       });
       const qtdSaldoBB = itens.reduce((a, i) => a + i.saldo, 0);
       const valorAberto = itens.reduce((a, i) => a + (i.saldo * i.valor_unitario), 0);
-      return { ...p, itens, qtd_saldo_bb: qtdSaldoBB, saldo_aberto: valorAberto, tem_saldo: qtdSaldoBB > 0 };
+      return { ...p, itens, qtd_saldo_bb: qtdSaldoBB, saldo_aberto: valorAberto, tem_saldo: !cancelado && qtdSaldoBB > 0 };
     });
   }, [state.ordens, editingOE]);
 
@@ -4314,7 +4316,8 @@ const PedidosCompra = ({ ctx }) => {
               const linhas = ['Pedido;Fornecedor;Data emissao;Data entrega;Item;Descricao;Embalagem;Qtd total;Qtd entregue;Saldo;Valor unitario;Saldo valor;Status pedido'];
               dados.forEach(p => {
                 (p.itens || []).forEach(it => {
-                  const status = p.tem_saldo ? 'ABERTO' : 'ATENDIDO';
+                  // Status do SAP: cancelado não é "atendido" (antes saía ATENDIDO por não ter saldo).
+                  const status = (p.cancelado || p.status_sap === 'cancelado') ? 'CANCELADO' : (p.tem_saldo ? 'ABERTO' : 'ATENDIDO');
                   const linha = [
                     p.numero, p.fornecedor || '',
                     p.data_emissao || '', p.data_entrega || '',
@@ -4549,7 +4552,8 @@ const Pedidos = ({ ctx }) => {
               const linhas = ['Pedido;Cliente;Vendedor;Data emissao;Data entrega;Item;Descricao;Cultivar;Peneira;Embalagem;Qtd total;Qtd entregue;Saldo;Valor unitario;Saldo valor;Status pedido'];
               ctx.pedidos.forEach(p => {
                 p.itens.forEach(it => {
-                  const status = p.tem_saldo ? 'ABERTO' : 'ATENDIDO';
+                  // Status do SAP: cancelado não é "atendido" (antes saía ATENDIDO por não ter saldo).
+                  const status = (p.cancelado || p.status_sap === 'cancelado') ? 'CANCELADO' : (p.tem_saldo ? 'ABERTO' : 'ATENDIDO');
                   const linha = [
                     p.numero, p.cliente, p.vendedor || '',
                     p.data_emissao || '', p.data_entrega || '',
@@ -12478,7 +12482,9 @@ const DetalhePedido = ({ ctx }) => {
         <div style={{ padding: '14px 18px', display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'center' }}>
           <div>
             <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700, marginBottom: 4 }}>Status</div>
-            {pedido.tem_saldo
+            {(pedido.cancelado || pedido.status_sap === 'cancelado')
+              ? <span className="chip chip-red" style={{ fontSize: 12 }}><i className="ti ti-ban"></i> Cancelado no SAP</span>
+              : pedido.tem_saldo
               ? <span className="chip chip-green" style={{ fontSize: 12 }}><i className="ti ti-circle-check"></i> Aberto · {pedido.qtd_saldo_bb} un. pendente{pedido.qtd_saldo_bb !== 1 ? 's' : ''}</span>
               : <span className="chip chip-neutral" style={{ fontSize: 12 }}><i className="ti ti-check"></i> Atendido (saldo zerado)</span>
             }

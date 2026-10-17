@@ -242,7 +242,7 @@ export class SapClientService implements OnModuleDestroy {
     try {
       const [orders, itens, grupos] = await Promise.all([
         this.getAllPages('/Orders', {
-          $select: 'DocEntry,DocumentStatus,DocumentLines',
+          $select: 'DocEntry,DocumentStatus,Cancelled,DocumentLines',
           $filter: `DocDueDate ge '${anoInicio}'`,
         }),
         this.getItems().catch(() => []),
@@ -263,6 +263,8 @@ export class SapClientService implements OnModuleDestroy {
       let naoEnt = 0;
       const porGrupo: Record<string, { grupo_codigo: any; grupo_nome: string; entregues: number; nao_entregues: number }> = {};
       for (const o of orders || []) {
+        // Cancelado não foi entregue (nem fica pendente): fora do gráfico.
+        if (o.Cancelled === 'tYES') continue;
         const fechado = o.DocumentStatus === 'bost_Close';
         const linhas = Array.isArray(o.DocumentLines) ? o.DocumentLines : [];
         for (const l of linhas) {
