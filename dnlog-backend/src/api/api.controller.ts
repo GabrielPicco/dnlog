@@ -112,37 +112,6 @@ export class ApiController {
     };
   }
 
-  // DIAG TEMPORÁRIO (read-only): histórico de movimentações de lote(s) — ?lotes=A,B
-  @Public()
-  @Get('diag-mov-lote')
-  async diagMovLote(@Query('t') t: string, @Query('lotes') lotes: string) {
-    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const norm = (x: any) => String(x || '').trim().toUpperCase();
-    const lista = String(lotes || '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 10);
-    const [saldoLinhas, oesAll] = await Promise.all([
-      this.sap.getSaldoPorLote() as Promise<any[]>,
-      this.oeService.findAll() as Promise<any[]>,
-    ]);
-    const out: any[] = [];
-    for (const lote of lista) { // um por vez: não sobrecarrega o SAP
-      const alvo = norm(lote);
-      const hist = await this.sap.getMovimentosLote(lote);
-      const saldo = (saldoLinhas || []).filter((r: any) => norm(r.Lote) === alvo)
-        .map((r: any) => ({ item: r.CodigoItem, armazem: r.CodigoDeposito, armazemNome: r.NomeDeposito, saldo: r.SaldoAtual, validade: r.ExpDate }));
-      const oes: any[] = [];
-      for (const oe of oesAll || []) {
-        const paradas = Array.isArray(oe.paradas) ? oe.paradas : [{ pedido_numero: oe.pedido_numero, cliente: oe.cliente, itens: oe.itens || [] }];
-        for (const p of paradas) for (const it of p.itens || []) for (const la of it.lotes_alocados || []) {
-          if (norm(la.lote_codigo) !== alvo) continue;
-          oes.push({ oe: oe.numero, status: oe.status, faturada: !!oe.faturada, nf: oe.nf_numero || null, criada: oe.criado_em, faturada_em: oe.faturada_em || null,
-            cliente: p.cliente || oe.cliente, pedido: it.pedido_numero || p.pedido_numero, item: it.codigo, qtd: la.qtd_bb, modalidade: p.modalidade || oe.modalidade });
-        }
-      }
-      out.push({ ...hist, saldo_atual: saldo, oes_dnlog: oes });
-    }
-    return out;
-  }
-
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
     return true;
