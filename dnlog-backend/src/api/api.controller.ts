@@ -112,21 +112,27 @@ export class ApiController {
     };
   }
 
-  // DIAG TEMPORÁRIO (read-only): confere como o app recebe pedidos cancelados.
+  // DIAG TEMPORÁRIO (read-only): pedidos ENCERRADOS (não cancelados) com valor ainda em aberto.
   @Public()
-  @Get('diag-ped-cancel')
-  async diagPedCancel(@Query('t') t: string) {
+  @Get('diag-ped-encerrado')
+  async diagPedEncerrado(@Query('t') t: string) {
     if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const peds = (await this.getPedidos()) as any[];
-    const canc = peds.filter((p) => p.cancelado);
-    const pv39 = peds.find((p) => p.numero === 'PV-39');
+    const peds = (await this.sap.getPedidosAbertos()) as any[];
+    const fechados = peds.filter((p) => p.DocumentStatus === 'bost_Close' && p.Cancelled !== 'tYES');
+    const comAberto = fechados.map((p) => {
+      const linhas = (p.DocumentLines || []).map((l: any) => {
+        const total = Number(l.LineTotal) || (Number(l.Price) || 0) * (Number(l.Quantity) || 0);
+        const aberto = Number(l.OpenAmount) || 0;
+        const fracao = total > 0 ? Math.min(1, aberto / total) : 0;
+        return { item: l.ItemCode, qtd: l.Quantity, valor_linha: total, valor_aberto: aberto, qtd_nao_entregue_estimada: Math.round((Number(l.Quantity) || 0) * fracao) };
+      });
+      return { numero: `PV-${p.DocNum}`, cliente: p.CardName, linhas: linhas.filter((x: any) => x.valor_aberto > 0.005) };
+    }).filter((x) => x.linhas.length);
     return {
-      total: peds.length,
-      cancelados: canc.length,
-      cancelados_com_entregue: canc.filter((p) => (p.itens || []).some((i: any) => i.qtd_entregue > 0)).length,
-      cancelados_com_saldo: canc.filter((p) => p.qtd_saldo_bb > 0 || p.tem_saldo).length,
-      pv39: pv39 && { numero: pv39.numero, cliente: pv39.cliente, status_sap: pv39.status_sap, cancelado: pv39.cancelado, tem_saldo: pv39.tem_saldo,
-        itens: (pv39.itens || []).map((i: any) => ({ codigo: i.codigo, qtd: i.qtd_bb, entregue: i.qtd_entregue, saldo: i.saldo })) },
+      fechados: fechados.length,
+      fechados_com_valor_em_aberto: comAberto.length,
+      campo_open_amount_presente: fechados.some((p) => (p.DocumentLines || []).some((l: any) => 'OpenAmount' in l)),
+      amostra: comAberto.slice(0, 12),
     };
   }
 
