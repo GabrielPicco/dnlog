@@ -105,6 +105,36 @@ export class ApiController {
     };
   }
 
+  // DIAG TEMPORÁRIO (read-only): como o SAP devolve pedidos cancelados/encerrados.
+  @Public()
+  @Get('diag-ped-cancel')
+  async diagPedCancel(@Query('t') t: string) {
+    if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
+    const peds = (await this.sap.getPedidosAbertos()) as any[];
+    const grupos: Record<string, number> = {};
+    for (const p of peds) { const k = `${p.DocumentStatus}|Cancelled=${p.Cancelled}`; grupos[k] = (grupos[k] || 0) + 1; }
+    const resumoLinhas = (p: any) => (p.DocumentLines || []).map((l: any) => ({ item: l.ItemCode, qtd: l.Quantity, aberto: l.OpenQuantity, restante: l.RemainingOpenQuantity, status: l.LineStatus }));
+    const cancelados = peds.filter((p) => p.Cancelled === 'tYES');
+    const fechados = peds.filter((p) => p.DocumentStatus === 'bost_Close' && p.Cancelled !== 'tYES');
+    const camposQtd = async (p: any) => {
+      if (!p) return null;
+      const f = await this.sap.getOrderFull(p.DocEntry);
+      const l = (f.DocumentLines || [])[0] || {};
+      const campos: Record<string, any> = {};
+      for (const [k, v] of Object.entries(l)) if (/quant|deliv|open|status|close/i.test(k) && typeof v !== 'object') campos[k] = v;
+      return { docNum: f.DocNum, status: f.DocumentStatus, cancelado: f.Cancelled, cancelStatus: f.CancelStatus, campos_linha: campos };
+    };
+    return {
+      total: peds.length,
+      grupos,
+      cancelados: cancelados.slice(0, 15).map((p) => ({ docNum: p.DocNum, cliente: p.CardName, data: p.DocDate, linhas: resumoLinhas(p) })),
+      qtd_cancelados: cancelados.length,
+      fechados_amostra: fechados.slice(0, 5).map((p) => ({ docNum: p.DocNum, cliente: p.CardName, linhas: resumoLinhas(p) })),
+      campos_cancelado: await camposQtd(cancelados[0]),
+      campos_fechado: await camposQtd(fechados[0]),
+    };
+  }
+
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
   private get somenteLeitura(): boolean {
     return true;
