@@ -75,6 +75,20 @@ export class QcdnService {
     }
   }
 
+  /** Qualidade e laudos de cada lote (aprovação, IQDN, análises, canteiros) — rastreio de lote. */
+  async qualidadeLotes(lotes: string[]) {
+    const http = this.client();
+    if (!http) return { ok: false, configurado: false, lotes: [], erro: 'Integração QCDN não configurada.' };
+    try {
+      const resp = await http.get('/api/integ/lotes-qualidade', { params: { lotes: lotes.join(',') } });
+      return { ok: true, configurado: true, ...resp.data };
+    } catch (e: any) {
+      const msg = e?.response?.data?.error || e?.message || 'erro';
+      this.logger.warn(`qualidadeLotes falhou: ${msg}`);
+      return { ok: false, configurado: true, lotes: [], erro: msg };
+    }
+  }
+
   /** Registra uma baixa (parcial) contra uma reserva do QCDN. Idempotente por OE+lote. */
   async darBaixa(payload: {
     reservaId: string;

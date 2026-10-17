@@ -12,6 +12,7 @@ import { LogModule } from './log/log.module';
 import { ConfigAppModule } from './config/config.module';
 import { MotoristaModule } from './motorista/motorista.module';
 import { QcdnModule } from './qcdn/qcdn.module';
+import { RastreioModule } from './rastreio/rastreio.module';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 
@@ -35,6 +36,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
     ConfigAppModule,
     MotoristaModule,
     QcdnModule,
+    RastreioModule,
     AuthModule,
     ApiModule,
   ],
