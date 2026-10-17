@@ -112,28 +112,45 @@ export class ApiController {
     };
   }
 
-  // DIAG TEMPORÁRIO (read-only): pedidos ENCERRADOS (não cancelados) com valor ainda em aberto.
+  // DIAG TEMPORÁRIO (read-only): cruza pedidos encerrados com as NFs de saída que apontam para eles.
   @Public()
   @Get('diag-ped-encerrado')
   async diagPedEncerrado(@Query('t') t: string) {
     if (t !== 'DBG-7k2') throw new HttpException('nope', HttpStatus.FORBIDDEN);
-    const peds = (await this.sap.getPedidosAbertos()) as any[];
+    const [peds, nfs] = await Promise.all([
+      this.sap.getPedidosAbertos() as Promise<any[]>,
+      this.sap.getFaturamento('2025-07-01') as Promise<any[]>,
+    ]);
+    // Quantidade faturada por linha de pedido (BaseType 17 = pedido de venda), NFs não canceladas.
+    const fat: Record<string, number> = {};
+    let linhasComBase = 0, linhasNf = 0;
+    const amostraCampos = (nfs[0] && nfs[0].DocumentLines && nfs[0].DocumentLines[0]) ? Object.keys(nfs[0].DocumentLines[0]).filter((k) => /base/i.test(k)) : [];
+    for (const n of nfs || []) {
+      const canc = n.Cancelled === 'tYES' || (n.CancelStatus && n.CancelStatus !== 'csNo');
+      for (const l of n.DocumentLines || []) {
+        linhasNf++;
+        if (Number(l.BaseType) === 17 && l.BaseEntry != null) {
+          linhasComBase++;
+          if (canc) continue;
+          const k = `${l.BaseEntry}|${l.BaseLine}`;
+          fat[k] = (fat[k] || 0) + (Number(l.Quantity) || 0);
+        }
+      }
+    }
     const fechados = peds.filter((p) => p.DocumentStatus === 'bost_Close' && p.Cancelled !== 'tYES');
-    const comAberto = fechados.map((p) => {
-      const linhas = (p.DocumentLines || []).map((l: any) => {
-        const total = Number(l.LineTotal) || (Number(l.Price) || 0) * (Number(l.Quantity) || 0);
-        const aberto = Number(l.OpenAmount) || 0;
-        const fracao = total > 0 ? Math.min(1, aberto / total) : 0;
-        return { item: l.ItemCode, qtd: l.Quantity, valor_linha: total, valor_aberto: aberto, qtd_nao_entregue_estimada: Math.round((Number(l.Quantity) || 0) * fracao) };
-      });
-      return { numero: `PV-${p.DocNum}`, cliente: p.CardName, linhas: linhas.filter((x: any) => x.valor_aberto > 0.005) };
-    }).filter((x) => x.linhas.length);
-    return {
-      fechados: fechados.length,
-      fechados_com_valor_em_aberto: comAberto.length,
-      campo_open_amount_presente: fechados.some((p) => (p.DocumentLines || []).some((l: any) => 'OpenAmount' in l)),
-      amostra: comAberto.slice(0, 12),
-    };
+    const linhaInfo = (p: any) => (p.DocumentLines || []).map((l: any) => ({ qtd: Number(l.Quantity) || 0, faturado: fat[`${p.DocEntry}|${l.LineNum}`] || 0 }));
+    let semNf = 0, parcial = 0, integral = 0;
+    const exemplos: any[] = [];
+    for (const p of fechados) {
+      const ls = linhaInfo(p);
+      const q = ls.reduce((a: number, x: any) => a + x.qtd, 0), f = ls.reduce((a: number, x: any) => a + x.faturado, 0);
+      if (f <= 0) semNf++; else if (f + 0.001 < q) parcial++; else integral++;
+      if (exemplos.length < 15) exemplos.push({ numero: `PV-${p.DocNum}`, cliente: p.CardName, data: p.DocDate, qtd_pedido: q, qtd_faturada_em_nf: f });
+    }
+    const ref = (n: number) => { const p = peds.find((x) => Number(x.DocNum) === n); if (!p) return null; const ls = linhaInfo(p); return { numero: `PV-${n}`, status: p.DocumentStatus, cancelado: p.Cancelled, qtd: ls.reduce((a: number, x: any) => a + x.qtd, 0), faturado: ls.reduce((a: number, x: any) => a + x.faturado, 0), open_amount: (p.DocumentLines || []).reduce((a: number, l: any) => a + (Number(l.OpenAmount) || 0), 0) }; };
+    return { nfs: nfs.length, linhas_nf: linhasNf, linhas_nf_com_pedido_base: linhasComBase, campos_base_na_linha: amostraCampos,
+      fechados: fechados.length, fechados_sem_nf: semNf, fechados_parciais: parcial, fechados_integrais: integral,
+      referencias: [ref(96), ref(68), ref(69), ref(162), ref(217)], exemplos };
   }
 
   /** SEMPRE true: o DNLog é somente leitura no SAP por construção (hardcoded). */
