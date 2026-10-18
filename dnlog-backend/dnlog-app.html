@@ -1371,6 +1371,16 @@ const DNLOG_API = {
     return r.json();
   },
   // Reservas em aberto POR LOTE, de todos os clientes (telas de estoque).
+  // Rastreio de lote: SAP (movimentos/saldo) + OEs + QCDN (reservas/laudos).
+  async rastreioLote(lotes) {
+    const r = await fetch(`${DNLOG_API_BASE}/rastreio-lote?lotes=${encodeURIComponent(lotes.join(','))}`, { headers: dnlogAuthHeaders() });
+    if (!r.ok) {
+      let msg = 'GET /rastreio-lote ' + r.status;
+      try { const j = await r.json(); if (j && j.message) msg = j.message; } catch (e) {}
+      throw new Error(msg);
+    }
+    return r.json();
+  },
   async qcdnReservasLotes() {
     const r = await fetch(`${DNLOG_API_BASE}/qcdn/reservas-lotes`, { headers: dnlogAuthHeaders() });
     if (!r.ok) throw new Error('GET /qcdn/reservas-lotes ' + r.status);
@@ -3091,6 +3101,289 @@ const PedidosPagamentos = ({ ctx }) => {
   );
 };
 
+// ============================================================
+// RASTREIO DE LOTE — SAP (movimentações/saldo) + OEs do DNLog + QCDN
+// (qualidade, laudos e reservas), com as divergências apontadas.
+// ============================================================
+const APROV_META = {
+  APROVADO: { cor: 'var(--green)', bg: 'var(--green-bg)', icon: 'ti-circle-check', label: 'Aprovado' },
+  REPROVADO: { cor: 'var(--red)', bg: 'var(--red-bg)', icon: 'ti-circle-x', label: 'Reprovado' },
+  PENDENTE: { cor: 'var(--orange)', bg: 'var(--orange-bg)', icon: 'ti-clock', label: 'Pendente' },
+};
+const ALERTA_META = {
+  erro: { cor: 'var(--red)', bg: 'var(--red-bg)', icon: 'ti-alert-octagon' },
+  aviso: { cor: 'var(--orange)', bg: 'var(--orange-bg)', icon: 'ti-alert-triangle' },
+  info: { cor: 'var(--text-muted)', bg: 'var(--bg-hover)', icon: 'ti-info-circle' },
+};
+const fmtPct = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
+
+const RastreioSecao = ({ titulo, icon, extra, children }) => (
+  <div style={{ marginTop: 14 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+      <i className={'ti ' + icon} style={{ color: 'var(--accent-light)' }}></i>
+      <strong style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{titulo}</strong>
+      {extra}
+    </div>
+    {children}
+  </div>
+);
+
+const RastreioLoteCard = ({ r }) => {
+  const multiItens = (r.cadastro || []).length > 1;
+  const q = r.qualidade;
+  const ap = q ? (APROV_META[q.statusAprovacao] || APROV_META.PENDENTE) : null;
+  const th = { fontSize: 10, whiteSpace: 'nowrap' };
+  return (
+    <div className="panel" style={{ marginBottom: 16, padding: '14px 16px' }}>
+      {/* Cabeçalho do lote */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0, flex: '1 1 320px' }}>
+          <div className="mono" style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent-light)' }}>{r.lote}</div>
+          {(r.cadastro || []).map(c => (
+            <div key={c.item} style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              <span className="mono">{c.item}</span> · {c.descricao}{c.entrada ? ` · entrada ${fmtDate(c.entrada)}` : ''}{c.validade ? ` · validade ${fmtDate(c.validade)}` : ''}
+            </div>
+          ))}
+          {!(r.cadastro || []).length && <div style={{ fontSize: 12, color: 'var(--red)' }}>Não encontrado no SAP</div>}
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Saldo no SAP</div>
+            <div className="mono" style={{ fontSize: 22, fontWeight: 800 }}>{fmtNum(r.saldoTotal)} <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}>un</span></div>
+            <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{(r.saldo || []).map(s => `${s.armazem} ${fmtNum(s.saldo)}`).join(' · ') || 'sem saldo'}</div>
+          </div>
+          {q && (
+            <div style={{ background: ap.bg, color: ap.cor, borderRadius: 8, padding: '6px 10px', textAlign: 'center' }}>
+              <div style={{ fontSize: 11, fontWeight: 800 }}><i className={'ti ' + ap.icon}></i> {ap.label}</div>
+              <div className="mono" style={{ fontSize: 15, fontWeight: 800 }}>IQDN {fmtPct(q.iqdn && q.iqdn.valor)}{q.iqdn && q.iqdn.banda ? ` · ${q.iqdn.banda}` : ''}</div>
+              {q.iqdn && q.iqdn.bandaTitulo && <div style={{ fontSize: 10 }}>{q.iqdn.bandaTitulo}</div>}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Divergências */}
+      {(r.alertas || []).length > 0 && (
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {r.alertas.map((a, i) => {
+            const m = ALERTA_META[a.nivel] || ALERTA_META.info;
+            return (
+              <div key={i} style={{ background: m.bg, color: m.cor, borderRadius: 6, padding: '6px 10px', fontSize: 12, fontWeight: 600, display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                <i className={'ti ' + m.icon} style={{ marginTop: 2 }}></i><span>{a.texto}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Movimentações */}
+      <RastreioSecao titulo="Movimentações no SAP" icon="ti-arrows-exchange"
+        extra={<span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{(r.movimentos || []).length} documento(s)</span>}>
+        {(r.movimentos || []).length === 0 ? (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Nenhuma movimentação encontrada.</div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', fontSize: 12, minWidth: 760 }}>
+              <thead><tr>
+                <th style={th}>Data</th><th style={th}>Movimento</th><th style={th}>NF</th><th style={th}>Parceiro</th>
+                <th style={th}>Pedido</th><th style={th}>OE</th>{multiItens && <th style={th}>Item</th>}
+                <th className="num" style={th}>Qtd</th><th className="num" style={th}>Saldo</th>
+              </tr></thead>
+              <tbody>
+                {r.movimentos.map((m, i) => (
+                  <tr key={i} style={{ opacity: m.cancelado || String(m.tipo).includes('CANCELAMENTO') ? 0.55 : 1 }}>
+                    <td className="mono" style={{ whiteSpace: 'nowrap' }}>{fmtDate(m.data)}</td>
+                    <td style={{ textDecoration: m.cancelado ? 'line-through' : 'none' }}>{m.tipo}</td>
+                    <td className="mono" title={`Doc SAP ${m.docNum}`}>{m.nf != null ? m.nf : `doc ${m.docNum}`}</td>
+                    <td style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.parceiro}>{m.parceiro || '—'}</td>
+                    <td className="mono cell-muted">{m.pedido || '—'}</td>
+                    <td className="mono" style={{ color: m.oe ? 'var(--accent-light)' : 'var(--text-dim)' }}>{m.oe || '—'}</td>
+                    {multiItens && <td className="mono cell-muted">{m.item}</td>}
+                    <td className="num mono" style={{ fontWeight: 800, color: m.delta > 0 ? 'var(--green)' : m.delta < 0 ? 'var(--red)' : 'var(--text)' }}>{m.delta > 0 ? '+' : ''}{fmtNum(m.delta)}</td>
+                    <td className="num mono">{fmtNum(m.saldoApos)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6 }}>
+          {(r.conferencia || []).map(c => {
+            const ok = Math.abs(c.diferenca) < 0.001;
+            return (
+              <div key={c.item} style={{ fontSize: 11, color: ok ? 'var(--text-muted)' : 'var(--red)', fontWeight: ok ? 500 : 700 }}>
+                {multiItens && <span className="mono">{c.item}: </span>}
+                Entrou {fmtNum(c.entradas)} · Saiu {fmtNum(c.saidas)} · Calculado {fmtNum(c.calculado)} · SAP {fmtNum(c.saldoSap)} {ok ? '✓' : `⚠ dif. ${c.diferenca > 0 ? '+' : ''}${fmtNum(c.diferenca)}`}
+              </div>
+            );
+          })}
+        </div>
+      </RastreioSecao>
+
+      {/* Qualidade / laudos (QCDN) */}
+      <RastreioSecao titulo="Qualidade e laudos (QCDN)" icon="ti-microscope"
+        extra={q && (
+          <span style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+            <a href={q.laudoUrl} target="_blank" rel="noopener noreferrer" className="btn btn-primary" style={{ padding: '3px 10px', fontSize: 11, textDecoration: 'none' }}>
+              <i className="ti ti-file-certificate"></i> Abrir laudo no QCDN
+            </a>
+            <a href={q.loteUrl} target="_blank" rel="noopener noreferrer" className="btn btn-ghost" style={{ padding: '3px 10px', fontSize: 11, textDecoration: 'none' }}>
+              <i className="ti ti-external-link"></i> Lote no QCDN
+            </a>
+          </span>
+        )}>
+        {!q ? (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Lote não cadastrado no QCDN.</div>
+        ) : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8, fontSize: 12 }}>
+              {[
+                ['Cultivar', q.cultivar], ['Peneira', q.peneira], ['Safra', q.safra], ['Categoria', q.categoria],
+                ['Produção', q.dataProducao ? fmtDate(q.dataProducao) : null], ['Big bags', q.quantidadeBigBags],
+                ['Emergência', q.emergencia != null ? fmtPct(q.emergencia) + '%' : null], ['Fornecedor', q.fornecedor],
+              ].map(([k, v]) => (
+                <div key={k}><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>{k}</div><div style={{ fontWeight: 600 }}>{v != null && v !== '' ? v : '—'}</div></div>
+              ))}
+            </div>
+            {q.statusAprovacao !== 'PENDENTE' && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                {ap.label}{q.aprovacaoEm ? ` em ${fmtDate(q.aprovacaoEm)}` : ''}{q.aprovacaoPor ? ` por ${q.aprovacaoPor}` : ''}{q.motivoReprovacao ? ` · motivo: ${q.motivoReprovacao}` : ''}
+              </div>
+            )}
+            {q.iqdn && q.iqdn.regra && <div style={{ fontSize: 11, color: 'var(--orange)', marginTop: 4 }}><i className="ti ti-info-circle"></i> {q.iqdn.regra}</div>}
+            {(q.analises || []).length > 0 && (
+              <div style={{ overflowX: 'auto', marginTop: 8 }}>
+                <table style={{ width: '100%', fontSize: 12, minWidth: 600 }}>
+                  <thead><tr>
+                    <th style={th}>Análise</th><th className="num" style={th}>Resultado</th><th style={th}>Situação</th>
+                    <th style={th}>Laboratório</th><th style={th}>Data</th><th style={th}>Laudo</th>
+                  </tr></thead>
+                  <tbody>
+                    {q.analises.map((a, i) => (
+                      <tr key={i} style={{ opacity: a.resultado === 'CANCELADA' ? 0.5 : 1 }}>
+                        <td>{a.rotulo}</td>
+                        <td className="num mono" style={{ fontWeight: 800 }}>{a.valor != null ? `${fmtPct(a.valor)}${a.unidade || ''}` : '—'}</td>
+                        <td style={{ fontSize: 11 }}>{a.resultado === 'RECEBIDA' ? 'Recebida' : a.resultado === 'PENDENTE' ? 'Pendente' : a.resultado === 'CANCELADA' ? 'Cancelada' : a.resultado}</td>
+                        <td className="cell-muted" style={{ fontSize: 11 }}>{a.laboratorio || '—'}</td>
+                        <td className="mono cell-muted" style={{ fontSize: 11 }}>{a.data ? fmtDate(a.data) : '—'}</td>
+                        <td>{a.fotoUrl
+                          ? <a href={a.fotoUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: 'var(--accent-light)' }}><i className="ti ti-photo"></i> ver foto</a>
+                          : <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>—</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </RastreioSecao>
+
+      {/* OEs e reservas lado a lado */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+        <RastreioSecao titulo="OEs no DNLog" icon="ti-truck-delivery">
+          {(r.oes || []).length === 0 ? <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Nenhuma OE com este lote.</div> : (
+            <table style={{ width: '100%', fontSize: 12 }}>
+              <thead><tr><th style={th}>OE</th><th style={th}>Cliente</th><th style={th}>Pedido</th><th className="num" style={th}>Qtd</th><th style={th}>Situação</th></tr></thead>
+              <tbody>
+                {r.oes.map((o, i) => (
+                  <tr key={i} style={{ opacity: o.status === 'CANCELADA' ? 0.5 : 1 }}>
+                    <td className="mono" style={{ color: 'var(--accent-light)', fontWeight: 700 }}>{o.oe}</td>
+                    <td style={{ maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.cliente}>{o.cliente || '—'}</td>
+                    <td className="mono cell-muted">{o.pedido || '—'}</td>
+                    <td className="num mono">{fmtNum(o.qtd)}</td>
+                    <td style={{ fontSize: 11 }}>{o.status === 'CANCELADA' ? 'Cancelada' : o.faturada ? `Faturada${o.nfs.length ? ' · NF ' + o.nfs.join(', ') : ''}` : o.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </RastreioSecao>
+        <RastreioSecao titulo="Reservas no QCDN" icon="ti-bookmark">
+          {(r.reservas || []).length === 0 ? <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Nenhuma reserva para este lote.</div> : (
+            <table style={{ width: '100%', fontSize: 12 }}>
+              <thead><tr><th style={th}>Cliente</th><th className="num" style={th}>Reservado</th><th className="num" style={th}>Entregue</th><th className="num" style={th}>Saldo</th></tr></thead>
+              <tbody>
+                {r.reservas.map((x, i) => (
+                  <tr key={i}>
+                    <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.clienteNome}>{x.clienteNome}</td>
+                    <td className="num mono">{fmtNum(x.reservado)}</td>
+                    <td className="num mono cell-muted">{fmtNum(x.entregue)}</td>
+                    <td className="num mono" style={{ fontWeight: 800, color: x.saldo > 0 ? 'var(--purple)' : 'var(--text-dim)' }}>{fmtNum(x.saldo)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </RastreioSecao>
+      </div>
+    </div>
+  );
+};
+
+const RastreioLote = ({ ctx }) => {
+  const [texto, setTexto] = useState('');
+  const [dados, setDados] = useState(null);
+  const [erro, setErro] = useState('');
+  const [carregando, setCarregando] = useState(false);
+
+  const rastrear = async () => {
+    const lotes = Array.from(new Set(texto.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean))).slice(0, 10);
+    if (!lotes.length) return;
+    setCarregando(true); setErro('');
+    try { setDados(await DNLOG_API.rastreioLote(lotes)); }
+    catch (e) { setErro((e && e.message) || 'falha'); setDados(null); }
+    finally { setCarregando(false); }
+  };
+
+  const exportar = () => {
+    if (!dados) return;
+    const clean = s => String(s == null ? '' : s).replace(/[;\n\r]/g, ' ');
+    const rows = [['Lote', 'Data', 'Movimento', 'NF', 'Doc SAP', 'Parceiro', 'Pedido', 'OE', 'Item', 'Qtd', 'Saldo apos'].join(';')];
+    (dados.lotes || []).forEach(l => (l.movimentos || []).forEach(m => rows.push([
+      l.lote, m.data, clean(m.tipo), m.nf == null ? '' : m.nf, m.docNum, clean(m.parceiro), m.pedido || '', m.oe || '', m.item, m.delta, m.saldoApos,
+    ].join(';'))));
+    const blob = new Blob(['﻿' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `rastreio_lotes_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div>
+      <div className="panel" style={{ marginBottom: 16, padding: '14px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <i className="ti ti-route" style={{ color: 'var(--accent-light)' }}></i>
+          <strong style={{ fontSize: 14 }}>Rastreio de lote</strong>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>SAP · DNLog · QCDN — somente leitura</span>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <input className="input" value={texto} onChange={e => setTexto(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') rastrear(); }}
+            placeholder="Digite um ou mais lotes (até 10), separados por vírgula ou espaço — ex.: SJ-260155, D269BO1459"
+            style={{ flex: '1 1 420px', fontFamily: 'JetBrains Mono, monospace', fontSize: 13 }} />
+          <button className="btn btn-primary" onClick={rastrear} disabled={carregando || !texto.trim()}>
+            <i className={'ti ' + (carregando ? 'ti-loader-2' : 'ti-search')}></i> {carregando ? 'Consultando…' : 'Rastrear'}
+          </button>
+          {dados && (dados.lotes || []).length > 0 && (
+            <button className="btn btn-ghost" onClick={exportar}><i className="ti ti-download"></i> CSV</button>
+          )}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 6 }}>
+          Busca todas as entradas e saídas do lote no SAP (NFs, recebimentos, devoluções, transferências), o saldo atual, as OEs do DNLog e, no QCDN, a qualidade, os laudos e as reservas. Pode levar alguns segundos.
+        </div>
+      </div>
+
+      {erro && <div className="empty" style={{ padding: 24 }}><i className="ti ti-alert-triangle"></i><div>Não foi possível rastrear</div><div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{erro}</div></div>}
+      {carregando && !dados && <div className="empty" style={{ padding: 24 }}><i className="ti ti-loader-2"></i><div>Consultando SAP, DNLog e QCDN…</div></div>}
+      {dados && dados.qcdn && dados.qcdn.erro && (
+        <div style={{ fontSize: 12, color: 'var(--orange)', marginBottom: 10 }}><i className="ti ti-plug-connected-x"></i> QCDN indisponível: {dados.qcdn.erro}</div>
+      )}
+      {dados && (dados.lotes || []).map(l => <RastreioLoteCard key={l.lote} r={l} />)}
+    </div>
+  );
+};
+
 const Relatorios = ({ ctx }) => {
   const rel = useMemo(() => {
     const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
@@ -3182,6 +3475,7 @@ const Relatorios = ({ ctx }) => {
   const [repAberto, setRepAberto] = useState(null); // representante expandido no resumo comercial
   const RELATORIOS_CARDS = [
     { id: 'faturamento', titulo: 'Faturamento — NFs por cliente', desc: 'Notas fiscais de saída do SAP por cliente, com item, lote, quantidade e valor.', icon: 'ti-file-invoice', cor: 'var(--green)', bg: 'var(--green-bg)' },
+    { id: 'rastreio-lote', titulo: 'Rastreio de lote', desc: 'Entradas, saídas e saldo de um lote no SAP, as OEs do DNLog e, no QCDN, qualidade, laudos e reservas — com as divergências apontadas.', icon: 'ti-route', cor: 'var(--purple)', bg: 'var(--purple-bg)' },
     { id: 'nfs-entrada', titulo: 'NFs de entrada — por fornecedor', desc: 'Notas fiscais de entrada (compras) do SAP por fornecedor, com item, lote, quantidade e valor.', icon: 'ti-file-import', cor: 'var(--blue)', bg: 'var(--blue-bg)' },
     { id: 'financeiro', titulo: 'Recebimentos por cliente', desc: 'O que cada cliente pagou/adiantou, lançado no Assistente de Recebimentos do SAP.', icon: 'ti-wallet', cor: 'var(--green)', bg: 'var(--green-bg)' },
     { id: 'pedidos-pagamentos', titulo: 'Pedidos × Pagamentos', desc: 'Total em pedidos de cada cliente (fechados, em aberto e cancelados) vs. tudo o que já foi recebido, com o saldo a pagar e a flag de pagamento.', icon: 'ti-scale', cor: 'var(--orange)', bg: 'var(--orange-bg)' },
@@ -3324,6 +3618,7 @@ const Relatorios = ({ ctx }) => {
       {/* ===== FATURAMENTO (NFs de saída) POR CLIENTE ===== */}
       {relAtivo === 'faturamento' && <FaturamentoNFs key="saida" ctx={ctx} tipo="saida" />}
       {relAtivo === 'nfs-entrada' && <FaturamentoNFs key="entrada" ctx={ctx} tipo="entrada" />}
+      {relAtivo === 'rastreio-lote' && <RastreioLote ctx={ctx} />}
 
       {/* ===== ADIANTAMENTOS / SALDO POR CLIENTE ===== */}
       {relAtivo === 'financeiro' && <FinanceiroClientes ctx={ctx} />}

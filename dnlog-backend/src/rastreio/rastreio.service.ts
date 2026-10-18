@@ -81,9 +81,13 @@ export class RastreioService {
       }
     }
 
-    // ---- Movimentos: ordem do dia = entradas antes das saídas (como o SAP exige) ----
+    // ---- Movimentos: no mesmo dia, as ENTRADAS primeiro (o SAP não deixa o lote
+    // ficar negativo); depois o resto na ordem do documento — assim a nota original
+    // sempre aparece antes do próprio cancelamento.
+    const ENTRADAS = new Set(['PurchaseDeliveryNotes', 'PurchaseInvoices', 'InventoryGenEntries', 'Returns', 'CreditNotes']);
+    const rank = (m: any) => (ENTRADAS.has(m.entidade) && !String(m.tipo || '').includes('CANCELAMENTO') ? 0 : 1);
     const movs = [...(hist?.movimentos || [])].sort((a: any, b: any) =>
-      (a.data || '').localeCompare(b.data || '') || (b.sinal - a.sinal) || (a.docEntry - b.docEntry));
+      (a.data || '').localeCompare(b.data || '') || (rank(a) - rank(b)) || (a.docEntry - b.docEntry));
     const acum: Record<string, number> = {};
     const movimentos = movs.map((m: any) => {
       const delta = (Number(m.qtd) || 0) * (Number(m.sinal) || 0);
