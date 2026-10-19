@@ -344,6 +344,10 @@ tbody tr:last-child td { border-bottom: none; }
 .cell-primary { font-weight: 600; }
 .cell-muted { color: var(--text-muted); }
 .num { text-align: right; font-family: 'JetBrains Mono', monospace; }
+/* Tabela larga (Consulta de embarques): menos respiro lateral para caber na tela */
+.table-tight th { padding: 10px 8px; white-space: normal; letter-spacing: 0.04em; font-size: 10px; line-height: 1.25; }
+.table-tight td { padding: 10px 8px; }
+.table-tight th:first-child, .table-tight td:first-child { padding-left: 14px; padding-right: 4px; }
 
 /* CHIPS */
 .chip {
@@ -12442,7 +12446,7 @@ const Embarques = ({ ctx }) => {
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table className="table-tight" style={{ width: '100%', minWidth: 1100 }}>
+            <table className="table-tight" style={{ width: '100%', minWidth: 900 }}>
               <thead>
                 <tr>
                   <th style={{ width: 30 }}></th>
@@ -12457,7 +12461,7 @@ const Embarques = ({ ctx }) => {
                   <th>Motorista</th>
                   <th>Placa</th>
                   <th>Lotes</th>
-                  <th style={{ width: 80 }}>Ações</th>
+                  <th style={{ width: 44 }}>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -12517,12 +12521,14 @@ const Embarques = ({ ctx }) => {
                                   style={{
                                     background: 'var(--green)', color: 'white', fontSize: 10, fontWeight: 700,
                                     border: 'none', cursor: ctx.podeEditar ? 'pointer' : 'default',
-                                    fontFamily: 'inherit', padding: '3px 8px', borderRadius: 3
+                                    fontFamily: 'inherit', padding: '3px 8px', borderRadius: 3,
+                                    // NFs quebram em várias linhas em vez de alargar a tabela
+                                    flexWrap: 'wrap', whiteSpace: 'normal', maxWidth: 170, textAlign: 'left', lineHeight: 1.35
                                   }}
                                   title={ctx.podeEditar ? "Clique para desfaturar (reverte a baixa)" : "Faturada"}
                                 >
                                   <i className="ti ti-receipt-2"></i> Faturada
-                                  {oe.nf_numero && <span style={{ marginLeft: 4, opacity: 0.85, fontWeight: 400 }}>NF {oe.nf_numero}</span>}
+                                  {oe.nf_numero && <span style={{ flexBasis: '100%', opacity: 0.85, fontWeight: 400 }}>NF {String(oe.nf_numero).replace(/\s*,\s*/g, ', ')}</span>}
                                 </button>
                               );
                             }
