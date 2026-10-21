@@ -348,6 +348,36 @@ tbody tr:last-child td { border-bottom: none; }
 .table-tight th { padding: 10px 8px; white-space: normal; letter-spacing: 0.04em; font-size: 10px; line-height: 1.25; }
 .table-tight td { padding: 10px 8px; }
 .table-tight th:first-child, .table-tight td:first-child { padding-left: 14px; padding-right: 4px; }
+/* Consulta de embarques: a tabela se ajusta à largura disponível. Colunas
+   menos críticas somem (e passam para o detalhe expandido) e, bem estreito,
+   cada OE vira um cartão — nunca rola para o lado. */
+.emb-wrap { container-type: inline-size; overflow-x: auto; }
+.emb-x { display: none; }
+@container (max-width: 1000px) {
+  .emb-tabela .c-placa, .emb-tabela .c-lotes { display: none; }
+  .emb-x-placa { display: block; }
+}
+@container (max-width: 860px) {
+  .emb-tabela .c-mot, .emb-tabela .c-mod { display: none; }
+  .emb-x-mot, .emb-x-mod { display: block; }
+}
+@container (max-width: 720px) {
+  .emb-tabela .c-data, .emb-tabela .c-chev { display: none; }
+  .emb-x-data { display: block; }
+}
+@container (max-width: 600px) {
+  .emb-tabela thead { display: none; }
+  .emb-tabela, .emb-tabela tbody { display: block; }
+  .emb-tabela tr { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "oe acoes" "cli cli" "status fat" "qtd valor"; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--border); }
+  .emb-tabela tr.emb-exp-row { display: block; padding: 0; }
+  .emb-tabela td { display: block; border-bottom: none; padding: 3px 10px; }
+  .emb-tabela td.c-exp { display: block; padding: 10px 12px !important; }
+  .emb-tabela .c-oe { grid-area: oe; } .emb-tabela .c-acoes { grid-area: acoes; justify-self: end; }
+  .emb-tabela .c-cli { grid-area: cli; } .emb-tabela .c-status { grid-area: status; }
+  .emb-tabela .c-fat { grid-area: fat; justify-self: end; } .emb-tabela .c-qtd { grid-area: qtd; text-align: left; }
+  .emb-tabela .c-valor { grid-area: valor; }
+  .emb-tabela .c-qtd::before { content: 'QTD '; font-weight: 400; color: var(--text-muted); font-size: 10px; }
+}
 
 /* CHIPS */
 .chip {
@@ -12445,23 +12475,23 @@ const Embarques = ({ ctx }) => {
             <div style={{ fontSize: 12, marginTop: 4 }}>Ajuste os filtros ou crie uma nova OE</div>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="table-tight" style={{ width: '100%', minWidth: 900 }}>
+          <div className="emb-wrap">
+            <table className="table-tight emb-tabela">
               <thead>
                 <tr>
-                  <th style={{ width: 30 }}></th>
-                  <th>OE</th>
-                  <th>Data prevista</th>
-                  <th>Cliente(s)</th>
-                  <th>Modalidade</th>
-                  <th>Status</th>
-                  <th>Faturada</th>
-                  <th className="num">Qtd</th>
-                  <th className="num">Valor</th>
-                  <th>Motorista</th>
-                  <th>Placa</th>
-                  <th>Lotes</th>
-                  <th style={{ width: 44 }}>Ações</th>
+                  <th className="c-chev" style={{ width: 30 }}></th>
+                  <th className="c-oe">OE</th>
+                  <th className="c-data">Data prevista</th>
+                  <th className="c-cli">Cliente(s)</th>
+                  <th className="c-mod">Modalidade</th>
+                  <th className="c-status">Status</th>
+                  <th className="c-fat">Faturada</th>
+                  <th className="num c-qtd">Qtd</th>
+                  <th className="num c-valor">Valor</th>
+                  <th className="c-mot">Motorista</th>
+                  <th className="c-placa">Placa</th>
+                  <th className="c-lotes">Lotes</th>
+                  <th className="c-acoes" style={{ width: 44 }}>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -12479,14 +12509,14 @@ const Embarques = ({ ctx }) => {
                         style={{ cursor: 'pointer', background: expandida ? 'var(--bg-hover)' : 'transparent' }}
                         onClick={() => setOeExpandida(expandida ? null : oe.id)}
                       >
-                        <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
+                        <td className="c-chev" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
                           <i className={`ti ${expandida ? 'ti-chevron-down' : 'ti-chevron-right'}`} style={{ fontSize: 12 }}></i>
                         </td>
-                        <td className="mono cell-primary" style={{ fontWeight: 700 }}>{oe.numero}</td>
-                        <td className="mono cell-muted" style={{ fontSize: 11 }}>
+                        <td className="c-oe mono cell-primary" style={{ fontWeight: 700 }}>{oe.numero}</td>
+                        <td className="c-data mono cell-muted" style={{ fontSize: 11 }}>
                           {fmtDate(oe.data_prevista)} <span style={{ color: 'var(--text-dim)' }}>{oe.hora_prevista}</span>
                         </td>
-                        <td style={{ fontSize: 12 }}>
+                        <td className="c-cli" style={{ fontSize: 12 }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
                             <span>
                               {paradas.length === 1 ? paradas[0].cliente : (
@@ -12499,14 +12529,14 @@ const Embarques = ({ ctx }) => {
                             <PagamentoBadge status={statusPagOE(oe)} mini />
                           </div>
                         </td>
-                        <td>
+                        <td className="c-mod">
                           <span className={`chip ${oe.modalidade === 'TRIANGULAR' ? 'chip-blue' : 'chip-accent'}`} style={{ fontSize: 10 }}>
                             <i className={`ti ${oe.modalidade === 'TRIANGULAR' ? 'ti-arrows-shuffle' : 'ti-building-warehouse'}`}></i>
                             {oe.modalidade === 'TRIANGULAR' ? ' Triangular' : ' Próprio'}
                           </span>
                         </td>
-                        <td><StatusChip status={oe.status} /></td>
-                        <td onClick={e => e.stopPropagation()}>
+                        <td className="c-status"><StatusChip status={oe.status} /></td>
+                        <td className="c-fat" onClick={e => e.stopPropagation()}>
                           {(() => {
                             const podeFaturar = ['EMBARCADA', 'EM_TRANSITO', 'ENTREGUE'].includes(oe.status);
                             if (oe.faturada) {
@@ -12567,17 +12597,17 @@ const Embarques = ({ ctx }) => {
                             return <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>—</span>;
                           })()}
                         </td>
-                        <td className="num mono" style={{ fontWeight: 700 }}>{totalBBs(oe)}</td>
-                        <td className="num mono cell-primary" style={{ fontSize: 11 }}>{fmtMoney(totalValor(oe))}</td>
-                        <td style={{ fontSize: 11 }}>{oe.motorista_nome || '—'}</td>
-                        <td className="mono" style={{ fontSize: 11 }}>{oe.veiculo_placa || '—'}</td>
-                        <td style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                        <td className="c-qtd num mono" style={{ fontWeight: 700 }}>{totalBBs(oe)}</td>
+                        <td className="c-valor num mono cell-primary" style={{ fontSize: 11 }}>{fmtMoney(totalValor(oe))}</td>
+                        <td className="c-mot" style={{ fontSize: 11 }}>{oe.motorista_nome || '—'}</td>
+                        <td className="c-placa mono" style={{ fontSize: 11 }}>{oe.veiculo_placa || '—'}</td>
+                        <td className="c-lotes" style={{ fontSize: 10, color: 'var(--text-muted)' }}>
                           {lotesArr.length === 0 ? <span style={{ color: 'var(--orange)' }}>—</span> :
                             lotesArr.length <= 2 ? lotesArr.map(l => <div key={l} className="mono">{l}</div>) :
                             <span><span className="mono">{lotesArr[0]}</span><span style={{ color: 'var(--text-dim)' }}> +{lotesArr.length - 1}</span></span>
                           }
                         </td>
-                        <td onClick={e => e.stopPropagation()}>
+                        <td className="c-acoes" onClick={e => e.stopPropagation()}>
                           <div style={{ display: 'flex', gap: 4 }}>
                             <button
                               className="btn btn-ghost"
@@ -12589,8 +12619,8 @@ const Embarques = ({ ctx }) => {
                         </td>
                       </tr>
                       {expandida && (
-                        <tr style={{ background: 'var(--bg-card)' }}>
-                          <td colSpan="13" style={{ padding: '12px 18px' }}>
+                        <tr className="emb-exp-row" style={{ background: 'var(--bg-card)' }}>
+                          <td className="c-exp" colSpan="13" style={{ padding: '12px 18px' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
                               {/* Paradas */}
                               <div>
@@ -12638,6 +12668,11 @@ const Embarques = ({ ctx }) => {
                               <div>
                                 <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700, marginBottom: 6 }}>LOGÍSTICA</div>
                                 <div style={{ fontSize: 11, lineHeight: 1.6 }}>
+                                  {/* Só aparecem quando a coluna correspondente some por falta de espaço */}
+                                  <div className="emb-x emb-x-data"><strong>Data prevista:</strong> <span className="mono">{fmtDate(oe.data_prevista)} {oe.hora_prevista}</span></div>
+                                  <div className="emb-x emb-x-mod"><strong>Modalidade:</strong> {oe.modalidade === 'TRIANGULAR' ? 'Triangular' : 'Próprio'}</div>
+                                  <div className="emb-x emb-x-mot"><strong>Motorista:</strong> {oe.motorista_nome || '—'}</div>
+                                  <div className="emb-x emb-x-placa"><strong>Placa:</strong> <span className="mono">{oe.veiculo_placa || '—'}</span></div>
                                   <div><strong>Transportadora:</strong> {oe.transportadora_nome || '—'}</div>
                                   <div><strong>Doca:</strong> {oe.doca || '—'}</div>
                                   <div><strong>Veículo:</strong> {oe.veiculo_tipo || '—'}</div>
