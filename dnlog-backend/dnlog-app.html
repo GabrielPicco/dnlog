@@ -1052,6 +1052,10 @@ const ARMAZENS_PROPRIOS = { DN_EST: 'BA', PI_EST: 'PI', MA_EST: 'MA' };
 const ehArmazemProprio = (a) => !!ARMAZENS_PROPRIOS[a];
 // Filial de um armazém pelo prefixo do código (DN_SE → BA, PI_ED → PI...).
 const filialDoArmazem = (a) => ARMAZENS_PROPRIOS[a] || ({ DN: 'BA', PI: 'PI', MA: 'MA' })[String(a || '').split('_')[0]] || null;
+const FILIAL_NOME = { BA: 'Matriz BA', PI: 'Filial PI', MA: 'Filial MA' };
+const nomeFilial = (f) => FILIAL_NOME[f] || f || '—';
+// Texto padrão (tela e impressão) quando o lote está em outra filial.
+const OBS_OUTRO_ESTAB = 'Volume disponível em estabelecimento distinto do emissor do pedido.';
 // Converte os lotes reais do SAP (global DADOS_ESTOQUE_LOTES, carregado no
 // bootstrap) para o formato que o SELETOR DE LOTES do embarque espera
 // (lote_codigo/item_codigo/qtd_bb). Só o estoque PRÓPRIO com lote (das filiais) —
@@ -6621,12 +6625,14 @@ const NovaOE = ({ ctx, editMode }) => {
   // Lotes do item para UMA linha (parada ativa + pedido + item): o disponível
   // desconta o que as OUTRAS linhas desta OE já pegaram do mesmo lote. A própria
   // linha não é descontada (é a alocação que está sendo editada).
-  // Só entram lotes da FILIAL do pedido (armazém da linha no SAP: DN_* = BA,
-  // PI_* = Piauí, MA_* = Maranhão) — a NF sai da filial que tem o estoque.
-  // Linha sem armazém conhecido: mostra o estoque de todas as filiais.
+  // Filial do pedido = armazém da linha no SAP (DN_* = BA, PI_* = Piauí,
+  // MA_* = Maranhão). Lotes de OUTRA filial também podem ser alocados, mas vêm
+  // marcados (outra_filial) — aparecem por último no seletor e geram
+  // observação na OE e na impressão.
   const lotesParaLinha = (itemCodigo, pedidoNumero, armazemLinha) => {
     const filial = filialDoArmazem(armazemLinha);
-    return ctx.lotes.filter(l => l.item_codigo === itemCodigo && (!filial || !l.filial || l.filial === filial)).map(l => {
+    return ctx.lotes.filter(l => l.item_codigo === itemCodigo).map(l0 => {
+      const l = (filial && l0.filial && l0.filial !== filial) ? { ...l0, outra_filial: true, filial_pedido: filial } : l0;
       const outras = alocacoesNestaOE
         .filter(a => a.lote === l.lote_codigo &&
           !(a.paradaIdx === paradaAtivaIdx && a.codigo === itemCodigo && (a.pedido === pedidoNumero || !a.pedido)))
@@ -7667,6 +7673,8 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
     reservaDoItem(r, item.codigo) && !lotesDoItem.some(l => normLote(l.lote_codigo) === normLote(r.loteNumero)));
   const totalAlocado = lotesAlocados.reduce((a, l) => a + l.qtd_bb, 0);
   const totalDisponivelEstoque = lotesDoItem.reduce((a, l) => a + l.qtd_disponivel, 0);
+  const dispOutroEstab = lotesDoItem.filter(l => l.outra_filial).reduce((a, l) => a + l.qtd_disponivel, 0);
+  const dispMesmoEstab = totalDisponivelEstoque - dispOutroEstab;
   // Em triangular, nunca olha estoque
   const semEstoque = !isTriangular && (lotesDoItem.length === 0 || totalDisponivelEstoque === 0);
   const estoqueInsuficiente = !isTriangular && totalDisponivelEstoque < item.saldo && !semEstoque;
@@ -7754,6 +7762,11 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
           <div style={{ fontSize: 10, color: isTriangular ? 'var(--blue)' : semEstoque ? 'var(--red)' : estoqueInsuficiente ? 'var(--orange)' : 'var(--text-muted)', fontWeight: 600 }}>
             {isTriangular ? 'do fornecedor' : semEstoque ? 'sem estoque' : estoqueInsuficiente ? `só ${totalDisponivelEstoque} disp.` : `${totalDisponivelEstoque} no estoque`}
           </div>
+          {!isTriangular && dispOutroEstab > 0 && (
+            <div style={{ fontSize: 9, color: 'var(--orange)', fontWeight: 600 }} title={OBS_OUTRO_ESTAB}>
+              {dispMesmoEstab > 0 ? `${dispOutroEstab} em outro estab.` : 'em outro estabelecimento'}
+            </div>
+          )}
         </div>
         <div className="num cell-mono cell-muted" style={{ fontSize: 12 }}>
           {fmtMoney(item.valor_unitario)}
@@ -7838,8 +7851,14 @@ const ItemRow = ({ item, qtd, lotesAlocados, lotesDoItem, modalidade, onChange, 
                     style={{ fontFamily: 'JetBrains Mono, monospace' }}
                   >
                     {la.lote_codigo} · {la.qtd_bb} {item.unidade || 'un'}
+                    {la.outra_filial && <span style={{ color: 'var(--orange)', marginLeft: 4 }} title={OBS_OUTRO_ESTAB}>· {nomeFilial(la.filial_estoque)}</span>}
                   </span>
                 ))}
+                {lotesAlocados.some(la => la.outra_filial) && (
+                  <span style={{ fontSize: 10, color: 'var(--orange)', fontWeight: 600, flexBasis: '100%' }}>
+                    <i className="ti ti-building" style={{ fontSize: 11, verticalAlign: -1 }}></i> {OBS_OUTRO_ESTAB}
+                  </span>
+                )}
                 <button
                   onClick={(e) => { e.stopPropagation(); isTriangular ? setShowManualModal(true) : setShowLoteModal(true); }}
                   style={{
@@ -7973,7 +7992,8 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
   // Ordem: (1) reservados no QCDN para ESTE cliente, (2) lotes livres,
   // (3) lotes com reserva de OUTRO cliente (por último). Dentro de cada grupo,
   // FIFO (mais antigos primeiro). Mostra todos com disp>0 OU já alocados.
-  const grupoDe = (l) => reservaDe(l.lote_codigo) ? 0 : (qtdOutrosDe(l) > 0 ? 2 : 1);
+  // Lotes de outro estabelecimento sempre por último.
+  const grupoDe = (l) => l.outra_filial ? 3 : reservaDe(l.lote_codigo) ? 0 : (qtdOutrosDe(l) > 0 ? 2 : 1);
   const lotesDisponiveis = lotesDoItem
     .filter(l => capacidadeDe(l) > 0 || (alocacao[l.lote_codigo] || 0) > 0)
     .sort((a, b) => {
@@ -8006,6 +8026,7 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
     const nova = {};
     for (const l of lotesDisponiveis) {
       if (restante <= 0) break;
+      if (l.outra_filial) continue; // FIFO não puxa de outro estabelecimento (só manual)
       const capacidade = livreDe(l); // FIFO NUNCA usa bags reservadas a outro cliente
       const q = Math.min(capacidade, restante);
       if (q > 0) {
@@ -8042,6 +8063,9 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
           lote_codigo,
           qtd_bb: Number(qtd_bb),
           armazem: lote ? lote.armazem : null,
+          filial_estoque: lote ? (lote.filial || null) : null,
+          outra_filial: !!(lote && lote.outra_filial),
+          filial_pedido: lote && lote.outra_filial ? lote.filial_pedido : null,
           peneira: lote ? lote.peneira : null,
           germinacao: lote ? lote.germinacao : null,
           data_fabricacao: lote ? lote.data_fabricacao : null
@@ -8132,6 +8156,12 @@ const SeletorLotes = ({ item, lotesDoItem, lotesAlocadosAtual, onClose, onConfir
                           <div title={outros.map(r => `${r.clienteNome}${r.clienteCardCode ? ' · ' + r.clienteCardCode : ''}: ${r.pend} bag(s) reservada(s)`).join('\n')}
                             style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10, fontWeight: 700, color: acimaDoLivre ? 'var(--red)' : 'var(--orange)', marginTop: 2, lineHeight: 1.3, maxWidth: 260 }}>
                             <i className="ti ti-alert-triangle" style={{ fontSize: 10, verticalAlign: -1 }}></i> Reservado p/ outro cliente: {outros.length === 1 ? `${outros[0].clienteNome} (${outros[0].pend})` : `${outros.length} clientes (${qOutros})`}
+                          </div>
+                        )}
+                        {l.outra_filial && (
+                          <div title={OBS_OUTRO_ESTAB}
+                            style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10, fontWeight: 700, color: 'var(--orange)', marginTop: 2, whiteSpace: 'nowrap' }}>
+                            <i className="ti ti-building" style={{ fontSize: 10, verticalAlign: -1 }}></i> Outro estabelecimento · {nomeFilial(l.filial)}
                           </div>
                         )}
                         {resQ && (
@@ -9421,6 +9451,7 @@ const DocumentoOE = ({ oe, totais }) => {
                                           <span style={{ color: '#333', fontWeight: 600 }}> · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span></span>
                                           {la.origem_fornecedor && <span style={{ color: '#555' }}> · orig: {la.origem_fornecedor}</span>}
                                           {la.controle_paralelo && <span style={{ display: 'inline-block', whiteSpace: 'nowrap', color: '#B85A1A', fontSize: 10, marginLeft: 6, fontWeight: 700, fontFamily: 'Manrope, sans-serif', verticalAlign: 2 }}>(CTRL PAR.)</span>}
+                                          {la.outra_filial && <span style={{ display: 'inline-block', whiteSpace: 'nowrap', color: '#B85A1A', fontSize: 10, marginLeft: 6, fontWeight: 700, fontFamily: 'Manrope, sans-serif', verticalAlign: 2 }}>({nomeFilial(la.filial_estoque)}) *</span>}
                                         </div>
                                       ))}
                                     </div>
@@ -9507,6 +9538,7 @@ const DocumentoOE = ({ oe, totais }) => {
                                   <span style={{ whiteSpace: 'nowrap' }}><strong style={{ fontWeight: 800 }}>{la.lote_codigo}</strong>
                                   <span style={{ color: '#333', fontWeight: 600 }}> · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span></span>
                                   {la.controle_paralelo && <span style={{ display: 'inline-block', whiteSpace: 'nowrap', color: '#B85A1A', fontSize: 10, marginLeft: 6, fontWeight: 700, fontFamily: 'Manrope, sans-serif', verticalAlign: 2 }}>(CTRL PAR.)</span>}
+                                  {la.outra_filial && <span style={{ display: 'inline-block', whiteSpace: 'nowrap', color: '#B85A1A', fontSize: 10, marginLeft: 6, fontWeight: 700, fontFamily: 'Manrope, sans-serif', verticalAlign: 2 }}>({nomeFilial(la.filial_estoque)}) *</span>}
                                 </div>
                               ))}
                               {it.lotes_alocados.some(la => la.controle_paralelo) && (
@@ -9536,6 +9568,28 @@ const DocumentoOE = ({ oe, totais }) => {
                 </tr>
               </tbody>
             </table>
+          </div>
+        );
+      })()}
+
+      {/* OBSERVAÇÃO — lotes em estabelecimento distinto do emissor do pedido */}
+      {(() => {
+        const fora = getAllItens(oe).flatMap(it => (it.lotes_alocados || [])
+          .filter(la => la && la.outra_filial)
+          .map(la => ({ ...la, _item: it.codigo, _ped: it.pedido_numero, _un: it.unidade || it.embalagem || 'un' })));
+        if (!fora.length) return null;
+        return (
+          <div className="doc-block-wide">
+            <div className="doc-block-header"><i className="ti ti-building"></i> * OBSERVAÇÃO — ESTABELECIMENTO DE ORIGEM</div>
+            <div className="doc-block-body" style={{ background: '#FFFAEC' }}>
+              <div style={{ fontSize: 12, lineHeight: 1.4, color: '#333', fontWeight: 600 }}>{OBS_OUTRO_ESTAB}</div>
+              {fora.map((la, i) => (
+                <div key={i} style={{ fontSize: 11, lineHeight: 1.4, color: '#333' }}>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700 }}>{la.lote_codigo}</span>
+                  {' '}({la._item} · {la.qtd_bb} {la._un}) — Estoque: {nomeFilial(la.filial_estoque)} · Emissor do pedido{la._ped ? ` ${numPedidoCurto(la._ped)}` : ''}: {nomeFilial(la.filial_pedido)}
+                </div>
+              ))}
+            </div>
           </div>
         );
       })()}
@@ -10363,6 +10417,9 @@ const ConferenciaDetalhe = ({ ctx }) => {
                                             <span className="chip chip-neutral" style={{ fontSize: 9, marginLeft: 8, padding: '1px 5px' }}>SEM LOTE</span>
                                           ) : la.controle_paralelo && (
                                             <span className="chip chip-blue" style={{ fontSize: 9, marginLeft: 8, padding: '1px 5px' }}>CTRL PARALELO</span>
+                                          )}
+                                          {la.outra_filial && (
+                                            <span className="chip chip-orange" style={{ fontSize: 9, marginLeft: 8, padding: '1px 5px' }} title={OBS_OUTRO_ESTAB}>{nomeFilial(la.filial_estoque)}</span>
                                           )}
                                         </div>
                                         <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
@@ -12718,6 +12775,7 @@ const Embarques = ({ ctx }) => {
                                         <span style={{ color: 'var(--accent-light)', fontWeight: 700 }}>{la.lote_codigo}</span>
                                         <span style={{ color: 'var(--text-muted)' }}> · {it.codigo}{pedidosDaOE(oe).length > 1 && it._ped ? ` · PD ${numPedidoCurto(it._ped)}` : ''} · {la.qtd_bb} {it.unidade || it.embalagem || 'un'}</span>
                                         {la.controle_paralelo && <span className="chip chip-blue" style={{ fontSize: 8, marginLeft: 4, padding: '0 4px' }}>CTRL PAR.</span>}
+                                        {la.outra_filial && <span className="chip chip-orange" style={{ fontSize: 8, marginLeft: 4, padding: '0 4px' }} title={OBS_OUTRO_ESTAB}>{nomeFilial(la.filial_estoque)}</span>}
                                       </div>
                                     )))}
                                   </div>
