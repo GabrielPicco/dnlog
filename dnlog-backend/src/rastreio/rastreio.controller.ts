@@ -29,20 +29,19 @@ export class RastreioController {
     const out: any = {};
     const tenta = async (k: string, fn: () => Promise<any>) => { try { out[k] = await fn(); } catch (e: any) { out[k] = { erro: e?.response?.data?.error?.message?.value || e?.message }; } };
     await this.sap.ensureSession();
-    await tenta('armazens', async () => (await this.sap.getAllPages('/Warehouses', {})).map((w: any) => ({ c: w.WarehouseCode, n: w.WarehouseName, bpl: w.BusinessPlaceID, uf: w.State, cid: w.City, inativo: w.Inactive })));
-    await tenta('filiais', async () => (await this.sap.getAllPages('/BusinessPlaces', { $select: 'BPLID,BPLName,Disabled' })));
-    await tenta('view', async () => {
-      const linhas: any[] = (await this.sap.getSaldoPorLote()) || [];
+    await tenta('pedidosPorFilial', async () => {
+      const docs: any[] = await this.sap.getAllPages('/Orders', { $select: 'DocEntry,DocNum,DocDate,CardName,BPL_IDAssignedToInvoice,DocumentStatus,DocumentLines', $filter: "DocDate ge '2026-01-01'", $orderby: 'DocEntry desc' });
       const m: Record<string, any> = {};
-      for (const r of linhas) { const k = r.CodigoDeposito; m[k] = m[k] || { nome: r.NomeDeposito, linhas: 0, comLote: 0, saldo: 0 }; m[k].linhas++; if (r.Lote) m[k].comLote++; m[k].saldo += Number(r.SaldoAtual) || 0; }
-      return { total: linhas.length, colunas: Object.keys(linhas[0] || {}), porDeposito: m };
-    });
-    await tenta('itemWh', async () => {
-      const itens: any[] = (await this.sap.getEstoque()) || [];
-      const m: Record<string, any> = {};
-      for (const it of itens) for (const w of it.ItemWarehouseInfoCollection || []) { const q = Number(w.InStock) || 0; if (!q) continue; m[w.WarehouseCode] = m[w.WarehouseCode] || { itens: 0, saldo: 0, lote: 0 }; m[w.WarehouseCode].itens++; m[w.WarehouseCode].saldo += q; if (it.ManageBatchNumbers === 'tYES') m[w.WarehouseCode].lote++; }
+      for (const d of docs) {
+        const k = String(d.BPL_IDAssignedToInvoice);
+        m[k] = m[k] || { pedidos: 0, abertos: 0, armazens: {}, exemplos: [] };
+        m[k].pedidos++; if (d.DocumentStatus === 'bost_Open') m[k].abertos++;
+        for (const l of d.DocumentLines || []) m[k].armazens[l.WarehouseCode] = (m[k].armazens[l.WarehouseCode] || 0) + 1;
+        if (m[k].exemplos.length < 5) m[k].exemplos.push({ n: d.DocNum, c: d.CardName, s: d.DocumentStatus, wh: (d.DocumentLines || []).map((l: any) => l.WarehouseCode + ':' + l.ItemCode) });
+      }
       return m;
     });
+    await tenta('lotesPI', async () => ((await this.sap.getSaldoPorLote()) || []).filter((r: any) => String(r.CodigoDeposito || '').startsWith('PI') || String(r.CodigoDeposito || '').startsWith('MA')).map((r: any) => ({ f: r.IdFilial, item: r.CodigoItem, lote: r.Lote, dep: r.CodigoDeposito, saldo: r.SaldoAtual, pv: r.SaldoPedidoVenda })));
     return out;
   }
 }

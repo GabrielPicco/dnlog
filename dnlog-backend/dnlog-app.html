@@ -1045,13 +1045,21 @@ let DADOS_PEDIDOS = [];
 const AUXILIARES = { clientes: [], fornecedores: [], vendedores: [] };
 // Lotes fictícios removidos — saldo por lote vem do SAP (view CALCULOSALDOITENS).
 const LOTES_ESTOQUE_INICIAL = [];
+// Estoque PRÓPRIO = o "Estoque Geral" de cada filial no SAP. A matriz (BA) usa
+// DN_EST; a filial Piauí, PI_EST; a filial Maranhão, MA_EST. Envio direto
+// (*_ED/DN_SE), consignado e terceiros não entram como estoque para embarcar.
+const ARMAZENS_PROPRIOS = { DN_EST: 'BA', PI_EST: 'PI', MA_EST: 'MA' };
+const ehArmazemProprio = (a) => !!ARMAZENS_PROPRIOS[a];
+// Filial de um armazém pelo prefixo do código (DN_SE → BA, PI_ED → PI...).
+const filialDoArmazem = (a) => ARMAZENS_PROPRIOS[a] || ({ DN: 'BA', PI: 'PI', MA: 'MA' })[String(a || '').split('_')[0]] || null;
 // Converte os lotes reais do SAP (global DADOS_ESTOQUE_LOTES, carregado no
 // bootstrap) para o formato que o SELETOR DE LOTES do embarque espera
-// (lote_codigo/item_codigo/qtd_bb). Só o estoque PRÓPRIO com lote (DN_EST) —
+// (lote_codigo/item_codigo/qtd_bb). Só o estoque PRÓPRIO com lote (das filiais) —
 // terceiros e as linhas agregadas (sem lote) não entram na alocação.
 const lotesDoEstoqueSAP = () => (DADOS_ESTOQUE_LOTES || [])
-  .filter(l => l.armazem === 'DN_EST' && l.lote && (l.saldo || 0) > 0)
+  .filter(l => ehArmazemProprio(l.armazem) && l.lote && (l.saldo || 0) > 0)
   .map(l => ({
+    filial: ARMAZENS_PROPRIOS[l.armazem],
     lote_codigo: l.lote,
     item_codigo: l.item_codigo,
     descricao: l.descricao,
@@ -2019,7 +2027,7 @@ const App = ({ usuario, onLogout }) => {
           getItensOE(oe).forEach(it => {
             if (it.modalidade === 'TRIANGULAR') return; // ignora triangular
             if (it.lotes_alocados) {
-              const aloc = it.lotes_alocados.find(la => la.lote_codigo === l.lote_codigo);
+              const aloc = it.lotes_alocados.find(la => la.lote_codigo === l.lote_codigo && (!la.armazem || la.armazem === l.armazem));
               if (aloc && !aloc.controle_paralelo) qtdDoLote += aloc.qtd_bb;
             }
           });
@@ -5256,7 +5264,7 @@ const ResumoEstoque = ({ ctx }) => {
 
   const lotes = DADOS_ESTOQUE_LOTES || [];
   const terc = DADOS_ESTOQUE_TERCEIROS || [];
-  const fisico = lotes.filter(l => l.armazem === 'DN_EST' && l.lote && (l.saldo || 0) > 0);
+  const fisico = lotes.filter(l => ehArmazemProprio(l.armazem) && l.lote && (l.saldo || 0) > 0);
   const emTerc = terc.filter(l => l.tipo === 'em' && (l.saldo || 0) > 0);
   const deTerc = terc.filter(l => l.tipo === 'de' && (l.saldo || 0) > 0);
 
@@ -5436,9 +5444,9 @@ const Estoque = ({ ctx }) => {
     return 'ok';
   };
 
-  // Lotes/Compromissos = estoque PRÓPRIO (DN_EST). Terceiros vem à parte, já com
-  // lote/validade dos armazéns DN_EMTER/DN_DETER.
-  const proprio = lotesRaw.filter(l => l.armazem === 'DN_EST');
+  // Lotes/Compromissos = estoque PRÓPRIO (Estoque Geral de cada filial: DN_EST,
+  // PI_EST, MA_EST). Terceiros vem à parte (DN_EMTER/DN_DETER).
+  const proprio = lotesRaw.filter(l => ehArmazemProprio(l.armazem));
   const nLotes = proprio.filter(l => l.lote).length;
   const nItens = proprio.filter(l => !l.lote).length;
   const nTerc = terceirosRaw.length;
@@ -6613,14 +6621,19 @@ const NovaOE = ({ ctx, editMode }) => {
   // Lotes do item para UMA linha (parada ativa + pedido + item): o disponível
   // desconta o que as OUTRAS linhas desta OE já pegaram do mesmo lote. A própria
   // linha não é descontada (é a alocação que está sendo editada).
-  const lotesParaLinha = (itemCodigo, pedidoNumero) =>
-    ctx.lotes.filter(l => l.item_codigo === itemCodigo).map(l => {
+  // Só entram lotes da FILIAL do pedido (armazém da linha no SAP: DN_* = BA,
+  // PI_* = Piauí, MA_* = Maranhão) — a NF sai da filial que tem o estoque.
+  // Linha sem armazém conhecido: mostra o estoque de todas as filiais.
+  const lotesParaLinha = (itemCodigo, pedidoNumero, armazemLinha) => {
+    const filial = filialDoArmazem(armazemLinha);
+    return ctx.lotes.filter(l => l.item_codigo === itemCodigo && (!filial || !l.filial || l.filial === filial)).map(l => {
       const outras = alocacoesNestaOE
         .filter(a => a.lote === l.lote_codigo &&
           !(a.paradaIdx === paradaAtivaIdx && a.codigo === itemCodigo && (a.pedido === pedidoNumero || !a.pedido)))
         .reduce((s, a) => s + a.qtd, 0);
       return outras > 0 ? { ...l, qtd_disponivel: Math.max(0, l.qtd_disponivel - outras), qtd_outras_linhas: outras } : l;
     });
+  };
 
   // Toggle pedido na parada ativa (clique alterna)
   // Validação: todos os pedidos da mesma parada devem ser do mesmo cliente
@@ -7245,7 +7258,7 @@ const NovaOE = ({ ctx, editMode }) => {
                           const sel = paradaAtiva.itensSelecionados.find(i => i.codigo === item.codigo && i.pedido_numero === pedidoAtivo.numero);
                           const qtd = sel ? sel.qtd_bb : 0;
                           const lotesAlocados = sel?.lotes_alocados || [];
-                          const lotesDoItem = lotesParaLinha(item.codigo, pedidoAtivo.numero);
+                          const lotesDoItem = lotesParaLinha(item.codigo, pedidoAtivo.numero, item.armazem);
                           return (
                             <ItemRow
                               key={`${pedidoAtivo.numero}_${item.codigo}`}
@@ -8587,7 +8600,7 @@ const reservaDoItem = (r, itemCodigo) =>
   String((r && r.itemSap) || '').split(',').map(s => s.trim().toUpperCase()).includes(String(itemCodigo || '').toUpperCase());
 
 // Onde o lote está AGORA segundo o SAP:
-//  'estoque'  → no nosso armazém (DN_EST), dá pra embarcar (disp = disponível)
+//  'estoque'  → no Estoque Geral de uma filial (DN_EST/PI_EST/MA_EST), dá pra embarcar
 //  'de'       → no nosso armazém, mas é estoque DE terceiros (DN_DETER)
 //  'em'       → é nosso, mas está guardado EM terceiros (DN_EMTER) — fora do nosso poder
 //  'outro'    → em outro armazém do SAP
