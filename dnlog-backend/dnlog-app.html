@@ -1943,24 +1943,42 @@ const App = ({ usuario, onLogout }) => {
     return DADOS_PEDIDOS.map(p => {
       // Cancelado no SAP: sem saldo (não vai p/ OE) e sem entrega pelo SAP.
       const cancelado = p.cancelado || p.status_sap === 'cancelado';
+      // O MESMO item pode estar em mais de uma linha do pedido (ex.: PV-73,
+      // SOJ000065 com 21 + 5). As OEs referenciam o item pelo código, então o
+      // faturado/reservado é calculado por CÓDIGO e distribuído entre as linhas
+      // na ordem do pedido — antes cada linha recebia o total do código e a
+      // linha de 5 aparecia com 21 entregues e saldo 0.
+      const porCodigo = {};
+      p.itens.forEach(it => {
+        const k = it.codigo;
+        if (!porCodigo[k]) {
+          // BAIXA (faturado) das OEs FATURADAS do DNLog (fonte no banco).
+          const baixa = state.ordens
+            .filter(o => o.status !== 'CANCELADA' && o.faturada)
+            .reduce((acc, oe) => acc + qtdNaOE(oe, p.numero, k), 0);
+          // Reserva em OEs ATIVAS não faturadas (temporária). A OE em edição é
+          // ignorada para o saldo dela voltar a ficar disponível durante a edição.
+          const reservado = state.ordens
+            .filter(o => o.status !== 'CANCELADA' && o.status !== 'RASCUNHO' && !o.faturada && o.id !== (editingOE && editingOE.id))
+            .reduce((acc, oe) => acc + qtdNaOE(oe, p.numero, k), 0);
+          const sap = p.itens.filter(x => x.codigo === k).reduce((a, x) => a + (x.qtd_entregue || 0), 0);
+          // CONFRONTA com o SAP: a entrega faturada no DNLog e a qtd já baixada no
+          // SAP (qtd_entregue) são a MESMA entrega — usamos a MAIOR das duas, nunca
+          // a soma. O excedente do DNLog (faturado aqui, ainda não no SAP) e as
+          // reservas vão sendo encaixados nas linhas com espaço, em ordem.
+          porCodigo[k] = { extraEntregue: Math.max(0, baixa - sap), reservado };
+        }
+      });
       const itens = p.itens.map(it => {
-        // BAIXA (faturado) das OEs FATURADAS do DNLog (fonte no banco).
-        const baixaFaturada = state.ordens
-          .filter(o => o.status !== 'CANCELADA' && o.faturada)
-          .reduce((acc, oe) => acc + qtdNaOE(oe, p.numero, it.codigo), 0);
-        // CONFRONTA com o SAP: a entrega faturada no DNLog e a qtd já baixada no
-        // SAP (qtd_entregue) são a MESMA entrega — então usamos a MAIOR das duas,
-        // nunca a soma (senão conta em dobro quando o SAP já registrou). Assim o
-        // número acompanha quem estiver mais atualizado (SAP ou DNLog).
-        const qtdEntregueTotal = Math.max(it.qtd_entregue || 0, baixaFaturada);
-
-        // Reserva em OEs ATIVAS não faturadas (temporária). A OE em edição é
-        // ignorada para o saldo dela voltar a ficar disponível durante a edição.
-        const consumido = state.ordens
-          .filter(o => o.status !== 'CANCELADA' && o.status !== 'RASCUNHO' && !o.faturada && o.id !== (editingOE && editingOE.id))
-          .reduce((acc, oe) => acc + qtdNaOE(oe, p.numero, it.codigo), 0);
-
-        const saldoOriginal = it.qtd_bb - qtdEntregueTotal;
+        const g = porCodigo[it.codigo];
+        // Entregue da LINHA: o que o SAP diz desta linha + a parte do excedente do DNLog que cabe nela.
+        const entregueSap = Math.min(it.qtd_bb || 0, it.qtd_entregue || 0);
+        const extra = Math.min(g.extraEntregue, Math.max(0, (it.qtd_bb || 0) - entregueSap));
+        g.extraEntregue -= extra;
+        const qtdEntregueTotal = entregueSap + extra;
+        const saldoOriginal = Math.max(0, (it.qtd_bb || 0) - qtdEntregueTotal);
+        const consumido = Math.min(g.reservado, saldoOriginal);
+        g.reservado -= consumido;
         return {
           ...it,
           qtd_entregue_total: qtdEntregueTotal,  // útil pra exibição
@@ -13150,21 +13168,11 @@ const DetalhePedido = ({ ctx }) => {
             <tbody>
               {pedido.itens.map(it => {
                 const entregue = it.qtd_entregue_total || it.qtd_entregue || 0;
-                // Quanto deste item está em OE ativa
-                let emOE = 0;
-                oesVinculadas
-                  .filter(oe => oe.status !== 'CANCELADA' && oe.status !== 'RASCUNHO' && !oe.faturada)
-                  .forEach(oe => {
-                    getParadas(oe).forEach(p => {
-                      const ehDestePedido = p.pedido_numero === pedido.numero ||
-                        (p.pedidos_numeros && p.pedidos_numeros.includes(pedido.numero));
-                      if (!ehDestePedido) return;
-                      p.itens.forEach(iOE => {
-                        if (iOE.pedido_numero && iOE.pedido_numero !== pedido.numero) return;
-                        if (iOE.codigo === it.codigo) emOE += iOE.qtd_bb;
-                      });
-                    });
-                  });
+                // Quanto desta LINHA está em OE ativa = o que não foi entregue e
+                // também não está no saldo (já vem distribuído por linha no
+                // pedidosComSaldo — item repetido em 2 linhas não conta 2x).
+                const canceladoPed = pedido.cancelado || pedido.status_sap === 'cancelado';
+                const emOE = canceladoPed ? 0 : Math.max(0, (it.qtd_bb || 0) - entregue - (it.saldo || 0));
                 const totalItem = it.qtd_bb * it.valor_unitario;
                 return (
                   <tr key={it.codigo}>
