@@ -1094,6 +1094,36 @@ const fmtDateTime = (iso) => {
   return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
 const todayISO = () => new Date().toISOString().slice(0,10);
+// Gerador de Excel (SheetJS) carregado só quando alguém exporta — não pesa na abertura.
+let _xlsxPromise = null;
+const carregarXLSX = () => {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (!_xlsxPromise) _xlsxPromise = new Promise((ok, erro) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload = () => (window.XLSX ? ok(window.XLSX) : erro(new Error('gerador de Excel indisponível')));
+    s.onerror = () => { _xlsxPromise = null; erro(new Error('não foi possível carregar o gerador de Excel')); };
+    document.head.appendChild(s);
+  });
+  return _xlsxPromise;
+};
+// Monta uma aba: cabeçalho + linhas + linha TOTAL (fórmulas SUM nas colunas indicadas).
+const abaXLSX = (XLSX, cab, linhas, colsSoma, larguras) => {
+  const ws = XLSX.utils.aoa_to_sheet([cab, ...linhas], { cellDates: true, dateNF: 'dd/mm/yyyy' });
+  if (linhas.length && colsSoma && colsSoma.length) {
+    const r = linhas.length + 1; // linha (0-based) do total
+    XLSX.utils.sheet_add_aoa(ws, [['TOTAL']], { origin: { r, c: 0 } });
+    colsSoma.forEach(c => {
+      const col = XLSX.utils.encode_col(c);
+      ws[XLSX.utils.encode_cell({ r, c })] = { t: 'n', f: `SUM(${col}2:${col}${r})` };
+    });
+    ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r, c: cab.length - 1 } });
+  }
+  ws['!cols'] = (larguras || []).map(w => ({ wch: w }));
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(1, linhas.length), c: cab.length - 1 } }) };
+  return ws;
+};
+const dataXLSX = (v) => { if (!v) return null; const d = new Date(String(v).slice(0, 10) + 'T12:00:00'); return isNaN(d) ? null : d; };
 const addDays = (iso, days) => {
   const d = new Date(iso);
   d.setDate(d.getDate() + days);
@@ -5536,6 +5566,49 @@ const Estoque = ({ ctx }) => {
   const filtrado = filtroArmazem !== 'todos' || filtroGrupo !== 'todos' || filtroCultivar !== 'todos' || filtroItem !== 'todos' || !!q;
   const limparFiltros = () => { setFiltroArmazem('todos'); setFiltroGrupo('todos'); setFiltroCultivar('todos'); setFiltroItem('todos'); setQ(''); };
 
+  // EXPORTAR EXCEL — um arquivo com as 3 abas (Lotes, Compromissos, Terceiros).
+  // A aba que está aberta sai como está na tela (com filtros e ordenação); as
+  // outras saem completas.
+  const [exportando, setExportando] = useState(false);
+  const exportarExcel = async () => {
+    setExportando(true);
+    try {
+      const XLSX = await carregarXLSX();
+      const comDisp = (arr) => arr.map(x => ({ ...x, disponivel: disp(x) }));
+      const dadosLotes = aba === 'lotes' ? lista : comDisp(proprio.filter(l => l.lote)).sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
+      const dadosComp = aba === 'compromissos' ? lista : comDisp(proprio.filter(l => !l.lote)).sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
+      const dadosTerc = aba === 'terceiros' ? lista : comDisp(terceirosRaw).sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
+      const reservasTxt = (lote) => ((reservasLote && lote && reservasLote.get(normLote(lote))) || [])
+        .map(r => `${r.clienteNome} (${fmtNum(r.saldo || 0)})`).join('; ');
+      const reservasQtd = (lote) => ((reservasLote && lote && reservasLote.get(normLote(lote))) || []).reduce((a, r) => a + (r.saldo || 0), 0);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, abaXLSX(XLSX,
+        ['Filial', 'Armazém', 'Lote', 'Item', 'Descrição', 'Grupo', 'Validade', 'Saldo físico', 'Peso/BB (kg)', 'Peso total (kg)', 'Reservado QCDN', 'Reservas QCDN (cliente e qtd)'],
+        dadosLotes.map(l => [nomeFilial(ARMAZENS_PROPRIOS[l.armazem]), l.armazem_nome || l.armazem, l.lote, l.item_codigo, l.descricao, l.grupo_nome || '',
+          dataXLSX(l.validade), l.saldo || 0, l.peso_bb != null ? Number(l.peso_bb) : null,
+          l.peso_bb != null ? Math.round((l.saldo || 0) * l.peso_bb) : null, reservasQtd(l.lote) || null, reservasTxt(l.lote)]),
+        [7, 9, 10], [11, 26, 18, 11, 48, 22, 11, 11, 11, 13, 13, 50]), 'Lotes (físico)');
+      XLSX.utils.book_append_sheet(wb, abaXLSX(XLSX,
+        ['Filial', 'Armazém', 'Item', 'Descrição', 'Grupo', 'Saldo', 'Comprometido (PV)', 'A receber (PC)', 'Disponível', 'Status'],
+        dadosComp.map(l => [nomeFilial(ARMAZENS_PROPRIOS[l.armazem]), l.armazem_nome || l.armazem, l.item_codigo, l.descricao, l.grupo_nome || '',
+          l.saldo || 0, l.comprometido_venda || 0, l.a_receber_compra || 0, disp(l),
+          disp(l) < 0 ? 'Negativo' : (l.comprometido_venda || 0) > 0 ? 'Comprometido' : 'Livre']),
+        [5, 6, 7, 8], [11, 26, 11, 48, 22, 10, 16, 14, 11, 13]), 'Compromissos');
+      XLSX.utils.book_append_sheet(wb, abaXLSX(XLSX,
+        ['Tipo', 'Armazém', 'Lote', 'Item', 'Descrição', 'Grupo', 'Validade', 'Saldo', 'Comprometido', 'Disponível'],
+        dadosTerc.map(l => [l.tipo === 'em' ? 'EM terceiros (nosso)' : 'DE terceiros (de clientes)', l.armazem_nome || l.armazem, l.lote || '', l.item_codigo,
+          l.descricao, l.grupo_nome || '', dataXLSX(l.validade), l.saldo || 0, l.comprometido || 0, disp(l)]),
+        [7, 8, 9], [24, 26, 18, 11, 48, 22, 11, 10, 13, 11]), 'Terceiros');
+      const hojeBR = new Date().toLocaleDateString('pt-BR').replace(/\//g, '-');
+      XLSX.writeFile(wb, `Estoque DNLog ${hojeBR}.xlsx`, { compression: true });
+      ctx.showToast && ctx.showToast('Excel gerado', `Estoque ${hojeBR}${filtrado ? ' · aba atual com filtros' : ''}`);
+    } catch (e) {
+      alert('Não foi possível exportar o Excel: ' + (e && e.message ? e.message : e));
+    } finally {
+      setExportando(false);
+    }
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -5561,6 +5634,10 @@ const Estoque = ({ ctx }) => {
               }}><i className={'ti ' + ic}></i> {l} <span style={{ opacity: 0.55 }}>{n}</span></button>
             ))}
           </div>
+          <button className="btn btn-ghost" onClick={exportarExcel} disabled={exportando || (!lotesRaw.length && !terceirosRaw.length)}
+            title={filtrado ? 'Exporta as 3 abas; a aba atual sai com os filtros aplicados' : 'Exporta Lotes, Compromissos e Terceiros em um arquivo Excel'}>
+            <i className={'ti ' + (exportando ? 'ti-loader-2' : 'ti-file-spreadsheet')}></i> {exportando ? 'Gerando…' : 'Exportar Excel'}
+          </button>
           <span className="chip chip-green"><span className="status-dot"></span> SAP</span>
         </div>
       </div>
