@@ -2016,7 +2016,11 @@ const App = ({ usuario, onLogout }) => {
   const { pend: pendenteSapPorLote, jaBaixadoAtivas: jaBaixadoAtivasPorLote } = useMemo(() => {
     const entregueSap = {}; // 'PV-x|ITEM' -> entregue no SAP
     const pedidosConhecidos = new Set();
+    // Pedido CANCELADO no SAP nunca terá entregue: a NF da OE saiu por outro
+    // pedido (ex.: PV-143 BA cancelado e refeito como PV-266 no PI) ou a venda
+    // não aconteceu. Nos dois casos o saldo do SAP já está certo → não reserva.
     (DADOS_PEDIDOS || []).forEach(p => {
+      if (p.cancelado || p.status_sap === 'cancelado') return;
       pedidosConhecidos.add(p.numero);
       (p.itens || []).forEach(it => {
         const k = p.numero + '|' + it.codigo;
