@@ -681,9 +681,14 @@ export class SapClientService implements OnModuleDestroy {
     const cadResp = await this.axios.get('/BatchNumberDetails', {
       params: { $filter: `Batch eq '${this.odataLiteral(String(lote).trim())}'` },
     });
+    const pesoBB = (v: any) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
     const cadastro = (cadResp.data?.value || []).map((b: any) => ({
       item: b.ItemCode, descricao: b.ItemDescription, lote: b.Batch, status: b.Status,
       entrada: b.AdmissionDate, fabricacao: b.ManufacturingDate, validade: b.ExpirationDate,
+      // Peso líquido por big bag (UDF Agrotis na OBTN).
+      peso: pesoBB(b.U_AGRT_PesoLiquido),
+      // Categoria da semente — tenta os UDFs mais prováveis; null se o SAP não tiver.
+      categoria: b.U_AGRT_Categoria ?? b.U_AGRT_CategoriaSemente ?? b.U_CATEGORIA ?? b.U_Categoria ?? null,
     }));
     const itens = Array.from(new Set(cadastro.map((c: any) => c.item).filter(Boolean)));
     if (!itens.length) return { lote: alvo, cadastro, movimentos: [], erros: ['lote não encontrado no cadastro do SAP'] };

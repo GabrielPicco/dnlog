@@ -3283,6 +3283,23 @@ const RastreioSecao = ({ titulo, icon, extra, children }) => (
   </div>
 );
 
+// Status da validade (vencido / a vencer em 60d / ok) — self-contained.
+const validadeStatus = (v) => {
+  if (!v) return null;
+  const d = String(v).slice(0, 10);
+  const hoje = new Date().toISOString().slice(0, 10);
+  if (d < hoje) return 'vencido';
+  const lim = new Date(Date.now() + 60 * 86400000).toISOString().slice(0, 10);
+  return d <= lim ? 'avencer' : 'ok';
+};
+// Chip rotulado (Validade / Peso / Categoria...) pro cabeçalho do lote.
+const InfoChip = ({ label, valor, cor }) => (
+  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 9px' }}>
+    <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-dim)' }}>{label}</span>
+    <span className="mono" style={{ fontSize: 12, fontWeight: 700, color: cor || 'var(--text)' }}>{valor}</span>
+  </span>
+);
+
 const RastreioLoteCard = ({ r }) => {
   const multiItens = (r.cadastro || []).length > 1;
   const q = r.qualidade;
@@ -3294,12 +3311,28 @@ const RastreioLoteCard = ({ r }) => {
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ minWidth: 0, flex: '1 1 320px' }}>
           <div className="mono" style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent-light)' }}>{r.lote}</div>
-          {(r.cadastro || []).map(c => (
-            <div key={c.item} style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              <span className="mono">{c.item}</span> · {c.descricao}{c.entrada ? ` · entrada ${fmtDate(c.entrada)}` : ''}{c.validade ? ` · validade ${fmtDate(c.validade)}` : ''}
-            </div>
-          ))}
-          {!(r.cadastro || []).length && <div style={{ fontSize: 12, color: 'var(--red)' }}>Não encontrado no SAP</div>}
+          {(r.cadastro || []).map(c => {
+            const sv = validadeStatus(c.validade);
+            const categoria = c.categoria || (r.qualidade && r.qualidade.categoria) || null;
+            return (
+              <div key={c.item} style={{ marginTop: 4 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                  <span className="mono">{c.item}</span> · {c.descricao}
+                </div>
+                {/* Infos do lote no SAP em destaque: validade, peso, categoria */}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                  <InfoChip label="Validade" valor={c.validade ? fmtDate(c.validade) : '—'}
+                    cor={sv === 'vencido' ? 'var(--red)' : sv === 'avencer' ? 'var(--orange)' : 'var(--green)'} />
+                  <InfoChip label="Peso/BB" valor={c.peso != null ? `${fmtNum(c.peso)} kg` : '—'} />
+                  <InfoChip label="Categoria" valor={categoria || '—'}
+                    cor={categoria ? 'var(--text)' : 'var(--text-dim)'} />
+                  {c.entrada && <InfoChip label="Entrada" valor={fmtDate(c.entrada)} cor="var(--text-muted)" />}
+                  {c.status && <InfoChip label="Status" valor={c.status} cor="var(--text-muted)" />}
+                </div>
+              </div>
+            );
+          })}
+          {!(r.cadastro || []).length && <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 4 }}>Não encontrado no SAP</div>}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <div style={{ textAlign: 'right' }}>
