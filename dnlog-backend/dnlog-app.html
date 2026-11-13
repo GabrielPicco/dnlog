@@ -800,7 +800,9 @@ tbody tr:last-child td { border-bottom: none; }
   .main { padding: 16px 18px; }
   .metrics { grid-template-columns: repeat(2, 1fr) !important; }
   .cd-layout { grid-template-columns: 1fr !important; }
+  .frete-grid { grid-template-columns: 1fr !important; }
 }
+.frete-tab td.num, .frete-tab th.num { white-space: nowrap; }
 @media (max-width: 760px) {
   .main { padding: 12px 14px; }
   .metrics { grid-template-columns: 1fr !important; }
@@ -1260,6 +1262,100 @@ const totalValor = (oe) => getAllItens(oe).reduce((a, i) => a + ((i.qtd_bb || 0)
 const pesoBrutoOE = (oe) => pesoBrutoLista(getAllItens(oe));
 
 // ============================================================
+// FRETE — pago por km e fechado por VIAGEM do motorista, depois das entregas
+// (um motorista costuma levar várias OEs). Na OE fica só o modo (por km /
+// valor fechado / cliente paga) e o PREVISTO; no fechamento entra UM número
+// (km rodado ou R$ pago), rateado entre as OEs da viagem por volume × km do
+// cliente. Grava no JSON da OE (oe.frete) e a tabela (R$/km, km por cliente)
+// em config.frete — sem tabela nova no banco. O que é digitado nos
+// fechamentos (km de cada cliente, R$/km do motorista) é reaproveitado depois.
+// ============================================================
+const FRETE_MODOS = { KM: 'Por km (fecha após as entregas)', FECHADO: 'Valor fechado', CLIENTE: 'Cliente paga (FOB)' };
+// "1.234,56" / "1234,56" / "1.250" (milhar) / "7.5" -> número
+const numBR = (v) => {
+  const s = String(v == null ? '' : v).trim().replace(/\s/g, '');
+  if (!s) return 0;
+  const n = Number(s.includes(',') ? s.replace(/\./g, '').replace(',', '.')
+    : /^\d{1,3}(\.\d{3})+$/.test(s) ? s.replace(/\./g, '') : s);
+  return isFinite(n) ? n : 0;
+};
+const soDigitos = (s) => String(s || '').replace(/\D/g, '');
+const chaveMotorista = (oe) => soDigitos(oe && oe.motorista_cpf) || String((oe && oe.motorista_nome) || '').trim().toUpperCase() || '—';
+// Cliente da parada: CardCode do SAP (pelo pedido) ou, sem ele, o nome.
+const chaveClienteParada = (p) => {
+  const ped = (p && (p.pedido_numero || (p.pedidos_numeros || [])[0])) || ((((p && p.itens) || [])[0]) || {}).pedido_numero;
+  return cardCodeDoPedido(ped) || String((p && p.cliente) || '').trim().toUpperCase();
+};
+const bbDaParada = (p) => ((p && p.itens) || []).reduce((a, i) => a + (Number(i.qtd_bb) || 0), 0);
+const freteCfg = (config) => {
+  const f = (config && config.frete) || {};
+  return {
+    valorKmPadrao: Number(f.valorKmPadrao) || 0,
+    fatorRetorno: Number(f.fatorRetorno) || 2,
+    valorKmMotorista: f.valorKmMotorista || {},
+    kmCliente: f.kmCliente || {},
+    inicio: f.inicio || '',
+  };
+};
+// Aprendido nos fechamentos já feitos (o mais recente vale): km por cliente e R$/km por motorista.
+const freteAprendido = (ordens) => {
+  const km = {}, rkm = {};
+  (ordens || [])
+    .filter(o => o && o.frete && o.frete.fechamento)
+    .sort((a, b) => String(a.frete.fechamento.em || '').localeCompare(String(b.frete.fechamento.em || '')))
+    .forEach(o => {
+      (o.frete.rateio || []).forEach(r => { if (r.chave && r.km > 0) km[r.chave] = r.km; });
+      if (o.frete.fechamento.valor_km > 0) rkm[chaveMotorista(o)] = o.frete.fechamento.valor_km;
+    });
+  return { km, rkm };
+};
+const kmClienteFrete = (cfg, apr, chave) => {
+  const v = cfg.kmCliente[chave];
+  return Number(v && typeof v === 'object' ? v.km : v) || (apr && apr.km[chave]) || 0;
+};
+const valorKmMotorista = (cfg, apr, chave) => {
+  const v = cfg.valorKmMotorista[chave];
+  return Number(v && typeof v === 'object' ? v.valor : v) || (apr && apr.rkm[chave]) || cfg.valorKmPadrao || 0;
+};
+// Frete de uma OE: previsto (km do cliente mais distante × fator ida/volta × R$/km) e real (após o fechamento).
+const freteDaOE = (oe, cfg, apr) => {
+  const f = (oe && oe.frete) || {};
+  const modo = f.modo || 'KM';
+  if (modo === 'CLIENTE') return { modo, previsto: 0, real: 0, fechado: true };
+  if (modo === 'FECHADO') { const v = Number(f.valor_fechado) || 0; return { modo, previsto: v, real: v, fechado: true }; }
+  const kms = getParadas(oe).map(p => kmClienteFrete(cfg, apr, chaveClienteParada(p)));
+  const kmDist = kms.length ? Math.max(...kms) : 0;
+  const kmPrev = Number(f.km_previsto) || kmDist * cfg.fatorRetorno;
+  const rkm = valorKmMotorista(cfg, apr, chaveMotorista(oe));
+  const fechado = !!f.fechamento;
+  return {
+    modo, kmPrev, rkm, previsto: kmPrev * rkm, fechado,
+    real: fechado ? (Number(f.valor_real) || 0) : null,
+    faltaKm: !f.km_previsto && kms.some(k => !k), semValorKm: !rkm,
+  };
+};
+// Rateia um valor entre as paradas de várias OEs. Peso = volume × km do cliente;
+// se faltar o km de algum cliente, cai para só volume (e avisa no critério).
+const ratearFrete = (oes, valorTotal, kmPorChave) => {
+  const linhas = [];
+  oes.forEach(oe => getParadas(oe).forEach((p, idx) => {
+    const chave = chaveClienteParada(p);
+    linhas.push({ oeId: oe.id, numero: oe.numero, idx, chave, cliente: p.cliente || '—', pedidos: pedidosDaParada(p), bb: bbDaParada(p), km: Number(kmPorChave[chave]) || 0 });
+  }));
+  const usaKm = linhas.length > 0 && linhas.every(l => l.km > 0);
+  linhas.forEach(l => { l.peso = usaKm ? l.bb * l.km : l.bb; });
+  const tot = linhas.reduce((a, l) => a + l.peso, 0);
+  let soma = 0;
+  linhas.forEach(l => { l.valor = tot > 0 ? Math.round(valorTotal * l.peso / tot * 100) / 100 : 0; soma += l.valor; });
+  if (linhas.length && tot > 0) { // centavos que sobram do arredondamento vão para a maior parcela
+    const maior = linhas.reduce((m, l) => (l.peso > m.peso ? l : m), linhas[0]);
+    maior.valor = Math.round((maior.valor + valorTotal - soma) * 100) / 100;
+  }
+  linhas.forEach(l => { l.pct = tot > 0 ? l.peso / tot : 0; });
+  return { linhas, criterio: usaKm ? 'volume × km' : 'volume' };
+};
+
+// ============================================================
 // STORAGE
 // ============================================================
 const STORAGE_KEY = 'dnlog_v2';
@@ -1695,6 +1791,7 @@ const MENU_DEFS = [
   { id: 'embarque-fornecedores', label: 'Embarque - Fornecedores', perfis: ['OPERADOR', 'GESTOR'] },
   { id: 'conferencia', label: 'Conferência', perfis: ['OPERADOR', 'GESTOR', 'CONFERENTE'] },
   { id: 'triangulares', label: 'Triangulares', perfis: ['OPERADOR', 'GESTOR'] },
+  { id: 'fretes', label: 'Fretes', perfis: ['OPERADOR', 'GESTOR'] },
   { id: 'pedidos', label: 'Pedidos', perfis: ['OPERADOR', 'GESTOR'] },
   { id: 'estoque', label: 'Estoque', perfis: ['OPERADOR', 'GESTOR'] },
   { id: 'resumo-estoque', label: 'Resumo de estoque', perfis: ['OPERADOR', 'GESTOR', 'VISUALIZACAO', 'CONFERENTE'] },
@@ -2473,6 +2570,7 @@ const App = ({ usuario, onLogout }) => {
         {screenEff === 'resumo-estoque' && <ResumoEstoque ctx={ctx} />}
         {screenEff === 'conferencia' && <Conferencia ctx={ctx} />}
         {screenEff === 'triangulares' && <Triangulares ctx={ctx} />}
+        {screenEff === 'fretes' && <Fretes ctx={ctx} />}
         {screenEff === 'nova-oe' && <NovaOE ctx={ctx} />}
         {screenEff === 'editar-oe' && <NovaOE ctx={ctx} editMode />}
         {screenEff === 'detalhe-oe' && <DetalheOE ctx={ctx} />}
@@ -4153,6 +4251,7 @@ const Sidebar = ({ ctx }) => {
     { id: 'triangulares', icon: 'ti-arrows-shuffle', label: 'Triangulares', badge: aguardandoTriang || null,
       badgeStyle: aguardandoTriang ? { background: 'var(--blue-bg)', color: 'var(--blue)' } : null,
       perfis: ['OPERADOR','GESTOR'] },
+    { id: 'fretes', icon: 'ti-route', label: 'Fretes', perfis: ['OPERADOR','GESTOR'] },
     { id: 'pedidos', icon: 'ti-clipboard-list', label: 'Pedidos', perfis: ['OPERADOR','GESTOR'] },
     { id: 'estoque', icon: 'ti-building-warehouse', label: 'Estoque', perfis: ['OPERADOR','GESTOR'] },
     { id: 'resumo-estoque', icon: 'ti-device-mobile', label: 'Resumo de estoque', perfis: ['OPERADOR','GESTOR','VISUALIZACAO','CONFERENTE'] },
@@ -6753,6 +6852,22 @@ const NovaOE = ({ ctx, editMode }) => {
   const [hora_prevista, setHoraPrevista] = useState(initial.hora_prevista || '08:00');
   const [doca, setDoca] = useState(initial.doca || '');
   const [observacoes, setObservacoes] = useState(initial.observacoes || '');
+  // Frete: por km (fecha depois, por viagem) · valor fechado · cliente paga
+  const freteIni = initial.frete || {};
+  const [freteModo, setFreteModo] = useState(freteIni.modo || 'KM');
+  const [freteValor, setFreteValor] = useState(freteIni.valor_fechado ? String(freteIni.valor_fechado).replace('.', ',') : '');
+  const [freteKm, setFreteKm] = useState(freteIni.km_previsto ? String(freteIni.km_previsto) : '');
+  const fretePrev = useMemo(() => {
+    const oeTmp = {
+      motorista_cpf, motorista_nome,
+      paradas: paradas.filter(p => p.pedidosNumeros && p.pedidosNumeros.length > 0).map(p => {
+        const ped = ctx.pedidos.find(pp => pp.numero === p.pedidosNumeros[0]);
+        return { pedido_numero: p.pedidosNumeros[0], cliente: ped ? ped.cliente : '', itens: p.itensSelecionados };
+      }),
+      frete: { modo: freteModo, valor_fechado: numBR(freteValor), km_previsto: numBR(freteKm) },
+    };
+    return freteDaOE(oeTmp, freteCfg(ctx.config), freteAprendido(ctx.state.ordens));
+  }, [paradas, motorista_cpf, motorista_nome, freteModo, freteValor, freteKm, ctx.config, ctx.state.ordens]);
 
   const [busca, setBusca] = useState('');
 
@@ -7017,6 +7132,14 @@ const NovaOE = ({ ctx, editMode }) => {
       fornecedor_nome: modalidade === 'TRIANGULAR' ? fornecedor : null,
       fornecedor_codigo: modalidade === 'TRIANGULAR' ? fornecedorCodigo : null,
       fornecedor_endereco: modalidade === 'TRIANGULAR' ? fornecedor_endereco : null,
+      // Mantém o fechamento (se já houver) e só troca modo/valor/km previsto.
+      frete: {
+        ...(initial.frete || {}),
+        modo: freteModo,
+        valor_fechado: freteModo === 'FECHADO' ? numBR(freteValor) : null,
+        km_previsto: freteModo === 'KM' && numBR(freteKm) > 0 ? numBR(freteKm) : null,
+        ...(freteModo !== 'KM' ? { fechamento: null, rateio: null, valor_real: null } : {}),
+      },
     };
 
     // Cadastra/atualiza o motorista+veículo para reuso futuro (não bloqueia o fluxo).
@@ -7637,6 +7760,44 @@ const NovaOE = ({ ctx, editMode }) => {
                   <textarea className="input" rows="2" value={observacoes} onChange={e => setObservacoes(e.target.value)}
                     placeholder="Ex: Conferir lacre antes da saída. Cliente pede entrega em horário comercial..." />
                 </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, marginTop: 16, paddingTop: 16, borderTop: '1px dashed var(--border)' }}>
+                  <i className="ti ti-route" style={{ fontSize: 14, color: 'var(--accent-light)' }}></i>
+                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)' }}>Frete</span>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                  {Object.entries(FRETE_MODOS).map(([k, l]) => (
+                    <button key={k} type="button" onClick={() => setFreteModo(k)} className="btn" style={{
+                      fontSize: 12, padding: '6px 12px',
+                      background: freteModo === k ? 'var(--accent-glow)' : 'var(--bg-card)',
+                      border: '1px solid ' + (freteModo === k ? 'var(--accent)' : 'var(--border-strong)'),
+                      color: freteModo === k ? 'var(--text)' : 'var(--text-muted)', fontWeight: freteModo === k ? 700 : 500,
+                    }}>{l}</button>
+                  ))}
+                </div>
+                {freteModo === 'KM' && (
+                  <div className="field-row" style={{ alignItems: 'flex-end' }}>
+                    <div className="field" style={{ marginBottom: 0 }}><label className="field-label">Km previsto (opcional)</label>
+                      <input className="input mono" inputMode="decimal" value={freteKm} onChange={e => setFreteKm(e.target.value)}
+                        placeholder={fretePrev.kmPrev && !numBR(freteKm) ? `${fmtNum(Math.round(fretePrev.kmPrev))} (estimado)` : 'Ex: 900'} /></div>
+                    <div className="field" style={{ marginBottom: 0, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                      Previsto: <strong style={{ color: 'var(--text)' }}>{fretePrev.previsto ? fmtMoney(fretePrev.previsto) : '—'}</strong>
+                      {fretePrev.kmPrev ? ` · ${fmtNum(Math.round(fretePrev.kmPrev))} km × ${fretePrev.rkm ? fmtMoney(fretePrev.rkm) : 'R$/km não cadastrado'}` : ''}
+                      <div style={{ fontSize: 11 }}>
+                        {fretePrev.faltaKm ? 'Km de algum cliente ainda não cadastrado. ' : ''}O valor real é lançado no fechamento da viagem do motorista, em Fretes.
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {freteModo === 'FECHADO' && (
+                  <div className="field-row">
+                    <div className="field" style={{ marginBottom: 0 }}><label className="field-label">Valor do frete desta OE (R$)</label>
+                      <input className="input mono" inputMode="decimal" value={freteValor} onChange={e => setFreteValor(e.target.value)} placeholder="Ex: 4.500,00" /></div>
+                  </div>
+                )}
+                {freteModo === 'CLIENTE' && (
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>O cliente contrata e paga o frete. A OE não entra no custo de frete.</div>
+                )}
               </div>
             </div>
           )}
@@ -7694,6 +7855,10 @@ const NovaOE = ({ ctx, editMode }) => {
             <div className="summary-row">
               <span className="label">Data</span>
               <span className="value mono">{fmtDate(data_prevista)} {hora_prevista}</span>
+            </div>
+            <div className="summary-row">
+              <span className="label">Frete</span>
+              <span className="value" style={{ fontSize: 11 }}>{freteModo === 'CLIENTE' ? 'Cliente paga' : fretePrev.previsto ? `${freteModo === 'KM' ? 'previsto ' : ''}${fmtMoney(fretePrev.previsto)}` : (freteModo === 'KM' ? 'por km · a fechar' : '—')}</span>
             </div>
             <div className="summary-row total">
               <span className="label" style={{ color: 'var(--text)', fontWeight: 600 }}>Valor da carga</span>
@@ -9322,6 +9487,9 @@ const DetalheOE = ({ ctx }) => {
         </div>
       </div>
 
+      {/* FRETE (só tela) */}
+      <FreteOEBox ctx={ctx} oe={oeAtual} />
+
       {/* AVISO DE TRIANGULAR */}
       {oeAtual.modalidade === 'TRIANGULAR' && oeAtual.status !== 'CANCELADA' && (
         <div className="no-print" style={{ background: 'var(--blue-bg)', border: '1px solid var(--blue)', borderLeft: '4px solid var(--blue)', borderRadius: 8, padding: '12px 18px', marginBottom: 20, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
@@ -10926,6 +11094,492 @@ const AuthGate = () => {
 // ============================================================
 // LOGS DE AUDITORIA (ações/edições de todas as telas)
 // ============================================================
+// ============================================================
+// FRETES — fechamento por viagem do motorista, fechados e configuração.
+// ============================================================
+const FRETE_STATUS_VIAGEM = ['EMBARCADA', 'EM_TRANSITO', 'ENTREGUE'];
+const dataDaOE = (o) => String((o && (o.data_prevista || o.criado_em)) || '').slice(0, 10);
+const clientesDaOE = (oe) => Array.from(new Set(getParadas(oe).map(p => p.cliente).filter(Boolean))).join(' · ');
+
+const Fretes = ({ ctx }) => {
+  const [aba, setAba] = useState('fechar'); // fechar | fechados | oes | config
+  const ordens = ctx.state.ordens;
+  const cfg = freteCfg(ctx.config);
+  const apr = useMemo(() => freteAprendido(ordens), [ordens]);
+  const [desde, setDesde] = useState(cfg.inicio || addDays(todayISO(), -45));
+
+  const ativas = useMemo(() => ordens.filter(o => o.status !== 'CANCELADA' && o.status !== 'RASCUNHO' && dataDaOE(o) >= desde), [ordens, desde]);
+  const aFechar = useMemo(() => ativas.filter(o =>
+    (FRETE_STATUS_VIAGEM.includes(o.status) || o.faturada) &&
+    (!o.frete || !o.frete.modo || o.frete.modo === 'KM') && !(o.frete && o.frete.fechamento)
+  ), [ativas]);
+  const fechamentos = useMemo(() => {
+    const m = new Map();
+    ordens.forEach(o => {
+      const f = o.frete && o.frete.fechamento;
+      if (!f) return;
+      if (!m.has(f.id)) m.set(f.id, { ...f, oesObj: [] });
+      m.get(f.id).oesObj.push(o);
+    });
+    return Array.from(m.values()).sort((a, b) => String(b.em).localeCompare(String(a.em)));
+  }, [ordens]);
+
+  // Indicadores (no período)
+  const ind = useMemo(() => {
+    let real = 0, previsto = 0, bbReal = 0, cargaReal = 0;
+    ativas.forEach(o => {
+      const f = freteDaOE(o, cfg, apr);
+      if (f.modo === 'CLIENTE') return;
+      if (f.fechado) { real += f.real || 0; bbReal += totalBBs(o); cargaReal += totalValor(o); }
+      else if (FRETE_STATUS_VIAGEM.includes(o.status) || o.faturada) previsto += f.previsto || 0;
+    });
+    return { real, previsto, porBB: bbReal ? real / bbReal : 0, pct: cargaReal ? real / cargaReal : 0 };
+  }, [ativas, ctx.config, apr]);
+
+  const tabs = [['fechar', 'A fechar', 'ti-route', aFechar.length], ['fechados', 'Fechamentos', 'ti-checks', fechamentos.length], ['oes', 'Frete por OE', 'ti-list-details', null], ['config', 'Tabela de frete', 'ti-adjustments', null]];
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="crumb"><i className="ti ti-home"></i> Logística · Fretes</div>
+          <h1 className="page-title">Fretes</h1>
+          <p className="page-subtitle">Pago por km · fechado por viagem do motorista depois das entregas · rateado entre as OEs por volume × distância</p>
+        </div>
+        <div style={{ display: 'flex', gap: 4, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: 2, flexWrap: 'wrap' }}>
+          {tabs.map(([k, l, ic, n]) => (
+            <button key={k} onClick={() => setAba(k)} style={{
+              background: aba === k ? 'var(--bg-hover)' : 'none', color: aba === k ? 'var(--text)' : 'var(--text-muted)',
+              border: 'none', padding: '6px 12px', borderRadius: 4, fontSize: 12, fontFamily: 'inherit', cursor: 'pointer',
+              fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
+            }}><i className={'ti ' + ic}></i> {l}{n != null && <span style={{ opacity: 0.55 }}>{n}</span>}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="metrics" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: 16 }}>
+        <div className="metric"><div className="metric-label"><i className="ti ti-cash"></i> Frete fechado</div><div className="metric-value" style={{ fontSize: 22 }}>{fmtMoney(ind.real)}</div><div className="metric-delta">desde {fmtDate(desde)}</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-clock"></i> Previsto a fechar</div><div className="metric-value" style={{ fontSize: 22 }}>{fmtMoney(ind.previsto)}</div><div className="metric-delta">{aFechar.length} OE(s) embarcada(s) sem fechamento</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-package"></i> Frete por unidade</div><div className="metric-value" style={{ fontSize: 22 }}>{fmtMoney(ind.porBB)}</div><div className="metric-delta">média das OEs fechadas</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-percentage"></i> Frete / valor da carga</div><div className="metric-value" style={{ fontSize: 22 }}>{(ind.pct * 100).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%</div><div className="metric-delta">das OEs fechadas</div></div>
+      </div>
+
+      {aba !== 'config' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, fontSize: 12, color: 'var(--text-muted)' }}>
+          <i className="ti ti-calendar"></i> OEs a partir de
+          <input type="date" className="input mono" style={{ width: 'auto', padding: '5px 8px', fontSize: 12 }} value={desde} onChange={e => setDesde(e.target.value || '2000-01-01')} />
+        </div>
+      )}
+
+      {aba === 'fechar' && <FretesAFechar ctx={ctx} oes={aFechar} cfg={cfg} apr={apr} />}
+      {aba === 'fechados' && <FretesFechados ctx={ctx} fechamentos={fechamentos} />}
+      {aba === 'oes' && <FretesPorOE ctx={ctx} oes={ativas} cfg={cfg} apr={apr} />}
+      {aba === 'config' && <FretesConfig ctx={ctx} cfg={cfg} apr={apr} />}
+    </div>
+  );
+};
+
+// --- A FECHAR: escolhe o motorista, marca as OEs da viagem, informa km ou R$ e rateia.
+const FretesAFechar = ({ ctx, oes, cfg, apr }) => {
+  const grupos = useMemo(() => {
+    const m = new Map();
+    oes.forEach(o => {
+      const k = chaveMotorista(o);
+      if (!m.has(k)) m.set(k, { chave: k, nome: o.motorista_nome || '(sem motorista)', placa: o.veiculo_placa || '', oes: [] });
+      m.get(k).oes.push(o);
+    });
+    return Array.from(m.values()).map(g => ({ ...g, oes: g.oes.sort((a, b) => dataDaOE(a).localeCompare(dataDaOE(b))) }))
+      .sort((a, b) => b.oes.length - a.oes.length);
+  }, [oes]);
+  const [motSel, setMotSel] = useState('');
+  const grupo = grupos.find(g => g.chave === motSel) || null;
+  const [sel, setSel] = useState({});
+  const [kmRodado, setKmRodado] = useState('');
+  const [valorPago, setValorPago] = useState('');
+  const [rkmTxt, setRkmTxt] = useState('');
+  const [kmEdit, setKmEdit] = useState({});
+  const [obs, setObs] = useState('');
+
+  const escolher = (g) => {
+    setMotSel(g.chave);
+    const s = {}; g.oes.forEach(o => { s[o.id] = true; }); setSel(s);
+    const r = valorKmMotorista(cfg, apr, g.chave);
+    setRkmTxt(r ? String(r).replace('.', ',') : '');
+    setKmRodado(''); setValorPago(''); setKmEdit({}); setObs('');
+  };
+
+  const selOEs = grupo ? grupo.oes.filter(o => sel[o.id]) : [];
+  const rkm = numBR(rkmTxt);
+  const km = numBR(kmRodado);
+  const valorInformado = numBR(valorPago);
+  const valorTotal = valorInformado > 0 ? valorInformado : km * rkm;
+  const kmPorChave = {};
+  selOEs.forEach(o => getParadas(o).forEach(p => {
+    const c = chaveClienteParada(p);
+    kmPorChave[c] = kmEdit[c] != null ? numBR(kmEdit[c]) : kmClienteFrete(cfg, apr, c);
+  }));
+  const rateio = ratearFrete(selOEs, valorTotal, kmPorChave);
+  const previstoSel = selOEs.reduce((a, o) => a + (freteDaOE(o, cfg, apr).previsto || 0), 0);
+  const bbSel = selOEs.reduce((a, o) => a + totalBBs(o), 0);
+  const clientesSel = Array.from(new Map(rateio.linhas.map(l => [l.chave, l])).values());
+
+  const fechar = () => {
+    if (!selOEs.length || !(valorTotal > 0)) return;
+    const quem = (ctx.usuario && (ctx.usuario.nome || ctx.usuario.email)) || ctx.perfilAtivo || 'Sistema';
+    const fech = {
+      id: 'fr_' + Date.now().toString(36), em: new Date().toISOString(), por: quem,
+      motorista: grupo.nome, motorista_chave: grupo.chave, placa: grupo.placa,
+      km_total: km || null, valor_km: rkm || null, valor_total: Math.round(valorTotal * 100) / 100,
+      valor_informado: valorInformado > 0, oes: selOEs.map(o => o.numero), criterio: rateio.criterio, obs: obs || '',
+    };
+    selOEs.forEach(o => {
+      const ls = rateio.linhas.filter(l => l.oeId === o.id);
+      ctx.atualizarOE(o.id, {
+        frete: {
+          ...(o.frete || {}), modo: 'KM',
+          valor_real: Math.round(ls.reduce((a, l) => a + l.valor, 0) * 100) / 100,
+          rateio: ls.map(l => ({ idx: l.idx, chave: l.chave, cliente: l.cliente, pedidos: l.pedidos, bb: l.bb, km: l.km, valor: l.valor })),
+          fechamento: fech,
+        },
+      });
+    });
+    ctx.logAcao && ctx.logAcao('Frete fechado', `${grupo.nome} · ${selOEs.map(o => o.numero).join(', ')} · ${fmtMoney(fech.valor_total)}${km ? ` · ${fmtNum(km)} km` : ''}`);
+    ctx.showToast('Frete fechado', `${selOEs.length} OE(s) · ${fmtMoney(fech.valor_total)}`);
+    setMotSel(''); setSel({});
+  };
+
+  if (!oes.length) return (
+    <div className="panel"><div className="empty"><i className="ti ti-checks"></i><div>Nenhuma OE embarcada aguardando fechamento de frete no período</div></div></div>
+  );
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 300px) 1fr', gap: 16, alignItems: 'start' }} className="frete-grid">
+      <div className="panel">
+        <div className="panel-header"><div className="panel-title">1. Motorista</div></div>
+        {grupos.map(g => {
+          const ativo = g.chave === motSel;
+          return (
+            <button key={g.chave} onClick={() => escolher(g)} style={{
+              display: 'flex', width: '100%', textAlign: 'left', gap: 10, alignItems: 'center', padding: '10px 14px',
+              background: ativo ? 'var(--accent-glow)' : 'none', border: 'none', borderBottom: '1px solid var(--border)',
+              borderLeft: '3px solid ' + (ativo ? 'var(--accent)' : 'transparent'), cursor: 'pointer', color: 'var(--text)', fontFamily: 'inherit',
+            }}>
+              <i className="ti ti-steering-wheel" style={{ fontSize: 18, color: 'var(--text-muted)' }}></i>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.nome}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{g.placa && <span className="mono">{g.placa} · </span>}{fmtDate(dataDaOE(g.oes[0]))}{g.oes.length > 1 ? ` a ${fmtDate(dataDaOE(g.oes[g.oes.length - 1]))}` : ''}</div>
+              </div>
+              <span className="chip chip-neutral" style={{ fontSize: 11 }}>{g.oes.length} OE</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {!grupo ? (
+        <div className="panel"><div className="empty"><i className="ti ti-arrow-left"></i><div>Escolha o motorista para fechar o frete da viagem</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6, maxWidth: 420 }}>Marque as OEs da viagem, informe o km rodado (ou o valor pago) e o DNLog divide entre as OEs e os clientes.</div></div></div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="panel">
+            <div className="panel-header">
+              <div className="panel-title">2. OEs da viagem · {grupo.nome}</div>
+              <div className="panel-sub">{selOEs.length} de {grupo.oes.length} marcada(s) · {fmtNum(bbSel)} un.</div>
+            </div>
+            <div className="frete-tab" style={{ overflowX: 'auto' }}><table>
+              <thead><tr><th style={{ width: 30 }}></th><th>OE</th><th>Data</th><th>Cliente(s)</th><th className="num">Un.</th><th>Status</th><th className="num">Previsto</th></tr></thead>
+              <tbody>{grupo.oes.map(o => {
+                const f = freteDaOE(o, cfg, apr);
+                return (
+                  <tr key={o.id} style={{ opacity: sel[o.id] ? 1 : 0.55 }}>
+                    <td><input type="checkbox" checked={!!sel[o.id]} onChange={e => setSel(s => ({ ...s, [o.id]: e.target.checked }))} /></td>
+                    <td className="mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{o.numero}</td>
+                    <td className="mono cell-muted" style={{ fontSize: 11 }}>{fmtDate(dataDaOE(o))}</td>
+                    <td style={{ fontSize: 12 }}>{clientesDaOE(o)}</td>
+                    <td className="num mono">{fmtNum(totalBBs(o))}</td>
+                    <td><StatusChip status={o.status} /></td>
+                    <td className="num mono cell-muted" style={{ fontSize: 11 }}>{f.previsto ? fmtMoney(f.previsto) : '—'}</td>
+                  </tr>
+                );
+              })}</tbody>
+            </table></div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-header"><div className="panel-title">3. Valor da viagem</div><div className="panel-sub">Informe o km rodado <strong>ou</strong> o valor pago</div></div>
+            <div style={{ padding: '14px 18px' }}>
+              <div className="field-row">
+                <div className="field"><label className="field-label">Km rodado na viagem</label>
+                  <input className="input mono" inputMode="decimal" value={kmRodado} onChange={e => setKmRodado(e.target.value)} placeholder="Ex: 1.250" /></div>
+                <div className="field"><label className="field-label">R$ por km</label>
+                  <input className="input mono" inputMode="decimal" value={rkmTxt} onChange={e => setRkmTxt(e.target.value)} placeholder="Ex: 7,50" /></div>
+                <div className="field"><label className="field-label">Ou valor pago (R$)</label>
+                  <input className="input mono" inputMode="decimal" value={valorPago} onChange={e => setValorPago(e.target.value)} placeholder="Substitui km × R$/km" /></div>
+              </div>
+              <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'baseline', fontSize: 12, color: 'var(--text-muted)' }}>
+                <span>Total da viagem: <strong style={{ fontSize: 18, color: 'var(--accent-light)' }}>{fmtMoney(valorTotal)}</strong></span>
+                {valorInformado > 0 ? <span>valor pago informado</span> : km > 0 && rkm > 0 ? <span>{fmtNum(km)} km × {fmtMoney(rkm)}</span> : null}
+                {previstoSel > 0 && <span>Previsto: {fmtMoney(previstoSel)}{valorTotal > 0 && <> · <strong style={{ color: valorTotal > previstoSel * 1.1 ? 'var(--orange)' : 'var(--green)' }}>{((valorTotal / previstoSel - 1) * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%</strong></>}</span>}
+                {bbSel > 0 && valorTotal > 0 && <span>{fmtMoney(valorTotal / bbSel)} por unidade</span>}
+              </div>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-header">
+              <div className="panel-title">4. Rateio por cliente</div>
+              <div className="panel-sub">Critério: <strong>{rateio.criterio}</strong>{rateio.criterio === 'volume' && clientesSel.length > 1 ? ' · informe o km de todos os clientes para ratear por distância' : ''}</div>
+            </div>
+            <div className="frete-tab" style={{ overflowX: 'auto' }}><table>
+              <thead><tr><th>OE</th><th>Cliente</th><th className="num">Un.</th><th className="num" style={{ width: 120 }}>Km até o cliente</th><th className="num">Peso</th><th className="num">Frete</th><th className="num">R$/un.</th></tr></thead>
+              <tbody>{rateio.linhas.map(l => (
+                <tr key={l.oeId + '_' + l.idx}>
+                  <td className="mono" style={{ whiteSpace: 'nowrap' }}>{l.numero}</td>
+                  <td style={{ fontSize: 12 }}>{l.cliente}</td>
+                  <td className="num mono">{fmtNum(l.bb)}</td>
+                  <td className="num">
+                    <input className="input mono" inputMode="decimal" style={{ width: 90, padding: '4px 6px', fontSize: 12, textAlign: 'right', borderColor: l.km ? 'var(--border-strong)' : 'var(--orange)' }}
+                      value={kmEdit[l.chave] != null ? kmEdit[l.chave] : (l.km ? String(l.km) : '')}
+                      onChange={e => setKmEdit(m => ({ ...m, [l.chave]: e.target.value }))} placeholder="km" />
+                  </td>
+                  <td className="num mono cell-muted" style={{ fontSize: 11 }}>{(l.pct * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%</td>
+                  <td className="num mono" style={{ fontWeight: 700 }}>{fmtMoney(l.valor)}</td>
+                  <td className="num mono cell-muted" style={{ fontSize: 11 }}>{l.bb ? fmtMoney(l.valor / l.bb) : '—'}</td>
+                </tr>
+              ))}</tbody>
+            </table></div>
+            <div style={{ padding: '12px 18px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--border)' }}>
+              <input className="input" style={{ flex: '1 1 240px' }} value={obs} onChange={e => setObs(e.target.value)} placeholder="Observação (opcional): pedágio incluso, recibo nº…" />
+              <button className="btn btn-primary" disabled={!selOEs.length || !(valorTotal > 0) || !ctx.podeEditar} onClick={fechar}>
+                <i className="ti ti-check"></i> Fechar frete · {fmtMoney(valorTotal)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// --- FECHAMENTOS já feitos (com reabrir).
+const FretesFechados = ({ ctx, fechamentos }) => {
+  const reabrir = (f) => {
+    if (!confirm(`Reabrir o frete de ${f.motorista} (${f.oesObj.map(o => o.numero).join(', ')})? As OEs voltam para "A fechar".`)) return;
+    f.oesObj.forEach(o => ctx.atualizarOE(o.id, { frete: { ...(o.frete || {}), valor_real: null, rateio: null, fechamento: null } }));
+    ctx.logAcao && ctx.logAcao('Frete reaberto', `${f.motorista} · ${f.oesObj.map(o => o.numero).join(', ')} · ${fmtMoney(f.valor_total)}`);
+    ctx.showToast('Frete reaberto', `${f.oesObj.length} OE(s) de volta para "A fechar"`);
+  };
+  if (!fechamentos.length) return <div className="panel"><div className="empty"><i className="ti ti-route"></i><div>Nenhum frete fechado ainda</div></div></div>;
+  return (
+    <div className="panel">
+      <div className="frete-tab" style={{ overflowX: 'auto' }}><table>
+        <thead><tr><th>Fechado em</th><th>Motorista</th><th>OEs</th><th className="num">Un.</th><th className="num">Km</th><th className="num">R$/km</th><th className="num">Total</th><th className="num">R$/un.</th><th>Rateio</th><th></th></tr></thead>
+        <tbody>{fechamentos.map(f => {
+          const bb = f.oesObj.reduce((a, o) => a + totalBBs(o), 0);
+          return (
+            <tr key={f.id}>
+              <td className="mono cell-muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDateTime(f.em)}<div style={{ fontSize: 10 }}>{f.por}</div></td>
+              <td style={{ fontSize: 12, fontWeight: 600 }}>{f.motorista}{f.placa && <div className="mono cell-muted" style={{ fontSize: 10, fontWeight: 400 }}>{f.placa}</div>}</td>
+              <td className="mono" style={{ fontSize: 11 }}>{f.oesObj.map(o => o.numero).join(', ')}{f.obs && <div style={{ fontFamily: 'inherit', color: 'var(--text-muted)' }}>{f.obs}</div>}</td>
+              <td className="num mono">{fmtNum(bb)}</td>
+              <td className="num mono">{f.km_total ? fmtNum(f.km_total) : '—'}</td>
+              <td className="num mono">{f.valor_km ? fmtMoney(f.valor_km) : '—'}</td>
+              <td className="num mono" style={{ fontWeight: 700 }}>{fmtMoney(f.valor_total)}</td>
+              <td className="num mono cell-muted">{bb ? fmtMoney(f.valor_total / bb) : '—'}</td>
+              <td><span className="chip chip-neutral" style={{ fontSize: 10 }}>{f.criterio}</span></td>
+              <td>{ctx.podeEditar && <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }} onClick={() => reabrir(f)}><i className="ti ti-arrow-back-up"></i> Reabrir</button>}</td>
+            </tr>
+          );
+        })}</tbody>
+      </table></div>
+    </div>
+  );
+};
+
+// --- FRETE POR OE (relatório + Excel por OE e por cliente/pedido).
+const FretesPorOE = ({ ctx, oes, cfg, apr }) => {
+  const linhas = useMemo(() => oes.map(o => {
+    const f = freteDaOE(o, cfg, apr);
+    const valor = f.fechado ? (f.real || 0) : (f.previsto || 0);
+    return { o, f, valor, bb: totalBBs(o), carga: totalValor(o) };
+  }).sort((a, b) => dataDaOE(b.o).localeCompare(dataDaOE(a.o))), [oes, cfg, apr]);
+  const situacao = (r) => r.f.modo === 'CLIENTE' ? 'Cliente paga' : r.f.modo === 'FECHADO' ? 'Valor fechado' : r.f.fechado ? 'Fechado' : 'Previsto';
+
+  const exportar = async () => {
+    let XLSX;
+    try { XLSX = await carregarXLSX(); } catch (e) { ctx.showToast('Não foi possível exportar', e.message); return; }
+    const a1 = linhas.map(r => [r.o.numero, dataXLSX(dataDaOE(r.o)), r.o.status, r.o.motorista_nome || '', r.o.veiculo_placa || '', clientesDaOE(r.o), pedidosDaOE(r.o).join(', '),
+      FRETE_MODOS[r.f.modo] || r.f.modo, situacao(r), r.bb, Math.round(r.carga * 100) / 100, Math.round((r.f.previsto || 0) * 100) / 100,
+      r.f.real != null ? r.f.real : null, Math.round(r.valor * 100) / 100, r.bb ? Math.round(r.valor / r.bb * 100) / 100 : null,
+      r.carga ? Math.round(r.valor / r.carga * 10000) / 100 : null, r.o.frete && r.o.frete.fechamento ? dataXLSX(r.o.frete.fechamento.em) : null]);
+    // Por cliente/pedido: rateio do fechamento; sem fechamento, rateia o valor da OE pelo mesmo critério.
+    const a2 = [];
+    linhas.forEach(r => {
+      const rat = (r.o.frete && r.o.frete.rateio && r.o.frete.rateio.length)
+        ? r.o.frete.rateio
+        : ratearFrete([r.o], r.valor, Object.fromEntries(getParadas(r.o).map(p => [chaveClienteParada(p), kmClienteFrete(cfg, apr, chaveClienteParada(p))]))).linhas;
+      const pars = getParadas(r.o);
+      rat.forEach(l => {
+        const p = pars[l.idx] || {};
+        a2.push([r.o.numero, dataXLSX(dataDaOE(r.o)), l.cliente, l.chave, (l.pedidos || pedidosDaParada(p)).join(', '), p.vendedor || r.o.vendedor || '', situacao(r), l.bb, l.km || null, l.valor, l.bb ? Math.round(l.valor / l.bb * 100) / 100 : null]);
+      });
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, abaXLSX(XLSX, ['OE', 'Data', 'Status', 'Motorista', 'Placa', 'Cliente(s)', 'Pedido(s)', 'Modo', 'Situação', 'Unidades', 'Valor da carga', 'Frete previsto', 'Frete real', 'Frete considerado', 'Frete por un.', 'Frete / carga (%)', 'Fechado em'],
+      a1, [9, 10, 11, 12, 13], [14, 11, 12, 26, 10, 40, 18, 26, 13, 9, 15, 14, 14, 15, 12, 11, 11]), 'Frete por OE');
+    XLSX.utils.book_append_sheet(wb, abaXLSX(XLSX, ['OE', 'Data', 'Cliente', 'Cód. cliente', 'Pedido(s)', 'Vendedor', 'Situação', 'Unidades', 'Km até o cliente', 'Frete', 'Frete por un.'],
+      a2, [7, 9], [14, 11, 40, 12, 18, 24, 13, 9, 12, 14, 12]), 'Frete por cliente');
+    XLSX.writeFile(wb, `Fretes DNLog ${todayISO().split('-').reverse().join('-')}.xlsx`);
+  };
+
+  if (!linhas.length) return <div className="panel"><div className="empty"><i className="ti ti-list-details"></i><div>Nenhuma OE no período</div></div></div>;
+  return (
+    <div className="panel">
+      <div className="panel-header">
+        <div className="panel-title">{linhas.length} OE(s) no período</div>
+        <button className="btn btn-ghost" onClick={exportar}><i className="ti ti-file-spreadsheet"></i> Exportar Excel</button>
+      </div>
+      <div className="frete-tab" style={{ overflowX: 'auto' }}><table>
+        <thead><tr><th>OE</th><th>Data</th><th>Motorista</th><th>Cliente(s)</th><th className="num">Un.</th><th>Situação</th><th className="num">Frete</th><th className="num">R$/un.</th><th className="num">% carga</th></tr></thead>
+        <tbody>{linhas.map(r => (
+          <tr key={r.o.id} style={{ cursor: 'pointer' }} onClick={() => { ctx.setViewingOE(r.o); ctx.setScreen('detalhe-oe'); }}>
+            <td className="mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{r.o.numero}</td>
+            <td className="mono cell-muted" style={{ fontSize: 11 }}>{fmtDate(dataDaOE(r.o))}</td>
+            <td style={{ fontSize: 12 }}>{r.o.motorista_nome || '—'}</td>
+            <td style={{ fontSize: 12 }}>{clientesDaOE(r.o)}</td>
+            <td className="num mono">{fmtNum(r.bb)}</td>
+            <td><span className="chip" style={{ fontSize: 10, background: r.f.fechado ? 'var(--green-bg)' : 'var(--orange-bg)', color: r.f.fechado ? 'var(--green)' : 'var(--orange)' }}>{situacao(r)}</span></td>
+            <td className="num mono" style={{ fontWeight: r.f.fechado ? 700 : 400, color: r.f.fechado ? 'var(--text)' : 'var(--text-muted)' }}>{r.valor ? fmtMoney(r.valor) : '—'}</td>
+            <td className="num mono cell-muted" style={{ fontSize: 11 }}>{r.bb && r.valor ? fmtMoney(r.valor / r.bb) : '—'}</td>
+            <td className="num mono cell-muted" style={{ fontSize: 11 }}>{r.carga && r.valor ? (r.valor / r.carga * 100).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '%' : '—'}</td>
+          </tr>
+        ))}</tbody>
+      </table></div>
+    </div>
+  );
+};
+
+// --- TABELA DE FRETE (config.frete) — só o gestor salva.
+const FretesConfig = ({ ctx, cfg, apr }) => {
+  const ehGestor = ctx.perfilAtivo === 'GESTOR';
+  const [padrao, setPadrao] = useState(cfg.valorKmPadrao ? String(cfg.valorKmPadrao).replace('.', ',') : '');
+  const [fator, setFator] = useState(String(cfg.fatorRetorno).replace('.', ','));
+  const [inicio, setInicio] = useState(cfg.inicio || '');
+  const motoristas = useMemo(() => {
+    const m = new Map();
+    const add = (chave, nome, placa) => { if (chave && chave !== '—' && !m.has(chave)) m.set(chave, { chave, nome: nome || chave, placa: placa || '' }); };
+    ctx.state.ordens.slice().reverse().forEach(o => add(chaveMotorista(o), o.motorista_nome, o.veiculo_placa));
+    (DADOS_MOTORISTAS || []).forEach(x => add(soDigitos(x.cpf) || String(x.nome || '').toUpperCase(), x.nome, x.placa));
+    return Array.from(m.values()).sort((a, b) => String(a.nome).localeCompare(String(b.nome)));
+  }, [ctx.state.ordens]);
+  const clientes = useMemo(() => {
+    const m = new Map();
+    ctx.state.ordens.filter(o => o.status !== 'CANCELADA').forEach(o => getParadas(o).forEach(p => {
+      const c = chaveClienteParada(p);
+      if (c && !m.has(c)) m.set(c, { chave: c, nome: p.cliente || c });
+    }));
+    Object.keys(cfg.kmCliente).forEach(c => { if (!m.has(c)) m.set(c, { chave: c, nome: (cfg.kmCliente[c] && cfg.kmCliente[c].nome) || c }); });
+    return Array.from(m.values()).sort((a, b) => String(a.nome).localeCompare(String(b.nome)));
+  }, [ctx.state.ordens]);
+  const [rkm, setRkm] = useState(() => Object.fromEntries(Object.entries(cfg.valorKmMotorista).map(([k, v]) => [k, String((v && v.valor) || v || '').replace('.', ',')])));
+  const [kmc, setKmc] = useState(() => Object.fromEntries(Object.entries(cfg.kmCliente).map(([k, v]) => [k, String((v && v.km) || v || '')])));
+  const [qCli, setQCli] = useState('');
+
+  const salvar = () => {
+    const vkm = {}; motoristas.forEach(mo => { const v = numBR(rkm[mo.chave]); if (v > 0) vkm[mo.chave] = { valor: v, nome: mo.nome }; });
+    const kc = {}; clientes.forEach(c => { const v = numBR(kmc[c.chave]); if (v > 0) kc[c.chave] = { km: v, nome: c.nome }; });
+    ctx.salvarConfig({ ...(ctx.config || {}), frete: { valorKmPadrao: numBR(padrao), fatorRetorno: numBR(fator) || 2, inicio: inicio || '', valorKmMotorista: vkm, kmCliente: kc } });
+  };
+  const cliFiltrados = clientes.filter(c => !qCli || (c.nome + ' ' + c.chave).toLowerCase().includes(qCli.toLowerCase()));
+  const dica = (txt) => <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>{txt}</span>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {!ehGestor && <div className="panel" style={{ padding: 12, fontSize: 12, color: 'var(--text-muted)' }}><i className="ti ti-lock"></i> Só o gestor altera a tabela. O km dos clientes e o R$/km digitados nos fechamentos já são reaproveitados automaticamente.</div>}
+      <div className="panel">
+        <div className="panel-header"><div className="panel-title">Parâmetros</div></div>
+        <div style={{ padding: '14px 18px' }}>
+          <div className="field-row">
+            <div className="field"><label className="field-label">R$ por km (padrão)</label>
+              <input className="input mono" disabled={!ehGestor} value={padrao} onChange={e => setPadrao(e.target.value)} placeholder="Ex: 7,50" />{dica('Usado quando o motorista não tem valor próprio')}</div>
+            <div className="field"><label className="field-label">Fator do km previsto</label>
+              <input className="input mono" disabled={!ehGestor} value={fator} onChange={e => setFator(e.target.value)} placeholder="2" />{dica('Km previsto = distância do cliente mais longe × fator (2 = ida e volta)')}</div>
+            <div className="field"><label className="field-label">Controle de frete desde</label>
+              <input type="date" className="input mono" disabled={!ehGestor} value={inicio} onChange={e => setInicio(e.target.value)} />{dica('OEs anteriores não entram em "A fechar"')}</div>
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16, alignItems: 'start' }}>
+        <div className="panel">
+          <div className="panel-header"><div className="panel-title">R$ por km · motorista</div><div className="panel-sub">{motoristas.length} motorista(s)</div></div>
+          <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+            <div className="frete-tab" style={{ overflowX: 'auto' }}><table><tbody>{motoristas.map(mo => (
+              <tr key={mo.chave}>
+                <td style={{ fontSize: 12 }}>{mo.nome}{mo.placa && <span className="mono cell-muted" style={{ fontSize: 10 }}> · {mo.placa}</span>}</td>
+                <td className="num" style={{ width: 130 }}>
+                  <input className="input mono" disabled={!ehGestor} style={{ width: 110, padding: '4px 6px', fontSize: 12, textAlign: 'right' }}
+                    value={rkm[mo.chave] != null ? rkm[mo.chave] : ''} onChange={e => setRkm(m => ({ ...m, [mo.chave]: e.target.value }))}
+                    placeholder={apr.rkm[mo.chave] ? String(apr.rkm[mo.chave]).replace('.', ',') + ' (último)' : 'padrão'} />
+                </td>
+              </tr>
+            ))}</tbody></table></div>
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel-header"><div className="panel-title">Km até o cliente</div>
+            <div className="search-box"><i className="ti ti-search"></i><input value={qCli} onChange={e => setQCli(e.target.value)} placeholder="Buscar cliente" /></div></div>
+          <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+            <div className="frete-tab" style={{ overflowX: 'auto' }}><table><tbody>{cliFiltrados.map(c => (
+              <tr key={c.chave}>
+                <td style={{ fontSize: 12 }}>{c.nome}<span className="mono cell-muted" style={{ fontSize: 10 }}> · {c.chave}</span></td>
+                <td className="num" style={{ width: 130 }}>
+                  <input className="input mono" disabled={!ehGestor} style={{ width: 110, padding: '4px 6px', fontSize: 12, textAlign: 'right' }}
+                    value={kmc[c.chave] != null ? kmc[c.chave] : ''} onChange={e => setKmc(m => ({ ...m, [c.chave]: e.target.value }))}
+                    placeholder={apr.km[c.chave] ? apr.km[c.chave] + ' (último)' : 'km'} />
+                </td>
+              </tr>
+            ))}</tbody></table></div>
+          </div>
+        </div>
+      </div>
+      {ehGestor && <div><button className="btn btn-primary" onClick={salvar}><i className="ti ti-device-floppy"></i> Salvar tabela de frete</button></div>}
+    </div>
+  );
+};
+
+// Quadro de frete no detalhe da OE (só tela, não sai na impressão).
+const FreteOEBox = ({ ctx, oe }) => {
+  if (!oe || oe.status === 'CANCELADA') return null;
+  const cfg = freteCfg(ctx.config);
+  const apr = freteAprendido(ctx.state.ordens);
+  const f = freteDaOE(oe, cfg, apr);
+  const fe = oe.frete && oe.frete.fechamento;
+  const bb = totalBBs(oe);
+  return (
+    <div className="no-print" style={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderLeft: '4px solid ' + (f.fechado ? 'var(--green)' : 'var(--orange)'), borderRadius: 8, padding: '12px 18px', marginBottom: 20, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+      <i className="ti ti-route" style={{ color: f.fechado ? 'var(--green)' : 'var(--orange)', fontSize: 20, marginTop: 2 }}></i>
+      <div style={{ flex: 1, fontSize: 12 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Frete · {FRETE_MODOS[f.modo]}</div>
+        {f.modo === 'CLIENTE' && <div style={{ color: 'var(--text-muted)' }}>Frete por conta do cliente. Não entra no custo.</div>}
+        {f.modo === 'FECHADO' && <div><strong>{fmtMoney(f.real)}</strong>{bb ? <span style={{ color: 'var(--text-muted)' }}> · {fmtMoney(f.real / bb)} por un.</span> : null}</div>}
+        {f.modo === 'KM' && !fe && (
+          <div style={{ color: 'var(--text-muted)', lineHeight: 1.6 }}>
+            Previsto <strong style={{ color: 'var(--text)' }}>{f.previsto ? fmtMoney(f.previsto) : '—'}</strong>
+            {f.kmPrev ? ` · ${fmtNum(Math.round(f.kmPrev))} km × ${f.rkm ? fmtMoney(f.rkm) : 'R$/km não cadastrado'}` : ' · km do cliente não cadastrado'}.
+            {' '}O valor real é lançado no fechamento da viagem, em <span style={{ color: 'var(--accent-light)', cursor: 'pointer' }} onClick={() => ctx.setScreen('fretes')}>Fretes</span>.
+          </div>
+        )}
+        {f.modo === 'KM' && fe && (
+          <div style={{ color: 'var(--text-muted)', lineHeight: 1.6 }}>
+            <strong style={{ color: 'var(--text)', fontSize: 14 }}>{fmtMoney(f.real)}</strong>{bb ? ` · ${fmtMoney(f.real / bb)} por un.` : ''}
+            {' '}· parte da viagem de {fe.motorista} ({fe.oes.join(', ')}) fechada em {fmtDateTime(fe.em)}: {fmtMoney(fe.valor_total)}{fe.km_total ? ` · ${fmtNum(fe.km_total)} km` : ''} · rateio por {fe.criterio}.
+            {(oe.frete.rateio || []).length > 1 && (
+              <div style={{ marginTop: 4 }}>{oe.frete.rateio.map(r => <span key={r.idx} className="chip chip-neutral" style={{ fontSize: 10, marginRight: 6 }}>{r.cliente}: {fmtMoney(r.valor)}</span>)}</div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const LogsView = ({ ctx }) => {
   const [logs, setLogs] = useState(null); // null = carregando
   const [erro, setErro] = useState(null);
