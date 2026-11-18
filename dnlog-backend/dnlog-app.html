@@ -4770,6 +4770,27 @@ const Agendamentos = ({ ctx }) => {
 // ============================================================
 // PEDIDOS SAP
 // ============================================================
+// Quantidades de um item de pedido: total, faturado, em OE (alocado e ainda não
+// faturado — só venda) e saldo. Pedido cancelado não tem faturado nem saldo.
+const qtdItemPedido = (p, it) => {
+  const canc = !!(p && (p.cancelado || p.status_sap === 'cancelado'));
+  const tot = Number(it.qtd_bb) || 0;
+  const fat = canc ? 0 : Math.min(tot, Number(it.qtd_entregue_total != null ? it.qtd_entregue_total : it.qtd_entregue) || 0);
+  const saldo = canc ? 0 : Math.max(0, Number(it.saldo) || 0);
+  return { tot, fat, saldo, emOE: canc ? 0 : Math.max(0, tot - fat - saldo) };
+};
+const qtdPedido = (p) => ((p && p.itens) || []).reduce((a, it) => {
+  const q = qtdItemPedido(p, it);
+  return { tot: a.tot + q.tot, fat: a.fat + q.fat, saldo: a.saldo + q.saldo, emOE: a.emOE + q.emOE };
+}, { tot: 0, fat: 0, saldo: 0, emOE: 0 });
+// Botões Expandir todos / Recolher das listas de pedidos.
+const BotoesExpandir = ({ onExpandir, onRecolher, nAbertos }) => (
+  <div style={{ display: 'flex', gap: 6 }}>
+    <button onClick={onExpandir} className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 9px' }}><i className="ti ti-chevrons-down"></i> Expandir todos</button>
+    <button onClick={onRecolher} disabled={!nAbertos} className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 9px' }}><i className="ti ti-chevrons-up"></i> Recolher{nAbertos ? ` (${nAbertos})` : ''}</button>
+  </div>
+);
+
 // Botão de alternância Vendas | Compras (usado nas duas telas de pedidos)
 const TogglePedidos = ({ ctx, ativo }) => (
   <div style={{ display: 'flex', gap: 4, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: 2 }}>
@@ -4857,7 +4878,8 @@ const sortRows = (rows, sortCol, sortDir, getVal) => {
 const PedidosCompra = ({ ctx }) => {
   const [q, setQ] = useState('');
   const [statusSel, setStatusSel] = useState(['aberto']);
-  const [aberto, setAberto] = useState(null); // numero do pedido expandido
+  const [abertos, setAbertos] = useState(() => new Set()); // pedidos expandidos (vários ao mesmo tempo)
+  const alternar = (num) => setAbertos(prev => { const s = new Set(prev); s.has(num) ? s.delete(num) : s.add(num); return s; });
   const { sortCol, sortDir, onSort } = useSort('entrega', 'asc');
   const sortProps = { sortCol, sortDir, onSort };
   const dados = DADOS_PEDIDOS_COMPRA || [];
@@ -4877,6 +4899,7 @@ const PedidosCompra = ({ ctx }) => {
         case 'entrega': return p.data_entrega || '';
         case 'itens': return (p.itens || []).length;
         case 'qtdtotal': return p.qtd_total_bb || 0;
+        case 'faturado': return qtdPedido(p).fat;
         case 'saldo': return p.qtd_saldo_bb || 0;
         case 'saldoR': return p.saldo_aberto || 0;
         case 'status': return p.status_sap || '';
@@ -4966,10 +4989,12 @@ const PedidosCompra = ({ ctx }) => {
             <i className="ti ti-search"></i>
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar pedido ou fornecedor..." />
           </div>
+          <BotoesExpandir nAbertos={abertos.size} onExpandir={() => setAbertos(new Set(lista.map(p => p.numero)))} onRecolher={() => setAbertos(new Set())} />
         </div>
         {lista.length === 0 ? (
           <div className="empty"><i className="ti ti-box-off"></i><div>Nenhum pedido de compra encontrado</div></div>
         ) : (
+          <div style={{ overflowX: 'auto' }}>
           <table>
             <thead><tr>
               <SortTh col="numero" {...sortProps}>Pedido</SortTh>
@@ -4978,6 +5003,7 @@ const PedidosCompra = ({ ctx }) => {
               <SortTh col="entrega" {...sortProps}>Entrega</SortTh>
               <SortTh col="itens" className="num" defDir="desc" {...sortProps}>Itens</SortTh>
               <SortTh col="qtdtotal" className="num" defDir="desc" {...sortProps}>Qtd total</SortTh>
+              <SortTh col="faturado" className="num" defDir="desc" {...sortProps}>Faturado</SortTh>
               <SortTh col="saldo" className="num" defDir="desc" {...sortProps}>Saldo (un.)</SortTh>
               <SortTh col="saldoR" className="num" defDir="desc" {...sortProps}>Saldo (R$)</SortTh>
               <SortTh col="status" {...sortProps}>Status</SortTh>
@@ -4985,25 +5011,27 @@ const PedidosCompra = ({ ctx }) => {
             </tr></thead>
             <tbody>{lista.map(p => (
               <React.Fragment key={p.numero}>
-                <tr onClick={() => setAberto(aberto === p.numero ? null : p.numero)} style={{ cursor: 'pointer' }}>
+                <tr onClick={() => alternar(p.numero)} style={{ cursor: 'pointer', background: abertos.has(p.numero) ? 'var(--bg-hover)' : undefined }}>
                   <td className="cell-primary mono" style={{ fontSize: 12, color: 'var(--accent-light)' }}>{p.numero}</td>
                   <td>{p.fornecedor}</td>
                   <td style={{ fontSize: 12 }}>{fmtDate(p.data_emissao)}</td>
                   <td style={{ fontSize: 12 }}>{fmtDate(p.data_entrega)}</td>
                   <td className="num mono">{(p.itens || []).length}</td>
                   <td className="num mono">{fmtNum(p.qtd_total_bb)}</td>
+                  <td className="num mono">{fmtNum(qtdPedido(p).fat)}</td>
                   <td className="num mono cell-primary" style={{ color: 'var(--green)', fontWeight: 700 }}>{fmtNum(p.qtd_saldo_bb)}</td>
                   <td className="num mono">{fmtMoney(p.saldo_aberto)}</td>
                   <td><StatusSapChip status={p.status_sap} /></td>
-                  <td className="num"><i className={`ti ti-chevron-${aberto === p.numero ? 'up' : 'down'}`} style={{ color: 'var(--text-muted)' }}></i></td>
+                  <td className="num"><i className={`ti ti-chevron-${abertos.has(p.numero) ? 'up' : 'down'}`} style={{ color: 'var(--text-muted)' }}></i></td>
                 </tr>
-                {aberto === p.numero && (p.itens || []).map((it, i) => (
+                {abertos.has(p.numero) && (p.itens || []).map((it, i) => (
                   <tr key={p.numero + '_' + i} style={{ background: 'var(--bg-elev)' }}>
                     <td></td>
                     <td className="mono cell-muted" style={{ fontSize: 11 }}>{it.codigo}</td>
                     <td colSpan={2} style={{ fontSize: 12 }}>{it.descricao} {it.embalagem ? <span className="cell-muted" style={{ fontSize: 11 }}>· {it.embalagem}</span> : null}</td>
                     <td className="num mono cell-muted" style={{ fontSize: 11 }}>{it.grupo_nome || '—'}</td>
                     <td className="num mono">{fmtNum(it.qtd_bb)}</td>
+                    <td className="num mono">{fmtNum(qtdItemPedido(p, it).fat)}</td>
                     <td className="num mono" style={{ color: 'var(--green)' }}>{fmtNum(it.saldo)}</td>
                     <td className="num mono">{fmtMoney(it.saldo * (it.valor_unitario || 0))}</td>
                     <td></td>
@@ -5013,6 +5041,7 @@ const PedidosCompra = ({ ctx }) => {
               </React.Fragment>
             ))}</tbody>
           </table>
+          </div>
         )}
       </div>
     </div>
@@ -5029,6 +5058,8 @@ const Pedidos = ({ ctx }) => {
   const [filtroItem, setFiltroItem] = useState('todos');
   const { sortCol, sortDir, onSort } = useSort('entrega', 'asc'); // ordenação por clique no cabeçalho
   const sortProps = { sortCol, sortDir, onSort };
+  const [abertos, setAbertos] = useState(() => new Set()); // pedidos expandidos (vários ao mesmo tempo)
+  const alternar = (num) => setAbertos(prev => { const s = new Set(prev); s.has(num) ? s.delete(num) : s.add(num); return s; });
 
   // Filtros iguais aos da tela de Estoque (grupo/cultivar/item), + vendedor.
   // Item é nível-linha; um pedido "casa" se tiver pelo menos um item que passe.
@@ -5097,7 +5128,10 @@ const Pedidos = ({ ctx }) => {
         case 'emissao': return p.data_emissao || '';
         case 'entrega': return p.data_entrega || '';
         case 'itens': return p.itens.length;
-        case 'saldo': return p.qtd_saldo_bb || 0;
+        case 'qtdtotal': return qtdPedido(p).tot;
+        case 'faturado': return qtdPedido(p).fat;
+        case 'emoe': return qtdPedido(p).emOE;
+        case 'saldo': return qtdPedido(p).saldo;
         case 'saldoaberto': return p.saldo_aberto || 0;
         case 'status': return p.status_sap || '';
         default: return '';
@@ -5109,14 +5143,15 @@ const Pedidos = ({ ctx }) => {
   // Totalizador — reflete o que está filtrado (lista). Com filtro de item ativo,
   // soma só os itens que casam; senão, todos os itens dos pedidos filtrados.
   const tot = useMemo(() => {
-    let unid = 0, valor = 0, saldoAb = 0;
+    let unid = 0, valor = 0, saldoAb = 0, fat = 0, saldoUn = 0, emOE = 0;
     lista.forEach(p => {
       const its = (p.itens || []).filter(i => (temItemFiltro ? itemMatch(i) : true));
       unid += its.reduce((a, i) => a + (i.qtd_bb || 0), 0);
+      its.forEach(i => { const qq = qtdItemPedido(p, i); fat += qq.fat; saldoUn += qq.saldo; emOE += qq.emOE; });
       valor += its.reduce((a, i) => a + (i.valor_total != null ? i.valor_total : (i.qtd_bb || 0) * (i.valor_unitario || 0)), 0);
       saldoAb += its.reduce((a, i) => a + (i.saldo || 0) * (i.valor_unitario || 0), 0);
     });
-    return { nPed: lista.length, unid, valor, saldoAb };
+    return { nPed: lista.length, unid, valor, saldoAb, fat, saldoUn, emOE };
   }, [lista, filtroGrupo, filtroCultivar, filtroItem]);
 
   // Stats por urgência
@@ -5260,7 +5295,7 @@ const Pedidos = ({ ctx }) => {
       {/* TOTALIZADOR — reflete os filtros (status, prazo, vendedor, grupo, cultivar, item) */}
       <div className="metrics" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <div className="metric"><div className="metric-label"><i className="ti ti-clipboard-list"></i> Pedidos</div><div className="metric-value">{tot.nPed}</div><div className="metric-delta">{filtrandoPedidos || statusSel.length !== 1 || statusSel[0] !== 'aberto' || q || filtroPrazo !== 'todos' ? 'no filtro atual' : `de ${ctx.pedidos.length} no SAP`}</div></div>
-        <div className="metric"><div className="metric-label"><i className="ti ti-package"></i> Unidades</div><div className="metric-value">{fmtNum(tot.unid)}</div><div className="metric-delta">total em pedidos</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-package"></i> Unidades</div><div className="metric-value">{fmtNum(tot.unid)}</div><div className="metric-delta">{fmtNum(tot.fat)} faturadas{tot.emOE ? ` · ${fmtNum(tot.emOE)} em OE` : ''} · {fmtNum(tot.saldoUn)} saldo</div></div>
         <div className="metric"><div className="metric-label"><i className="ti ti-cash"></i> Valor total</div><div className="metric-value" style={{ fontSize: 22 }}>{fmtMoney(tot.valor)}</div><div className="metric-delta">soma dos itens</div></div>
         <div className="metric"><div className="metric-label"><i className="ti ti-wallet"></i> Saldo aberto</div><div className="metric-value" style={{ color: 'var(--green)', fontSize: 22 }}>{fmtMoney(tot.saldoAb)}</div><div className="metric-delta">valor ainda a embarcar</div></div>
       </div>
@@ -5273,8 +5308,9 @@ const Pedidos = ({ ctx }) => {
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar pedido, cliente, vendedor..." />
           </div>
           <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-            <i className="ti ti-arrows-sort" style={{ fontSize: 12 }}></i> clique no cabeçalho p/ ordenar
+            <i className="ti ti-arrows-sort" style={{ fontSize: 12 }}></i> clique no cabeçalho p/ ordenar · na linha p/ abrir os itens
           </span>
+          <BotoesExpandir nAbertos={abertos.size} onExpandir={() => setAbertos(new Set(lista.map(p => p.numero)))} onRecolher={() => setAbertos(new Set())} />
         </div>
 
         {/* Filtros estilo Estoque: Vendedor, Grupo, Cultivar, Item */}
@@ -5318,6 +5354,7 @@ const Pedidos = ({ ctx }) => {
           </div>
         )}
 
+        <div style={{ overflowX: 'auto' }}>
         <table>
           <thead><tr>
             <SortTh col="numero" {...sortProps}>Pedido</SortTh>
@@ -5326,18 +5363,21 @@ const Pedidos = ({ ctx }) => {
             <SortTh col="emissao" defDir="desc" {...sortProps}>Emissão</SortTh>
             <SortTh col="entrega" {...sortProps}>Entrega prevista</SortTh>
             <th style={{ width: 90 }}>Urgência</th>
-            <SortTh col="itens" className="num" defDir="desc" {...sortProps}>Itens</SortTh>
-            <SortTh col="saldo" className="num" defDir="desc" {...sortProps}>Saldo / Total</SortTh>
+            <SortTh col="qtdtotal" className="num" defDir="desc" {...sortProps}>Qtd total</SortTh>
+            <SortTh col="faturado" className="num" defDir="desc" {...sortProps}>Faturado</SortTh>
+            <SortTh col="emoe" className="num" defDir="desc" {...sortProps}>Em OE</SortTh>
+            <SortTh col="saldo" className="num" defDir="desc" {...sortProps}>Saldo</SortTh>
             <SortTh col="saldoaberto" className="num" defDir="desc" {...sortProps}>Saldo aberto</SortTh>
             <SortTh col="status" {...sortProps}>Status</SortTh>
+            <th></th>
           </tr></thead>
           <tbody>{lista.map(p => {
             const u = calcUrgencia(p.data_entrega);
+            const qp = qtdPedido(p);
+            const exp = abertos.has(p.numero);
             return (
-              <tr key={p.numero} onClick={() => {
-                ctx.setViewingPedido(p);
-                ctx.setScreen('detalhe-pedido');
-              }} style={{ cursor: 'pointer' }}>
+              <React.Fragment key={p.numero}>
+              <tr onClick={() => alternar(p.numero)} style={{ cursor: 'pointer', background: exp ? 'var(--bg-hover)' : undefined }}>
                 <td className="cell-primary mono">{p.numero}</td>
                 <td>{p.cliente}</td>
                 <td>{p.vendedor || '—'}</td>
@@ -5361,16 +5401,52 @@ const Pedidos = ({ ctx }) => {
                     </span>
                   ) : <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>sem prazo</span>}
                 </td>
-                <td className="num">{p.itens.length}</td>
-                <td className="num cell-primary" style={{ color: p.tem_saldo ? 'var(--accent-light)' : 'var(--text-dim)', fontWeight: 700 }}>
-                  {p.qtd_saldo_bb} / {p.qtd_total_bb}
-                </td>
+                <td className="num mono">{fmtNum(qp.tot)}</td>
+                <td className="num mono">{fmtNum(qp.fat)}</td>
+                <td className="num mono" style={{ color: qp.emOE ? 'var(--orange)' : 'var(--text-dim)' }}>{qp.emOE ? fmtNum(qp.emOE) : '—'}</td>
+                <td className="num mono cell-primary" style={{ color: qp.saldo ? 'var(--accent-light)' : 'var(--text-dim)', fontWeight: 700 }}>{fmtNum(qp.saldo)}</td>
                 <td className="num cell-primary">{fmtMoney(p.saldo_aberto)}</td>
                 <td><StatusSapChip status={p.status_sap} /></td>
+                <td className="num"><i className={`ti ti-chevron-${exp ? 'up' : 'down'}`} style={{ color: 'var(--text-muted)' }}></i></td>
               </tr>
+              {exp && (
+                <tr>
+                  <td colSpan={13} style={{ padding: 0, background: 'var(--bg-card)' }}>
+                    <table style={{ width: '100%', fontSize: 12, margin: 0 }}>
+                      <thead><tr style={{ color: 'var(--text-muted)' }}>
+                        <th style={{ paddingLeft: 28, textAlign: 'left' }}>Item</th>
+                        <th className="num">Qtd</th><th className="num">Faturado</th><th className="num">Em OE</th><th className="num">Saldo</th>
+                        <th className="num">Valor un.</th><th className="num">Saldo (R$)</th>
+                        <th style={{ textAlign: 'right', paddingRight: 16 }}>
+                          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 9px' }} onClick={(e) => { e.stopPropagation(); ctx.setViewingPedido(p); ctx.setScreen('detalhe-pedido'); }}>
+                            <i className="ti ti-external-link"></i> Ver pedido
+                          </button>
+                        </th>
+                      </tr></thead>
+                      <tbody>{(p.itens || []).map((it, i) => {
+                        const qi = qtdItemPedido(p, it);
+                        return (
+                          <tr key={i} style={{ opacity: temItemFiltro && !itemMatch(it) ? 0.45 : 1 }}>
+                            <td style={{ paddingLeft: 28 }}>{it.descricao || it.codigo}<span className="mono" style={{ color: 'var(--text-dim)', fontSize: 11 }}> · {it.codigo}</span></td>
+                            <td className="num mono">{fmtNum(qi.tot)}</td>
+                            <td className="num mono">{fmtNum(qi.fat)}</td>
+                            <td className="num mono" style={{ color: qi.emOE ? 'var(--orange)' : 'var(--text-dim)' }}>{qi.emOE ? fmtNum(qi.emOE) : '—'}</td>
+                            <td className="num mono" style={{ color: qi.saldo ? 'var(--accent-light)' : 'var(--text-dim)', fontWeight: 700 }}>{fmtNum(qi.saldo)}</td>
+                            <td className="num mono cell-muted">{fmtMoney(it.valor_unitario || 0)}</td>
+                            <td className="num mono">{fmtMoney(qi.saldo * (it.valor_unitario || 0))}</td>
+                            <td></td>
+                          </tr>
+                        );
+                      })}</tbody>
+                    </table>
+                  </td>
+                </tr>
+              )}
+              </React.Fragment>
             );
           })}</tbody>
         </table>
+        </div>
       </div>
     </div>
   );
