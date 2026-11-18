@@ -209,7 +209,7 @@ html[data-theme="light"] .brand-plaque {
 /* min-width:0 deixa o track 1fr do grid encolher abaixo do min-content do
    conteúdo (tabelas largas). Sem isso a página inteira ganha scroll horizontal
    em telas estreitas em vez de só a tabela (que já tem overflow-x próprio). */
-.main { padding: 24px 32px; max-width: 1500px; min-width: 0; }
+.main { padding: 24px 32px; max-width: 1800px; min-width: 0; }
 .page-header {
   display: flex;
   align-items: flex-end;
@@ -378,6 +378,15 @@ tbody tr:last-child td { border-bottom: none; }
   .emb-tabela .c-valor { grid-area: valor; }
   .emb-tabela .c-qtd::before { content: 'QTD '; font-weight: 400; color: var(--text-muted); font-size: 10px; }
 }
+
+/* Pedidos (Vendas/Compras): ajusta à largura disponível — sem rolar para o
+   lado. Valores não quebram; colunas menos críticas somem em telas estreitas. */
+.ped-wrap { container-type: inline-size; overflow-x: auto; }
+.ped-tabela td.num, .ped-tabela th.num { white-space: nowrap; }
+.ped-sub { display: block; font-size: 11px; color: var(--text-muted); font-weight: 400; margin-top: 2px; }
+@container (max-width: 980px) { .ped-tabela .c-emoe, .ped-tabela .c-itens { display: none; } }
+@container (max-width: 820px) { .ped-tabela .c-fat, .ped-tabela .c-status { display: none; } }
+@container (max-width: 640px) { .ped-tabela .c-total, .ped-tabela .c-saldoR, .ped-tabela .c-chev { display: none; } }
 
 /* CHIPS */
 .chip {
@@ -1843,7 +1852,7 @@ const primeiraTela = (perfil, config) => {
 // APP PRINCIPAL
 // ============================================================
 const App = ({ usuario, onLogout }) => {
-  const [screen, setScreen] = useState('dashboard');
+  const [screen, setScreenRaw] = useState('dashboard');
   const [state, setState] = useState(loadState);
   const [toast, setToast] = useState(null);
   const [editingOE, setEditingOE] = useState(null);
@@ -1851,6 +1860,54 @@ const App = ({ usuario, onLogout }) => {
   const [viewingOE, setViewingOE] = useState(null);
   const [conferenceOE, setConferenceOE] = useState(null);
   const [viewingPedido, setViewingPedido] = useState(null);
+  // ---- Histórico de navegação: Voltar (botões e o do navegador) volta para a
+  // tela anterior com o mesmo pedido/OE aberto e a mesma rolagem. Filtros e
+  // expandidos de cada tela ficam em useTelaState.
+  const navRef = useRef({ hist: [{ screen: 'dashboard' }], idx: 0 });
+  const screenRef = useRef(screen); screenRef.current = screen;
+  const viewRef = useRef({}); viewRef.current = { viewingOE, viewingPedido };
+  const posRolagem = () => ({ y: window.scrollY || 0, m: (document.querySelector('.main') || {}).scrollTop || 0 });
+  const rolarPara = (r, atraso) => setTimeout(() => {
+    try { window.scrollTo(0, (r && r.y) || 0); const m = document.querySelector('.main'); if (m) m.scrollTop = (r && r.m) || 0; } catch (e) {}
+  }, atraso);
+  const setScreen = (novo, opts) => {
+    if (!novo || novo === screenRef.current) return;
+    const nav = navRef.current;
+    if (opts && opts.substituir) {
+      nav.hist[nav.idx] = { screen: novo };
+      try { history.replaceState({ dnlogIdx: nav.idx }, ''); } catch (e) {}
+    } else {
+      nav.hist[nav.idx] = { screen: screenRef.current, ...viewRef.current, rolagem: posRolagem() };
+      nav.hist = nav.hist.slice(0, nav.idx + 1);
+      nav.hist.push({ screen: novo });
+      nav.idx = nav.hist.length - 1;
+      try { history.pushState({ dnlogIdx: nav.idx }, ''); } catch (e) {}
+    }
+    setScreenRaw(novo);
+    rolarPara(null, 0);
+  };
+  useEffect(() => {
+    try { history.replaceState({ dnlogIdx: 0 }, ''); } catch (e) {}
+    const onPop = (e) => {
+      const nav = navRef.current;
+      const i = e.state && e.state.dnlogIdx;
+      if (i == null || !nav.hist[i]) return;
+      nav.hist[nav.idx] = { ...nav.hist[nav.idx], screen: screenRef.current, ...viewRef.current, rolagem: posRolagem() };
+      nav.idx = i;
+      const alvo = nav.hist[i];
+      if ('viewingOE' in alvo) setViewingOE(alvo.viewingOE);
+      if ('viewingPedido' in alvo) setViewingPedido(alvo.viewingPedido);
+      setScreenRaw(alvo.screen);
+      rolarPara(alvo.rolagem, 80);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+  // Volta uma tela no histórico; sem histórico (ex.: recarregou a página), vai para o fallback.
+  const voltar = (fallback) => {
+    if (navRef.current.idx > 0) history.back();
+    else if (fallback) setScreen(fallback, { substituir: true });
+  };
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // Auto-colapsa a sidebar (só ícones) em telas estreitas (tablet/celular).
   // O toggle manual continua valendo no desktop; abaixo de 1000px força ícones.
@@ -2014,7 +2071,7 @@ const App = ({ usuario, onLogout }) => {
     // Se a tela atual não é permitida ao perfil (pelas permissões configuráveis),
     // manda para a primeira tela liberada.
     if (!telasPermitidas(perfilAtivo, config).has(screen)) {
-      setScreen(primeiraTela(perfilAtivo, config));
+      setScreen(primeiraTela(perfilAtivo, config), { substituir: true });
     }
   }, [perfilAtivo, screen, config]);
 
@@ -2528,7 +2585,7 @@ const App = ({ usuario, onLogout }) => {
   };
 
   const ctx = {
-    state, setState, screen, setScreen, showToast,
+    state, setState, screen, setScreen, voltar, showToast,
     pedidos: pedidosComSaldo,
     lotes: lotesComSaldo,
     editingOE, setEditingOE,
@@ -2686,16 +2743,16 @@ const pedidoLinhaNF = (n, l) => {
 const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
   const C = NFS_CFG[tipo] || NFS_CFG.saida;
   // Período escolhido pelo usuário (De / Até). Padrão: últimos 90 dias.
-  const [desde, setDesde] = useState(() => isoDiasAtras(90));
-  const [ate, setAte] = useState(() => isoLocal(new Date()));
+  const [desde, setDesde] = useTelaState(`nfs-${tipo}:desde`, () => isoDiasAtras(90));
+  const [ate, setAte] = useTelaState(`nfs-${tipo}:ate`, () => isoLocal(new Date()));
   const [dados, setDados] = useState(null);        // array de NFs
   const [erro, setErro] = useState('');
   const [carregando, setCarregando] = useState(false);
-  const [clienteSel, setClienteSel] = useState('todos'); // cardCode | 'todos'
-  const [q, setQ] = useState('');
-  const [incluirCanceladas, setIncluirCanceladas] = useState(false);
-  const [cfopSel, setCfopSel] = useState('todos'); // código da utilização (CFOP) ou 'todos'
-  const [abertos, setAbertos] = useState(() => new Set()); // docNums expandidos (várias NFs juntas)
+  const [clienteSel, setClienteSel] = useTelaState(`nfs-${tipo}:clienteSel`, 'todos'); // cardCode | 'todos'
+  const [q, setQ] = useTelaState(`nfs-${tipo}:q`, '');
+  const [incluirCanceladas, setIncluirCanceladas] = useTelaState(`nfs-${tipo}:incluirCanceladas`, false);
+  const [cfopSel, setCfopSel] = useTelaState(`nfs-${tipo}:cfopSel`, 'todos'); // código da utilização (CFOP) ou 'todos'
+  const [abertos, setAbertos] = useTelaSet(`nfs-${tipo}:abertos`); // docNums expandidos (várias NFs juntas)
   const [detalhes, setDetalhes] = useState({}); // docNum -> { loading, linhas, erro }
   const [exportando, setExportando] = useState(false);
 
@@ -2786,6 +2843,10 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
     } finally { setCarregando(false); }
   };
   useEffect(() => { carregar(); }, [desde, ate, tipo]);
+  useEffect(() => {
+    if (!dados || !abertos.size) return;
+    dados.filter(n => abertos.has(n.docNum) && !(detalhes[n.docNum] && (detalhes[n.docNum].linhas || detalhes[n.docNum].loading))).forEach(n => carregarDetalhe(n));
+  }, [dados]);
 
   // Base (aplica cancelamento). A agregação por cliente e a lista partem daqui.
   // Códigos de utilização (CFOP) presentes, para o filtro.
@@ -3730,8 +3791,8 @@ const Relatorios = ({ ctx }) => {
   }, [ctx.pedidos, ctx.state.ordens]);
 
   // Filtro por grupo de item + expandir ("ver mais") na carteira por cultivar
-  const [filtroGrupo, setFiltroGrupo] = useState('todos');
-  const [verTodosCult, setVerTodosCult] = useState(false);
+  const [filtroGrupo, setFiltroGrupo] = useTelaState('rel:filtroGrupo', 'todos');
+  const [verTodosCult, setVerTodosCult] = useTelaState('rel:verTodosCult', false);
   const cultivaresFiltrados = useMemo(() => (
     filtroGrupo === 'todos' ? rel.cultivares : rel.cultivares.filter(c => c.grupo === filtroGrupo)
   ), [rel.cultivares, filtroGrupo]);
@@ -3769,8 +3830,8 @@ const Relatorios = ({ ctx }) => {
   // Comissão é % configurável (não vem do SAP); aplica sobre o valor total.
   const [comissaoPct, setComissaoPct] = useState('');
   // Navegação por cards: null = mostra os cards; senão o relatório escolhido.
-  const [relAtivo, setRelAtivo] = useState(null);
-  const [repAberto, setRepAberto] = useState(null); // representante expandido no resumo comercial
+  const [relAtivo, setRelAtivo] = useTelaState('rel:relAtivo', null);
+  const [repAberto, setRepAberto] = useTelaState('rel:repAberto', null); // representante expandido no resumo comercial
   const RELATORIOS_CARDS = [
     { id: 'faturamento', titulo: 'Faturamento — NFs por cliente', desc: 'Notas fiscais de saída do SAP por cliente, com item, lote, quantidade e valor.', icon: 'ti-file-invoice', cor: 'var(--green)', bg: 'var(--green-bg)' },
     { id: 'rastreio-lote', titulo: 'Rastreio de lote', desc: 'Entradas, saídas e saldo de um lote no SAP, as OEs do DNLog e, no QCDN, qualidade, laudos e reservas — com as divergências apontadas.', icon: 'ti-route', cor: 'var(--purple)', bg: 'var(--purple-bg)' },
@@ -4210,7 +4271,7 @@ const Relatorios = ({ ctx }) => {
 // Substitui as antigas telas separadas Agendamentos / Calendário / Consulta.
 // ============================================================
 const EmbarquesHub = ({ ctx }) => {
-  const [view, setView] = useState('lista'); // 'lista' | 'calendario'
+  const [view, setView] = useTelaState('embhub:view', 'lista'); // 'lista' | 'calendario'
   const ToggleBtn = ({ id, icon, label }) => (
     <button
       onClick={() => setView(id)}
@@ -4673,8 +4734,8 @@ const StatusChip = ({ status }) => {
 // LISTA DE AGENDAMENTOS
 // ============================================================
 const Agendamentos = ({ ctx }) => {
-  const [q, setQ] = useState('');
-  const [filtroStatus, setFiltroStatus] = useState('todos');
+  const [q, setQ] = useTelaState('agend:q', '');
+  const [filtroStatus, setFiltroStatus] = useTelaState('agend:filtroStatus', 'todos');
 
   const lista = useMemo(() => {
     let l = [...ctx.state.ordens].sort((a,b) => new Date(b.criado_em) - new Date(a.criado_em));
@@ -4844,9 +4905,32 @@ const FiltroStatusSap = ({ sel, setSel }) => (
 // ============================================================
 // useSort guarda coluna + direção; SortTh é o <th> clicável com a setinha;
 // sortRows ordena por um accessor genérico (vazios/null sempre vão pro fim).
-const useSort = (defCol, defDir) => {
-  const [sortCol, setSortCol] = useState(defCol);
-  const [sortDir, setSortDir] = useState(defDir || 'asc');
+// Estado de tela que sobrevive à troca de tela: ao voltar, filtros, busca,
+// ordenação e itens expandidos aparecem como estavam. Fica em memória e no
+// sessionStorage da aba (some ao fechar a aba). Valores precisam ser JSON.
+const _ESTADO_TELAS = (() => { try { return JSON.parse(sessionStorage.getItem('dnlog_telas') || '{}') || {}; } catch (e) { return {}; } })();
+let _salvarTelasTimer = null;
+const useTelaState = (chave, inicial) => {
+  const [v, setV] = useState(() => Object.prototype.hasOwnProperty.call(_ESTADO_TELAS, chave)
+    ? _ESTADO_TELAS[chave] : (typeof inicial === 'function' ? inicial() : inicial));
+  useEffect(() => {
+    _ESTADO_TELAS[chave] = v;
+    clearTimeout(_salvarTelasTimer);
+    _salvarTelasTimer = setTimeout(() => { try { sessionStorage.setItem('dnlog_telas', JSON.stringify(_ESTADO_TELAS)); } catch (e) {} }, 300);
+  }, [chave, v]);
+  return [v, setV];
+};
+// Conjunto (Set) guardado como array no estado de tela — mesma API de um useState(Set).
+const useTelaSet = (chave) => {
+  const [arr, setArr] = useTelaState(chave, []);
+  const conj = useMemo(() => new Set(arr || []), [arr]);
+  const setConj = (x) => setArr(prev => Array.from(typeof x === 'function' ? x(new Set(prev || [])) : x));
+  return [conj, setConj];
+};
+
+const useSort = (defCol, defDir, chave) => {
+  const [sortCol, setSortCol] = chave ? useTelaState(chave + ':sortCol', defCol) : useState(defCol);
+  const [sortDir, setSortDir] = chave ? useTelaState(chave + ':sortDir', defDir || 'asc') : useState(defDir || 'asc');
   const onSort = (col, colDefDir) => {
     if (sortCol === col) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortCol(col); setSortDir(colDefDir || 'asc'); }
@@ -4876,11 +4960,11 @@ const sortRows = (rows, sortCol, sortDir, getVal) => {
 };
 
 const PedidosCompra = ({ ctx }) => {
-  const [q, setQ] = useState('');
-  const [statusSel, setStatusSel] = useState(['aberto']);
-  const [abertos, setAbertos] = useState(() => new Set()); // pedidos expandidos (vários ao mesmo tempo)
+  const [q, setQ] = useTelaState('pc:q', '');
+  const [statusSel, setStatusSel] = useTelaState('pc:statusSel', ['aberto']);
+  const [abertos, setAbertos] = useTelaSet('pc:abertos'); // pedidos expandidos (vários ao mesmo tempo)
   const alternar = (num) => setAbertos(prev => { const s = new Set(prev); s.has(num) ? s.delete(num) : s.add(num); return s; });
-  const { sortCol, sortDir, onSort } = useSort('entrega', 'asc');
+  const { sortCol, sortDir, onSort } = useSort('entrega', 'asc', 'pc');
   const sortProps = { sortCol, sortDir, onSort };
   const dados = DADOS_PEDIDOS_COMPRA || [];
 
@@ -4994,20 +5078,20 @@ const PedidosCompra = ({ ctx }) => {
         {lista.length === 0 ? (
           <div className="empty"><i className="ti ti-box-off"></i><div>Nenhum pedido de compra encontrado</div></div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-          <table>
+          <div className="ped-wrap">
+          <table className="table-tight ped-tabela">
             <thead><tr>
               <SortTh col="numero" {...sortProps}>Pedido</SortTh>
               <SortTh col="fornecedor" {...sortProps}>Fornecedor</SortTh>
               <SortTh col="emissao" defDir="desc" {...sortProps}>Emissão</SortTh>
               <SortTh col="entrega" {...sortProps}>Entrega</SortTh>
-              <SortTh col="itens" className="num" defDir="desc" {...sortProps}>Itens</SortTh>
-              <SortTh col="qtdtotal" className="num" defDir="desc" {...sortProps}>Qtd total</SortTh>
-              <SortTh col="faturado" className="num" defDir="desc" {...sortProps}>Faturado</SortTh>
+              <SortTh col="itens" className="num c-itens" defDir="desc" {...sortProps}>Itens</SortTh>
+              <SortTh col="qtdtotal" className="num c-total" defDir="desc" {...sortProps}>Qtd total</SortTh>
+              <SortTh col="faturado" className="num c-fat" defDir="desc" {...sortProps}>Faturado</SortTh>
               <SortTh col="saldo" className="num" defDir="desc" {...sortProps}>Saldo (un.)</SortTh>
-              <SortTh col="saldoR" className="num" defDir="desc" {...sortProps}>Saldo (R$)</SortTh>
-              <SortTh col="status" {...sortProps}>Status</SortTh>
-              <th></th>
+              <SortTh col="saldoR" className="num c-saldoR" defDir="desc" {...sortProps}>Saldo (R$)</SortTh>
+              <SortTh col="status" className="c-status" {...sortProps}>Status</SortTh>
+              <th className="c-chev"></th>
             </tr></thead>
             <tbody>{lista.map(p => (
               <React.Fragment key={p.numero}>
@@ -5016,26 +5100,26 @@ const PedidosCompra = ({ ctx }) => {
                   <td>{p.fornecedor}</td>
                   <td style={{ fontSize: 12 }}>{fmtDate(p.data_emissao)}</td>
                   <td style={{ fontSize: 12 }}>{fmtDate(p.data_entrega)}</td>
-                  <td className="num mono">{(p.itens || []).length}</td>
-                  <td className="num mono">{fmtNum(p.qtd_total_bb)}</td>
-                  <td className="num mono">{fmtNum(qtdPedido(p).fat)}</td>
+                  <td className="num mono c-itens">{(p.itens || []).length}</td>
+                  <td className="num mono c-total">{fmtNum(p.qtd_total_bb)}</td>
+                  <td className="num mono c-fat">{fmtNum(qtdPedido(p).fat)}</td>
                   <td className="num mono cell-primary" style={{ color: 'var(--green)', fontWeight: 700 }}>{fmtNum(p.qtd_saldo_bb)}</td>
-                  <td className="num mono">{fmtMoney(p.saldo_aberto)}</td>
-                  <td><StatusSapChip status={p.status_sap} /></td>
-                  <td className="num"><i className={`ti ti-chevron-${abertos.has(p.numero) ? 'up' : 'down'}`} style={{ color: 'var(--text-muted)' }}></i></td>
+                  <td className="num mono c-saldoR">{fmtMoney(p.saldo_aberto)}</td>
+                  <td className="c-status"><StatusSapChip status={p.status_sap} /></td>
+                  <td className="num c-chev"><i className={`ti ti-chevron-${abertos.has(p.numero) ? 'up' : 'down'}`} style={{ color: 'var(--text-muted)' }}></i></td>
                 </tr>
                 {abertos.has(p.numero) && (p.itens || []).map((it, i) => (
                   <tr key={p.numero + '_' + i} style={{ background: 'var(--bg-elev)' }}>
                     <td></td>
                     <td className="mono cell-muted" style={{ fontSize: 11 }}>{it.codigo}</td>
                     <td colSpan={2} style={{ fontSize: 12 }}>{it.descricao} {it.embalagem ? <span className="cell-muted" style={{ fontSize: 11 }}>· {it.embalagem}</span> : null}</td>
-                    <td className="num mono cell-muted" style={{ fontSize: 11 }}>{it.grupo_nome || '—'}</td>
-                    <td className="num mono">{fmtNum(it.qtd_bb)}</td>
-                    <td className="num mono">{fmtNum(qtdItemPedido(p, it).fat)}</td>
+                    <td className="num mono cell-muted c-itens" style={{ fontSize: 11 }}>{it.grupo_nome || '—'}</td>
+                    <td className="num mono c-total">{fmtNum(it.qtd_bb)}</td>
+                    <td className="num mono c-fat">{fmtNum(qtdItemPedido(p, it).fat)}</td>
                     <td className="num mono" style={{ color: 'var(--green)' }}>{fmtNum(it.saldo)}</td>
-                    <td className="num mono">{fmtMoney(it.saldo * (it.valor_unitario || 0))}</td>
-                    <td></td>
-                    <td></td>
+                    <td className="num mono c-saldoR">{fmtMoney(it.saldo * (it.valor_unitario || 0))}</td>
+                    <td className="c-status"></td>
+                    <td className="c-chev"></td>
                   </tr>
                 ))}
               </React.Fragment>
@@ -5049,16 +5133,16 @@ const PedidosCompra = ({ ctx }) => {
 };
 
 const Pedidos = ({ ctx }) => {
-  const [q, setQ] = useState('');
-  const [statusSel, setStatusSel] = useState(['aberto']);
-  const [filtroPrazo, setFiltroPrazo] = useState('todos'); // todos, atrasado, hoje, 7d, 30d, sem_prazo
-  const [filtroVendedor, setFiltroVendedor] = useState('todos');
-  const [filtroGrupo, setFiltroGrupo] = useState('todos');
-  const [filtroCultivar, setFiltroCultivar] = useState('todos');
-  const [filtroItem, setFiltroItem] = useState('todos');
-  const { sortCol, sortDir, onSort } = useSort('entrega', 'asc'); // ordenação por clique no cabeçalho
+  const [q, setQ] = useTelaState('ped:q', '');
+  const [statusSel, setStatusSel] = useTelaState('ped:statusSel', ['aberto']);
+  const [filtroPrazo, setFiltroPrazo] = useTelaState('ped:filtroPrazo', 'todos'); // todos, atrasado, hoje, 7d, 30d, sem_prazo
+  const [filtroVendedor, setFiltroVendedor] = useTelaState('ped:filtroVendedor', 'todos');
+  const [filtroGrupo, setFiltroGrupo] = useTelaState('ped:filtroGrupo', 'todos');
+  const [filtroCultivar, setFiltroCultivar] = useTelaState('ped:filtroCultivar', 'todos');
+  const [filtroItem, setFiltroItem] = useTelaState('ped:filtroItem', 'todos');
+  const { sortCol, sortDir, onSort } = useSort('entrega', 'asc', 'ped'); // ordenação por clique no cabeçalho
   const sortProps = { sortCol, sortDir, onSort };
-  const [abertos, setAbertos] = useState(() => new Set()); // pedidos expandidos (vários ao mesmo tempo)
+  const [abertos, setAbertos] = useTelaSet('ped:abertos'); // pedidos expandidos (vários ao mesmo tempo)
   const alternar = (num) => setAbertos(prev => { const s = new Set(prev); s.has(num) ? s.delete(num) : s.add(num); return s; });
 
   // Filtros iguais aos da tela de Estoque (grupo/cultivar/item), + vendedor.
@@ -5354,22 +5438,19 @@ const Pedidos = ({ ctx }) => {
           </div>
         )}
 
-        <div style={{ overflowX: 'auto' }}>
-        <table>
+        <div className="ped-wrap">
+        <table className="table-tight ped-tabela">
           <thead><tr>
-            <SortTh col="numero" {...sortProps}>Pedido</SortTh>
-            <SortTh col="cliente" {...sortProps}>Cliente</SortTh>
-            <SortTh col="vendedor" {...sortProps}>Vendedor</SortTh>
-            <SortTh col="emissao" defDir="desc" {...sortProps}>Emissão</SortTh>
-            <SortTh col="entrega" {...sortProps}>Entrega prevista</SortTh>
-            <th style={{ width: 90 }}>Urgência</th>
-            <SortTh col="qtdtotal" className="num" defDir="desc" {...sortProps}>Qtd total</SortTh>
-            <SortTh col="faturado" className="num" defDir="desc" {...sortProps}>Faturado</SortTh>
-            <SortTh col="emoe" className="num" defDir="desc" {...sortProps}>Em OE</SortTh>
+            <SortTh col="numero" {...sortProps}>Pedido · emissão</SortTh>
+            <SortTh col="cliente" {...sortProps}>Cliente · vendedor</SortTh>
+            <SortTh col="entrega" {...sortProps}>Entrega · urgência</SortTh>
+            <SortTh col="qtdtotal" className="num c-total" defDir="desc" {...sortProps}>Qtd total</SortTh>
+            <SortTh col="faturado" className="num c-fat" defDir="desc" {...sortProps}>Faturado</SortTh>
+            <SortTh col="emoe" className="num c-emoe" defDir="desc" {...sortProps}>Em OE</SortTh>
             <SortTh col="saldo" className="num" defDir="desc" {...sortProps}>Saldo</SortTh>
-            <SortTh col="saldoaberto" className="num" defDir="desc" {...sortProps}>Saldo aberto</SortTh>
-            <SortTh col="status" {...sortProps}>Status</SortTh>
-            <th></th>
+            <SortTh col="saldoaberto" className="num c-saldoR" defDir="desc" {...sortProps}>Saldo aberto</SortTh>
+            <SortTh col="status" className="c-status" {...sortProps}>Status</SortTh>
+            <th className="c-chev"></th>
           </tr></thead>
           <tbody>{lista.map(p => {
             const u = calcUrgencia(p.data_entrega);
@@ -5378,18 +5459,14 @@ const Pedidos = ({ ctx }) => {
             return (
               <React.Fragment key={p.numero}>
               <tr onClick={() => alternar(p.numero)} style={{ cursor: 'pointer', background: exp ? 'var(--bg-hover)' : undefined }}>
-                <td className="cell-primary mono">{p.numero}</td>
-                <td>{p.cliente}</td>
-                <td>{p.vendedor || '—'}</td>
-                <td className="mono cell-muted">{fmtDate(p.data_emissao)}</td>
-                <td className="mono" style={{ color: u.cor, fontWeight: u.categoria === 'atrasado' || u.categoria === 'hoje' ? 700 : 400 }}>
-                  {p.data_entrega ? fmtDate(p.data_entrega) : <span style={{ color: 'var(--text-dim)' }}>—</span>}
-                </td>
-                <td>
+                <td className="cell-primary mono" style={{ whiteSpace: 'nowrap' }}>{p.numero}<span className="ped-sub mono">{fmtDate(p.data_emissao)}</span></td>
+                <td style={{ minWidth: 160 }}>{p.cliente}<span className="ped-sub">{p.vendedor || '—'}</span></td>
+                <td className="mono" style={{ whiteSpace: 'nowrap' }}>
+                  <div style={{ color: u.cor, fontWeight: u.categoria === 'atrasado' || u.categoria === 'hoje' ? 700 : 400 }}>{p.data_entrega ? fmtDate(p.data_entrega) : <span style={{ color: 'var(--text-dim)' }}>—</span>}</div>
                   {p.data_entrega ? (
                     <span style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 4,
-                      padding: '2px 8px', borderRadius: 3,
+                      display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 3, whiteSpace: 'nowrap',
+                      padding: '1px 6px', borderRadius: 3,
                       background: u.bgCor, color: u.cor,
                       fontSize: 11, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace',
                       border: u.categoria === 'atrasado' ? '1px solid var(--red)' : 'none'
@@ -5401,17 +5478,17 @@ const Pedidos = ({ ctx }) => {
                     </span>
                   ) : <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>sem prazo</span>}
                 </td>
-                <td className="num mono">{fmtNum(qp.tot)}</td>
-                <td className="num mono">{fmtNum(qp.fat)}</td>
-                <td className="num mono" style={{ color: qp.emOE ? 'var(--orange)' : 'var(--text-dim)' }}>{qp.emOE ? fmtNum(qp.emOE) : '—'}</td>
+                <td className="num mono c-total">{fmtNum(qp.tot)}</td>
+                <td className="num mono c-fat">{fmtNum(qp.fat)}</td>
+                <td className="num mono c-emoe" style={{ color: qp.emOE ? 'var(--orange)' : 'var(--text-dim)' }}>{qp.emOE ? fmtNum(qp.emOE) : '—'}</td>
                 <td className="num mono cell-primary" style={{ color: qp.saldo ? 'var(--accent-light)' : 'var(--text-dim)', fontWeight: 700 }}>{fmtNum(qp.saldo)}</td>
-                <td className="num cell-primary">{fmtMoney(p.saldo_aberto)}</td>
-                <td><StatusSapChip status={p.status_sap} /></td>
-                <td className="num"><i className={`ti ti-chevron-${exp ? 'up' : 'down'}`} style={{ color: 'var(--text-muted)' }}></i></td>
+                <td className="num cell-primary c-saldoR">{fmtMoney(p.saldo_aberto)}</td>
+                <td className="c-status"><StatusSapChip status={p.status_sap} /></td>
+                <td className="num c-chev"><i className={`ti ti-chevron-${exp ? 'up' : 'down'}`} style={{ color: 'var(--text-muted)' }}></i></td>
               </tr>
               {exp && (
                 <tr>
-                  <td colSpan={13} style={{ padding: 0, background: 'var(--bg-card)' }}>
+                  <td colSpan={10} style={{ padding: 0, background: 'var(--bg-card)' }}>
                     <table style={{ width: '100%', fontSize: 12, margin: 0 }}>
                       <thead><tr style={{ color: 'var(--text-muted)' }}>
                         <th style={{ paddingLeft: 28, textAlign: 'left' }}>Item</th>
@@ -5712,15 +5789,15 @@ const Estoque = ({ ctx }) => {
   //  • SEM lote  → total por ITEM, com o comprometido em pedidos de venda e o a
   //    receber de compra (aba "Compromissos"). Somar as duas juntas contaria o
   //    saldo em dobro — por isso ficam em abas separadas.
-  const [aba, setAba] = useState('lotes'); // 'lotes' | 'compromissos' | 'terceiros'
+  const [aba, setAba] = useTelaState('est:aba', 'lotes'); // 'lotes' | 'compromissos' | 'terceiros'
   const reservasLote = useReservasPorLote(); // QCDN: lote -> reservas em aberto
-  const [q, setQ] = useState('');
-  const [filtroArmazem, setFiltroArmazem] = useState('todos');
-  const [filtroGrupo, setFiltroGrupo] = useState('todos');
-  const [filtroCultivar, setFiltroCultivar] = useState('todos');
-  const [filtroItem, setFiltroItem] = useState('todos');
-  const [sortBy, setSortBy] = useState('saldo');   // 'saldo' | 'descricao'
-  const [sortDir, setSortDir] = useState('desc');  // 'asc' | 'desc'
+  const [q, setQ] = useTelaState('est:q', '');
+  const [filtroArmazem, setFiltroArmazem] = useTelaState('est:filtroArmazem', 'todos');
+  const [filtroGrupo, setFiltroGrupo] = useTelaState('est:filtroGrupo', 'todos');
+  const [filtroCultivar, setFiltroCultivar] = useTelaState('est:filtroCultivar', 'todos');
+  const [filtroItem, setFiltroItem] = useTelaState('est:filtroItem', 'todos');
+  const [sortBy, setSortBy] = useTelaState('est:sortBy', 'saldo');   // 'saldo' | 'descricao'
+  const [sortDir, setSortDir] = useTelaState('est:sortDir', 'desc');  // 'asc' | 'desc'
   const toggleSort = (col) => {
     if (sortBy === col) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortBy(col); setSortDir(col === 'descricao' ? 'asc' : 'desc'); }
@@ -6060,8 +6137,8 @@ const Estoque = ({ ctx }) => {
 // partir de um pedido de compra do SAP. Fluxo espelha a OE de vendas, mas de
 // entrada: escolhe o pedido de compra, os itens/quantidades e o motorista.
 const EmbarquesFornecedores = ({ ctx }) => {
-  const [aba, setAba] = useState('retirada'); // 'retirada' | 'agendamentos'
-  const [q, setQ] = useState('');
+  const [aba, setAba] = useTelaState('embforn:aba', 'retirada'); // 'retirada' | 'agendamentos'
+  const [q, setQ] = useTelaState('embforn:q', '');
   const dados = ctx.state.ordensCompra || [];
   const lista = useMemo(() => {
     let l = [...dados].sort((a, b) => new Date(b.criado_em) - new Date(a.criado_em));
@@ -6761,7 +6838,7 @@ const NovaOEFornecedor = ({ ctx }) => {
     } else {
       ctx.criarOECompra(payload);
     }
-    ctx.setScreen('embarque-fornecedores');
+    ctx.setScreen('embarque-fornecedores', { substituir: true });
   };
 
   return (
@@ -6772,7 +6849,7 @@ const NovaOEFornecedor = ({ ctx }) => {
           <h1 className="page-title">{edit ? `Editar ${edit.numero || 'OE de Retirada'}` : 'Nova OE · Retirada em Fornecedor'}</h1>
           <p className="page-subtitle">{edit ? 'Ajuste itens, motorista/veículo e programação' : 'Escolha o pedido de compra, os itens e informe motorista/veículo'}</p>
         </div>
-        <button className="btn btn-ghost" onClick={() => { ctx.setEditingOECompra(null); ctx.setScreen('embarque-fornecedores'); }}><i className="ti ti-arrow-left"></i> Voltar</button>
+        <button className="btn btn-ghost" onClick={() => { ctx.setEditingOECompra(null); ctx.voltar('embarque-fornecedores'); }}><i className="ti ti-arrow-left"></i> Voltar</button>
       </div>
 
       <div className="panel" style={{ marginBottom: 16 }}>
@@ -6846,7 +6923,7 @@ const NovaOEFornecedor = ({ ctx }) => {
       )}
 
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-        <button className="btn btn-ghost" onClick={() => { ctx.setEditingOECompra(null); ctx.setScreen('embarque-fornecedores'); }}>Cancelar</button>
+        <button className="btn btn-ghost" onClick={() => { ctx.setEditingOECompra(null); ctx.voltar('embarque-fornecedores'); }}>Cancelar</button>
         <button className="btn btn-primary" onClick={salvar} disabled={(!pc && !edit) || escolhidos.length === 0}><i className="ti ti-check"></i> {edit ? 'Salvar alterações' : 'Criar OE de retirada'}</button>
       </div>
     </div>
@@ -7249,7 +7326,7 @@ const NovaOE = ({ ctx, editMode }) => {
       ctx.criarOE(dadosOE);
     }
     ctx.setEditingOE(null);
-    ctx.setScreen(isEditing ? 'detalhe-oe' : 'agendamentos');
+    ctx.setScreen(isEditing ? 'detalhe-oe' : 'agendamentos', { substituir: true });
     if (isEditing) {
       ctx.setViewingOE({ ...initial, ...dadosOE });
     }
@@ -7293,7 +7370,7 @@ const NovaOE = ({ ctx, editMode }) => {
             {isEditing ? `Modificando ordem existente · status atual mantido` : 'Suporta até 6 paradas (multi-cliente) com emblocamento no caminhão'}
           </p>
         </div>
-        <button className="btn btn-ghost" onClick={() => { ctx.setEditingOE(null); ctx.setScreen(isEditing ? 'detalhe-oe' : 'agendamentos'); }}>
+        <button className="btn btn-ghost" onClick={() => { ctx.setEditingOE(null); ctx.voltar(isEditing ? 'detalhe-oe' : 'agendamentos'); }}>
           <i className="ti ti-x"></i> Cancelar
         </button>
       </div>
@@ -9481,7 +9558,7 @@ const DetalheOE = ({ ctx }) => {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn btn-ghost" onClick={() => ctx.setScreen('agendamentos')}><i className="ti ti-arrow-left"></i> Voltar</button>
+          <button className="btn btn-ghost" onClick={() => ctx.voltar('agendamentos')}><i className="ti ti-arrow-left"></i> Voltar</button>
           <button className="btn btn-ghost" onClick={handlePrint}><i className="ti ti-printer"></i> Imprimir</button>
           {ctx.podeEditar && oeAtual.status !== 'CANCELADA' && oeAtual.status !== 'ENTREGUE' && (
             <button className="btn btn-ghost" style={{ borderColor: 'var(--blue)', color: 'var(--blue)' }} onClick={() => {
@@ -9618,7 +9695,7 @@ const DetalheOE = ({ ctx }) => {
       <DocumentoOE oe={oeAtual} totais={totais} />
 
       <div className="no-print" style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 12 }}>
-        <button className="btn btn-ghost" onClick={() => ctx.setScreen('agendamentos')}><i className="ti ti-list"></i> Voltar à lista</button>
+        <button className="btn btn-ghost" onClick={() => ctx.voltar('agendamentos')}><i className="ti ti-list"></i> Voltar à lista</button>
         <button className="btn btn-ghost" onClick={handlePrint}><i className="ti ti-printer"></i> Imprimir A4</button>
       </div>
     </div>
@@ -10251,7 +10328,7 @@ const Calendario = ({ ctx }) => {
 // CONFERÊNCIA (FILA)
 // ============================================================
 const Conferencia = ({ ctx }) => {
-  const [filtroAba, setFiltroAba] = useState('FILA'); // FILA (aguardando+em_conf), AGUARDANDO, EM_CONF, CONFERIDAS, TODAS
+  const [filtroAba, setFiltroAba] = useTelaState('conf:filtroAba', 'FILA'); // FILA (aguardando+em_conf), AGUARDANDO, EM_CONF, CONFERIDAS, TODAS
 
   // Função: a OE foi conferida HOJE? (baseado em embarcada_em)
   const ehHoje = (dataISO) => {
@@ -11190,11 +11267,11 @@ const dataDaOE = (o) => String((o && (o.data_prevista || o.criado_em)) || '').sl
 const clientesDaOE = (oe) => Array.from(new Set(getParadas(oe).map(p => p.cliente).filter(Boolean))).join(' · ');
 
 const Fretes = ({ ctx }) => {
-  const [aba, setAba] = useState('fechar'); // fechar | fechados | oes | config
+  const [aba, setAba] = useTelaState('fretes:aba', 'fechar'); // fechar | fechados | oes | config
   const ordens = ctx.state.ordens;
   const cfg = freteCfg(ctx.config);
   const apr = useMemo(() => freteAprendido(ordens), [ordens]);
-  const [desde, setDesde] = useState(cfg.inicio || addDays(todayISO(), -45));
+  const [desde, setDesde] = useTelaState('fretes:desde', cfg.inicio || addDays(todayISO(), -45));
 
   const ativas = useMemo(() => ordens.filter(o => o.status !== 'CANCELADA' && o.status !== 'RASCUNHO' && dataDaOE(o) >= desde), [ordens, desde]);
   const aFechar = useMemo(() => ativas.filter(o =>
@@ -13238,13 +13315,13 @@ const MapaCargaPrint = ({ oe, mapa }) => {
 };
 
 const Embarques = ({ ctx }) => {
-  const [filtroStatus, setFiltroStatus] = useState('TODOS');
-  const [filtroModalidade, setFiltroModalidade] = useState('TODAS');
-  const [filtroFaturado, setFiltroFaturado] = useState('TODOS'); // TODOS, FATURADAS, NAO_FATURADAS
-  const [filtroPeriodo, setFiltroPeriodo] = useState('30d');
-  const [busca, setBusca] = useState('');
-  const [ordenacao, setOrdenacao] = useState('criacao_desc');
-  const [oeExpandida, setOeExpandida] = useState(null);
+  const [filtroStatus, setFiltroStatus] = useTelaState('emb:filtroStatus', 'TODOS');
+  const [filtroModalidade, setFiltroModalidade] = useTelaState('emb:filtroModalidade', 'TODAS');
+  const [filtroFaturado, setFiltroFaturado] = useTelaState('emb:filtroFaturado', 'TODOS'); // TODOS, FATURADAS, NAO_FATURADAS
+  const [filtroPeriodo, setFiltroPeriodo] = useTelaState('emb:filtroPeriodo', '30d');
+  const [busca, setBusca] = useTelaState('emb:busca', '');
+  const [ordenacao, setOrdenacao] = useTelaState('emb:ordenacao', 'criacao_desc');
+  const [oeExpandida, setOeExpandida] = useTelaState('emb:oeExpandida', null);
   // Status de pagamento por cliente (SAP: carteira aberta vs recebido) — para a
   // flag PGT Total/Parcial/Sem em cada OE. Busca 1x; não bloqueia a tela.
   const [pagStatus, setPagStatus] = useState({ byCard: {}, byNome: {} });
@@ -13733,7 +13810,7 @@ const DetalhePedido = ({ ctx }) => {
       <div className="empty" style={{ padding: 40 }}>
         <i className="ti ti-file-off"></i>
         <div style={{ fontSize: 14, color: 'var(--text)' }}>Nenhum pedido selecionado</div>
-        <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={() => ctx.setScreen('pedidos')}>
+        <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={() => ctx.voltar('pedidos')}>
           <i className="ti ti-arrow-left"></i> Voltar para Pedidos
         </button>
       </div>
@@ -13812,7 +13889,7 @@ const DetalhePedido = ({ ctx }) => {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-ghost" onClick={() => ctx.setScreen('pedidos')}>
+          <button className="btn btn-ghost" onClick={() => ctx.voltar('pedidos')}>
             <i className="ti ti-arrow-left"></i> Voltar
           </button>
           {ctx.podeEditar && pedido.tem_saldo && (
