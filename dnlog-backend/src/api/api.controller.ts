@@ -140,7 +140,8 @@ export class ApiController {
         // Venda = todas as linhas com CFOP de venda (51xx/61xx nas faixas 5101-5123).
         // O que não é venda (remessa simbólica 5934/6934, transferência 5152 etc.)
         // fica marcado como não-venda para poder ser filtrado.
-        return (invs as any[]).map((i) => this.mapNotaFiscal(i, nomeVend, /^[56]1(0[1-9]|1[0-9]|2[0-3])$/));
+        const nfs = (invs as any[]).map((i) => this.mapNotaFiscal(i, nomeVend, /^[56]1(0[1-9]|1[0-9]|2[0-3])$/, 17));
+        return this.comPedidos(nfs, '/Orders', 'PV');
       },
       300000,
     );
@@ -151,8 +152,12 @@ export class ApiController {
    * marca a operação "principal" (venda na saída, compra na entrada) em `ehVenda`
    * — o resto (remessa, retorno, transferência…) pode ser filtrado na tela.
    */
-  private mapNotaFiscal(i: any, nomeVend: Record<string, string>, cfopPrincipal: RegExp) {
+  private mapNotaFiscal(i: any, nomeVend: Record<string, string>, cfopPrincipal: RegExp, baseTypePedido: number) {
     const linhas = Array.isArray(i.DocumentLines) ? i.DocumentLines : [];
+    // Pedidos de origem (linhas copiadas do pedido: BaseType 17 venda / 22 compra).
+    const baseEntries = Array.from(new Set(
+      linhas.filter((l: any) => Number(l.BaseType) === baseTypePedido && l.BaseEntry != null).map((l: any) => Number(l.BaseEntry)),
+    ));
     const cfops = Array.from(new Set(linhas.map((l: any) => l.CFOPCode).filter(Boolean)));
     const projetos = Array.from(new Set(linhas.map((l: any) => l.ProjectCode).filter(Boolean)));
     return {
@@ -177,7 +182,25 @@ export class ApiController {
       cfops,
       projeto: projetos.join(', '),
       ehVenda: cfops.length > 0 && cfops.every((c: any) => cfopPrincipal.test(String(c))),
+      _baseEntries: baseEntries,
     };
+  }
+
+  /**
+   * Troca o DocEntry dos pedidos de origem pelo número (PV-x / PC-x), numa
+   * consulta só de leitura ao SAP. Se falhar, a NF sai sem o número (não trava).
+   */
+  private async comPedidos(nfs: any[], endpoint: '/Orders' | '/PurchaseOrders', prefixo: string) {
+    let mapa: Record<string, number> = {};
+    const ids = nfs.flatMap((n) => n._baseEntries || []);
+    if (ids.length && this.sap.getDocNums) {
+      try { mapa = await this.sap.getDocNums(endpoint, ids); }
+      catch (e: any) { this.logger.warn(`Pedidos das NFs não resolvidos: ${e?.message || e}`); }
+    }
+    return nfs.map(({ _baseEntries, ...n }) => ({
+      ...n,
+      pedidos: (_baseEntries || []).map((de: number) => ({ docEntry: de, numero: mapa[String(de)] ? `${prefixo}-${mapa[String(de)]}` : null })),
+    }));
   }
 
   /** Linhas de uma NF completa (item, qtd, valor, CFOP e lotes) — saída e entrada. */
@@ -191,6 +214,8 @@ export class ApiController {
       cfop: l.CFOPCode || '',
       projeto: l.ProjectCode || '',
       armazem: l.WarehouseCode,
+      baseType: l.BaseType,
+      baseEntry: l.BaseEntry,
       lotes: (l.BatchNumbers || []).map((b: any) => ({
         lote: b.BatchNumber,
         quantidade: Number(b.Quantity) || 0,
@@ -216,7 +241,8 @@ export class ApiController {
         for (const v of compradores as any[]) nome[String(v.SalesEmployeeCode)] = v.SalesEmployeeName;
         // Compra = CFOPs de compra (1101-1129 / 2101-2129 / 3101-3129). O resto
         // (remessa, retorno de armazém, devolução, transferência…) fica "outra".
-        return (notas as any[]).map((i) => this.mapNotaFiscal(i, nome, /^[123]1(0[1-9]|1[0-9]|2[0-9])$/));
+        const nfs = (notas as any[]).map((i) => this.mapNotaFiscal(i, nome, /^[123]1(0[1-9]|1[0-9]|2[0-9])$/, 22));
+        return this.comPedidos(nfs, '/PurchaseOrders', 'PC');
       },
       300000,
     );

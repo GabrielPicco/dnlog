@@ -2675,6 +2675,13 @@ const NFS_CFG = {
 // Data local (YYYY-MM-DD) — evita o "amanhã" do toISOString (UTC) à noite.
 const isoLocal = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 const isoDiasAtras = (dias) => isoLocal(new Date(Date.now() - dias * 86400000));
+// Pedidos de origem de uma NF (PV-x / PC-x); sem número resolvido mostra o DocEntry.
+const pedidosNF = (n) => ((n && n.pedidos) || []).map(p => p.numero || ('DocEntry ' + p.docEntry));
+// Pedido de uma linha da NF (pelo BaseEntry), ou os da NF inteira se a linha não indicar.
+const pedidoLinhaNF = (n, l) => {
+  const p = ((n && n.pedidos) || []).find(x => l && l.baseEntry != null && Number(x.docEntry) === Number(l.baseEntry));
+  return p ? (p.numero || ('DocEntry ' + p.docEntry)) : pedidosNF(n).join(', ');
+};
 
 const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
   const C = NFS_CFG[tipo] || NFS_CFG.saida;
@@ -2720,16 +2727,16 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
     await Promise.all(Array.from({ length: 3 }, () => worker()));
   };
 
-  // Export DETALHADO de TODAS as notas do período (todos os clientes):
-  // uma linha por NF×item×lote com quantidade e valor. Busca os lotes de cada
-  // NF (concorrência limitada) e monta o CSV.
+  // Export DETALHADO das notas FILTRADAS na tela (cliente, utilização, busca,
+  // canceladas): uma linha por NF×item×lote com pedido, quantidade e valor.
+  // Busca os lotes de cada NF (concorrência limitada) e monta o CSV.
   const exportarDetalhado = async () => {
-    const notas = base; // todas do período (respeita só canceladas)
+    const notas = lista;
     if (!notas.length) return;
     setExportando(true);
     ctx.showToast && ctx.showToast('Gerando export detalhado…', `${notas.length} NF(s) — aguarde`);
     const clean = s => String(s == null ? '' : s).replace(/[;\n\r]/g, ' ');
-    const rows = [['NFe', 'Serie', 'DocNum', 'Data', C.Parte, 'CardCode', C.pessoa, 'CFOP', 'Tipo', 'Item', 'Descricao', 'Projeto', 'Lote', 'Quantidade', 'Valor', 'Status'].join(';')];
+    const rows = [['NFe', 'Serie', 'DocNum', 'Data', C.Parte, 'CardCode', C.pessoa, 'CFOP', 'Tipo', 'Pedido', 'Item', 'Descricao', 'Projeto', 'Lote', 'Quantidade', 'Valor', 'Status'].join(';')];
     const cacheLocal = {};
     let idx = 0;
     const worker = async () => {
@@ -2746,12 +2753,12 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
         const data = (n.data || '').slice(0, 10);
         const cab = [n.nfe, n.serie, n.docNum, data, clean(n.cliente), n.cardCode, clean(n.vendedor), n.cfop, n.ehVenda ? C.principal : 'Outra'];
         if (!linhas.length) {
-          rows.push([...cab, '', '', '', '', '', (n.total || 0).toFixed(2), st].join(';'));
+          rows.push([...cab, clean(pedidosNF(n).join(', ')), '', '', '', '', '', (n.total || 0).toFixed(2), st].join(';'));
         } else {
           linhas.forEach(l => {
             const lotes = (l.lotes && l.lotes.length) ? l.lotes : [{ lote: '', quantidade: l.quantidade, valor: l.valorLinha }];
             lotes.forEach(lo => {
-              rows.push([...cab, l.itemCode, clean(l.descricao), clean(l.projeto), lo.lote, lo.quantidade, (lo.valor || 0).toFixed(2), st].join(';'));
+              rows.push([...cab, clean(pedidoLinhaNF(n, l)), l.itemCode, clean(l.descricao), clean(l.projeto), lo.lote, lo.quantidade, (lo.valor || 0).toFixed(2), st].join(';'));
             });
           });
         }
@@ -2761,7 +2768,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
       await Promise.all(Array.from({ length: 3 }, () => worker()));
       const blob = new Blob(['﻿' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = `${C.arquivo}_detalhado_${desde}_a_${ate}.csv`; a.click();
+      const a = document.createElement('a'); a.href = url; a.download = `${C.arquivo}_detalhado${clienteSel !== 'todos' || cfopSel !== 'todos' || q ? '_filtrado' : ''}_${desde}_a_${ate}.csv`; a.click();
       URL.revokeObjectURL(url);
       ctx.showToast && ctx.showToast('Export detalhado pronto', `${notas.length} NF(s) · ${rows.length - 1} linhas`);
     } finally { setExportando(false); }
@@ -2809,7 +2816,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
     if (clienteSel !== 'todos') l = l.filter(n => (n.cardCode || n.cliente) === clienteSel);
     if (q) {
       const ql = q.toLowerCase();
-      l = l.filter(n => (n.cliente || '').toLowerCase().includes(ql) || String(n.nfe || '').includes(ql) || (n.vendedor || '').toLowerCase().includes(ql) || String(n.cfop || '').includes(ql));
+      l = l.filter(n => (n.cliente || '').toLowerCase().includes(ql) || String(n.nfe || '').includes(ql) || (n.vendedor || '').toLowerCase().includes(ql) || String(n.cfop || '').includes(ql) || pedidosNF(n).join(' ').toLowerCase().includes(ql));
     }
     return [...l].sort((a, b) => (b.data || '').localeCompare(a.data || ''));
   }, [base, clienteSel, q]);
@@ -2818,13 +2825,13 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
   const totValor = lista.reduce((a, n) => a + (n.total || 0), 0);
 
   const exportarCSV = () => {
-    const linhas = [['NFe', 'Serie', 'DocNum', 'Data', C.Parte, 'CardCode', C.pessoa, 'CFOP', 'Tipo', 'Projeto', 'Valor', 'Status'].join(';')];
+    const linhas = [['NFe', 'Serie', 'DocNum', 'Data', 'Pedido(s)', C.Parte, 'CardCode', C.pessoa, 'CFOP', 'Tipo', 'Projeto', 'Valor', 'Status'].join(';')];
     lista.forEach(n => linhas.push([
-      n.nfe, n.serie, n.docNum, (n.data || '').slice(0, 10), (n.cliente || '').replace(/;/g, ','),
+      n.nfe, n.serie, n.docNum, (n.data || '').slice(0, 10), pedidosNF(n).join(', '), (n.cliente || '').replace(/;/g, ','),
       n.cardCode, (n.vendedor || '').replace(/;/g, ','), n.cfop, n.ehVenda ? C.principal : 'Outra', (n.projeto || '').replace(/;/g, ','),
       (n.total || 0).toFixed(2), n.cancelada ? 'CANCELADA' : n.status,
     ].map(c => String(c == null ? '' : c)).join(';')));
-    linhas.push(['', '', '', '', 'TOTAL', '', '', '', '', '', totValor.toFixed(2), `${totNFs} NF(s)`].join(';'));
+    linhas.push(['', '', '', '', '', 'TOTAL', '', '', '', '', '', totValor.toFixed(2), `${totNFs} NF(s)`].join(';'));
     const blob = new Blob(['﻿' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = `${C.arquivo}_${desde}_a_${ate}.csv`; a.click();
@@ -2865,9 +2872,9 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
           <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportarCSV} disabled={!lista.length}>
             <i className="ti ti-download"></i> CSV resumo
           </button>
-          <button className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportarDetalhado} disabled={exportando || !base.length}
-            title="CSV de TODAS as notas do período, com item, lote, quantidade e valor">
-            <i className={'ti ' + (exportando ? 'ti-loader-2' : 'ti-file-spreadsheet')}></i> {exportando ? 'Gerando…' : 'Export detalhado (todas)'}
+          <button className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportarDetalhado} disabled={exportando || !lista.length}
+            title="CSV das notas filtradas na tela, com pedido, item, lote, quantidade e valor">
+            <i className={'ti ' + (exportando ? 'ti-loader-2' : 'ti-file-spreadsheet')}></i> {exportando ? 'Gerando…' : `Export detalhado (${lista.length} NF${lista.length === 1 ? '' : 's'})`}
           </button>
         </div>
       </div>
@@ -2883,7 +2890,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
           {cfopsDisponiveis.map(c => <option key={c} value={c}>Utilização {c}</option>)}
         </select>
         <div className="search-box" style={{ flex: '1 1 200px', minWidth: 160 }}><i className="ti ti-search"></i>
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder={`Buscar ${C.parte}, NFe, ${C.pessoa.toLowerCase()}, CFOP...`} /></div>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder={`Buscar ${C.parte}, NFe, pedido, ${C.pessoa.toLowerCase()}, CFOP...`} /></div>
         <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
           <input type="checkbox" checked={incluirCanceladas} onChange={e => setIncluirCanceladas(e.target.checked)} /> incluir canceladas
         </label>
@@ -2940,6 +2947,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
               <thead><tr>
                 <th style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>NFe</th>
                 <th style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>Data</th>
+                <th style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>Pedido</th>
                 <th style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>{C.Parte}</th>
                 <th style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>{C.pessoa}</th>
                 <th className="num" style={{ position: 'sticky', top: 0, background: 'var(--bg-elev)' }}>Valor</th>
@@ -2958,13 +2966,14 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
                           {n.cfop && <span style={{ display: 'block', fontSize: 9, fontWeight: 400, color: n.ehVenda ? 'var(--text-dim)' : 'var(--orange)' }}>CFOP {n.cfop}</span>}
                         </td>
                         <td className="mono cell-muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(n.data)}</td>
+                        <td className="mono" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{pedidosNF(n).length ? pedidosNF(n).map(x => <div key={x}>{x}</div>) : <span style={{ color: 'var(--text-dim)' }}>—</span>}</td>
                         <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.cliente}</td>
                         <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{n.vendedor || '—'}</td>
                         <td className="num mono" style={{ fontWeight: 700 }}>{fmtMoney(n.total)}{n.cancelada && <span className="chip" style={{ marginLeft: 6, background: 'var(--red-bg)', color: 'var(--red)', fontSize: 9 }}>CANC</span>}</td>
                       </tr>
                       {exp && (
                         <tr>
-                          <td colSpan={5} style={{ padding: 0, background: 'var(--bg-card)' }}>
+                          <td colSpan={6} style={{ padding: 0, background: 'var(--bg-card)' }}>
                             {det && det.loading ? (
                               <div style={{ padding: '10px 16px', fontSize: 12, color: 'var(--text-muted)' }}><i className="ti ti-loader-2"></i> Carregando itens/lotes da NF…</div>
                             ) : det && det.erro ? (
@@ -2983,7 +2992,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
                                     const lotes = (l.lotes && l.lotes.length) ? l.lotes : [{ lote: '—', quantidade: l.quantidade, valor: l.valorLinha }];
                                     return lotes.map((lo, loi) => (
                                       <tr key={li + '-' + loi}>
-                                        <td style={{ paddingLeft: 28 }}>{loi === 0 ? (l.descricao || l.itemCode) : ''}<span style={{ color: 'var(--text-dim)' }}>{loi === 0 && l.descricao ? ' · ' + l.itemCode : ''}</span></td>
+                                        <td style={{ paddingLeft: 28 }}>{loi === 0 ? (l.descricao || l.itemCode) : ''}<span style={{ color: 'var(--text-dim)' }}>{loi === 0 && l.descricao ? ' · ' + l.itemCode : ''}{loi === 0 && pedidosNF(n).length > 1 ? ' · ' + pedidoLinhaNF(n, l) : ''}</span></td>
                                         <td className="mono" style={{ color: 'var(--accent-light)', fontWeight: 600 }}>{lo.lote}</td>
                                         <td className="mono" style={{ color: 'var(--text-muted)' }}>{loi === 0 ? (l.projeto || '—') : ''}</td>
                                         <td className="num mono">{fmtNum(lo.quantidade)}</td>

@@ -607,6 +607,24 @@ export class SapClientService implements OnModuleDestroy {
    * [LEITURA] Lista as Notas Fiscais de Saída (Invoices/OINV) do período, para o
    * relatório de faturamento por cliente. Campos-chave apenas (sem linhas).
    */
+  /**
+   * [LEITURA] DocNum de pedidos (Orders / PurchaseOrders) a partir do DocEntry —
+   * mostra o pedido de origem de cada NF. Consulta em lotes de 25 (filtro OR).
+   */
+  async getDocNums(endpoint: '/Orders' | '/PurchaseOrders', docEntries: number[]): Promise<Record<string, number>> {
+    const ids = Array.from(new Set((docEntries || []).map(Number).filter((n) => Number.isFinite(n) && n > 0)));
+    const out: Record<string, number> = {};
+    for (let i = 0; i < ids.length; i += 25) {
+      const lote = ids.slice(i, i + 25);
+      const rows = await this.getAllPages(endpoint, {
+        $select: 'DocEntry,DocNum',
+        $filter: lote.map((id) => `DocEntry eq ${id}`).join(' or '),
+      });
+      for (const r of rows) out[String(r.DocEntry)] = r.DocNum;
+    }
+    return out;
+  }
+
   async getFaturamento(desde?: string, ate?: string): Promise<any[]> {
     await this.ensureSession();
     // DocumentLines vem embutido pelo $select (não usar $expand). Traz CFOP e
