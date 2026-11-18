@@ -1808,7 +1808,10 @@ const SUBTELAS = {
   'calendario': ['embarques'],
   'conferencia-detalhe': ['conferencia'],
   'detalhe-pedido': ['pedidos'],
-  'pedidos-compra': ['embarque-fornecedores'],
+  // Compras é aberta pelo botão Vendas | Compras da tela Pedidos: quem vê
+  // Pedidos também vê (antes, com "Embarque - Fornecedores" oculto no menu, o
+  // botão caía na primeira tela liberada, que é Relatórios).
+  'pedidos-compra': ['embarque-fornecedores', 'pedidos'],
   'nova-oe-fornecedor': ['embarque-fornecedores'],
   'usuarios': ['configuracoes'],
 };
