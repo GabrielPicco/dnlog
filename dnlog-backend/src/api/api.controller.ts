@@ -121,16 +121,16 @@ export class ApiController {
   // Lista as Notas Fiscais de Saída para o relatório de faturamento por cliente.
   // Período padrão: últimos 90 dias. SOMENTE LEITURA no SAP.
   @Get('faturamento')
-  async faturamento(@Query('desde') desde?: string, @Query('ate') ate?: string) {
+  async faturamento(@Query('desde') desde?: string, @Query('ate') ate?: string, @Query('cardCode') cardCode?: string) {
     const d =
       desde ||
       new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
     const a = ate || '';
     return this.cache.wrap(
-      `faturamento:${d}:${a}`,
+      `faturamento:${d}:${a}:${cardCode || ''}`,
       async () => {
         const [invs, vendedores] = await Promise.all([
-          this.sap.getFaturamento(d, a || undefined),
+          this.sap.getFaturamento(d, a || undefined, cardCode || undefined),
           this.sap.getSalesPersons?.().catch(() => []) ?? [],
         ]);
         const nomeVend: Record<string, string> = {};
@@ -227,14 +227,14 @@ export class ApiController {
   // -------- NFs DE ENTRADA (PurchaseInvoices) POR PERÍODO --------
   // Mesmo formato do faturamento, por FORNECEDOR. SOMENTE LEITURA no SAP.
   @Get('notas-entrada')
-  async notasEntrada(@Query('desde') desde?: string, @Query('ate') ate?: string) {
+  async notasEntrada(@Query('desde') desde?: string, @Query('ate') ate?: string, @Query('cardCode') cardCode?: string) {
     const d = desde || new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
     const a = ate || '';
     return this.cache.wrap(
-      `notas-entrada:${d}:${a}`,
+      `notas-entrada:${d}:${a}:${cardCode || ''}`,
       async () => {
         const [notas, compradores] = await Promise.all([
-          this.sap.getNotasEntrada(d, a || undefined),
+          this.sap.getNotasEntrada(d, a || undefined, cardCode || undefined),
           this.sap.getSalesPersons?.().catch(() => []) ?? [],
         ]);
         const nome: Record<string, string> = {};

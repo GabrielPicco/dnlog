@@ -625,7 +625,7 @@ export class SapClientService implements OnModuleDestroy {
     return out;
   }
 
-  async getFaturamento(desde?: string, ate?: string): Promise<any[]> {
+  async getFaturamento(desde?: string, ate?: string, cardCode?: string): Promise<any[]> {
     await this.ensureSession();
     // DocumentLines vem embutido pelo $select (não usar $expand). Traz CFOP e
     // ProjectCode (safra) por linha, usados para classificar o tipo da NF.
@@ -639,6 +639,8 @@ export class SapClientService implements OnModuleDestroy {
       const conds: string[] = [];
       if (desde) conds.push(`DocDate ge ${q}${desde}${q}`);
       if (ate) conds.push(`DocDate le ${q}${ate}${q}`);
+      // Parceiro (opcional): o SAP já devolve só as notas dele.
+      if (cardCode) conds.push(`CardCode eq '${String(cardCode).replace(/'/g, "''")}'`);
       const params: any = { $select: select, $orderby: 'DocDate desc,DocEntry desc' }; // DocEntry desempata (paginação estável)
       if (conds.length) params.$filter = conds.join(' and ');
       return params;
@@ -661,7 +663,7 @@ export class SapClientService implements OnModuleDestroy {
    * NumAtCard = nº da NF informado do fornecedor (fallback quando o SequenceSerial
    * não vem preenchido na nota de terceiro).
    */
-  async getNotasEntrada(desde?: string, ate?: string): Promise<any[]> {
+  async getNotasEntrada(desde?: string, ate?: string, cardCode?: string): Promise<any[]> {
     await this.ensureSession();
     const select =
       'DocEntry,DocNum,SequenceSerial,SeriesString,SequenceModel,NumAtCard,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,CancelStatus,DocumentStatus,SalesPersonCode,DocumentLines';
@@ -670,6 +672,8 @@ export class SapClientService implements OnModuleDestroy {
       const conds: string[] = [];
       if (desde) conds.push(`DocDate ge ${q}${desde}${q}`);
       if (ate) conds.push(`DocDate le ${q}${ate}${q}`);
+      // Parceiro (opcional): o SAP já devolve só as notas dele.
+      if (cardCode) conds.push(`CardCode eq '${String(cardCode).replace(/'/g, "''")}'`);
       const params: any = { $select: select, $orderby: 'DocDate desc,DocEntry desc' }; // DocEntry desempata (paginação estável)
       if (conds.length) params.$filter = conds.join(' and ');
       return params;

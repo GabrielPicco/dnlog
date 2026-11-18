@@ -1594,18 +1594,20 @@ const DNLOG_API = {
   },
 
   // ---- Faturamento (NFs de saída) ----
-  async listarFaturamento(desde, ate) {
+  async listarFaturamento(desde, ate, cardCode) {
     const p = new URLSearchParams();
     if (desde) p.set('desde', desde);
     if (ate) p.set('ate', ate);
+    if (cardCode) p.set('cardCode', cardCode);
     const r = await fetch(`${DNLOG_API_BASE}/faturamento?${p.toString()}`, { headers: dnlogAuthHeaders() });
     if (!r.ok) throw new Error('GET /faturamento ' + r.status);
     return r.json();
   },
-  async listarNotasEntrada(desde, ate) {
+  async listarNotasEntrada(desde, ate, cardCode) {
     const p = new URLSearchParams();
     if (desde) p.set('desde', desde);
     if (ate) p.set('ate', ate);
+    if (cardCode) p.set('cardCode', cardCode);
     const r = await fetch(`${DNLOG_API_BASE}/notas-entrada?${p.toString()}`, { headers: dnlogAuthHeaders() });
     if (!r.ok) throw new Error('GET /notas-entrada ' + r.status);
     return r.json();
@@ -2717,14 +2719,17 @@ const NFS_CFG = {
     titulo: 'Faturamento — NFs de saída por cliente', icon: 'ti-file-invoice',
     parte: 'cliente', Parte: 'Cliente', partes: 'clientes', pessoa: 'Vendedor',
     valor: 'Valor faturado', principal: 'Venda', arquivo: 'faturamento',
-    listar: (d, a) => DNLOG_API.listarFaturamento(d, a),
+    listar: (d, a, cc) => DNLOG_API.listarFaturamento(d, a, cc),
+    // Clientes conhecidos (dos pedidos do SAP) para filtrar ANTES de buscar.
+    parceiros: () => (DADOS_PEDIDOS || []).map(p => ({ codigo: p._sap_cliente_codigo || '', nome: p.cliente || '' })),
     detalhe: (n) => DNLOG_API.nfLotes(n.nfe, n.serie),
   },
   entrada: {
     titulo: 'NFs de entrada por fornecedor', icon: 'ti-file-import',
     parte: 'fornecedor', Parte: 'Fornecedor', partes: 'fornecedores', pessoa: 'Comprador',
     valor: 'Valor das entradas', principal: 'Compra', arquivo: 'nfs_entrada',
-    listar: (d, a) => DNLOG_API.listarNotasEntrada(d, a),
+    listar: (d, a, cc) => DNLOG_API.listarNotasEntrada(d, a, cc),
+    parceiros: () => (DADOS_FORNECEDORES || []).map(f => ({ codigo: f.codigo || '', nome: f.nome || '' })),
     // Na entrada o nº da NF é do fornecedor (repete entre fornecedores) → busca pelo DocEntry.
     detalhe: (n) => DNLOG_API.nfEntradaDetalhe(n.docEntry),
   },
@@ -2753,6 +2758,9 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
   const [incluirCanceladas, setIncluirCanceladas] = useTelaState(`nfs-${tipo}:incluirCanceladas`, false);
   const [cfopSel, setCfopSel] = useTelaState(`nfs-${tipo}:cfopSel`, 'todos'); // código da utilização (CFOP) ou 'todos'
   const [abertos, setAbertos] = useTelaSet(`nfs-${tipo}:abertos`); // docNums expandidos (várias NFs juntas)
+  // Não carrega ao abrir: o usuário filtra e clica em Buscar. Guarda a última
+  // busca ({desde, ate, cardCode}) para reabrir com o mesmo resultado ao voltar.
+  const [buscado, setBuscado] = useTelaState(`nfs-${tipo}:buscado`, null);
   const [detalhes, setDetalhes] = useState({}); // docNum -> { loading, linhas, erro }
   const [exportando, setExportando] = useState(false);
 
@@ -2831,18 +2839,35 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
     } finally { setExportando(false); }
   };
 
-  const carregar = async () => {
-    if (!desde) return;
+  const carregar = async (f) => {
+    if (!f || !f.desde) return;
     setCarregando(true); setErro('');
     try {
-      const r = await C.listar(desde, ate || '');
+      const r = await C.listar(f.desde, f.ate || '', f.cardCode || '');
       setDados(Array.isArray(r) ? r : []);
     } catch (e) {
       setErro((e && e.message) || 'falha ao carregar');
       setDados([]);
     } finally { setCarregando(false); }
   };
-  useEffect(() => { carregar(); }, [desde, ate, tipo]);
+  // Parceiros para o filtro: os conhecidos (pedidos/cadastro) + os das notas já carregadas.
+  const parceiros = useMemo(() => {
+    const m = new Map();
+    (C.parceiros ? C.parceiros() : []).forEach(x => { if (x.codigo && x.nome && !m.has(x.codigo)) m.set(x.codigo, x.nome); });
+    (dados || []).forEach(n => { const k = n.cardCode || n.cliente; if (k && !m.has(k)) m.set(k, n.cliente || k); });
+    return Array.from(m.entries()).map(([codigo, nome]) => ({ codigo, nome })).sort((a, b) => a.nome.localeCompare(b.nome, 'pt'));
+  }, [dados, tipo]);
+  // Só manda para o SAP se for um código de parceiro (CardCode); nome solto filtra na tela.
+  const cardCodeSel = clienteSel !== 'todos' && /^[A-Z]{2,4}\d+/i.test(clienteSel) ? clienteSel : '';
+  const buscar = () => {
+    if (!desde) return;
+    const f = { desde, ate: ate || '', cardCode: cardCodeSel };
+    setBuscado(f); setAbertos(new Set());
+    carregar(f);
+  };
+  // Ao voltar para a tela, refaz a última busca (mesmo resultado de antes).
+  useEffect(() => { if (buscado) carregar(buscado); }, [tipo]);
+  const filtrosMudaram = !!buscado && (buscado.desde !== desde || (buscado.ate || '') !== (ate || '') || (buscado.cardCode || '') !== cardCodeSel);
   useEffect(() => {
     if (!dados || !abertos.size) return;
     dados.filter(n => abertos.has(n.docNum) && !(detalhes[n.docNum] && (detalhes[n.docNum].linhas || detalhes[n.docNum].loading))).forEach(n => carregarDetalhe(n));
@@ -2927,13 +2952,14 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
               );
             })}
           </div>
-          <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => carregar()} disabled={carregando}>
-            <i className={'ti ' + (carregando ? 'ti-loader-2' : 'ti-refresh')}></i> {carregando ? 'Carregando…' : 'Atualizar'}
+          <button className="btn btn-primary" style={{ padding: '4px 14px', fontSize: 12 }} onClick={buscar} disabled={carregando || !desde}
+            title={clienteSel !== 'todos' ? 'Busca as notas do período só deste ' + C.parte : 'Sem ' + C.parte + ' escolhido: busca todas as notas do período'}>
+            <i className={'ti ' + (carregando ? 'ti-loader-2' : 'ti-search')}></i> {carregando ? 'Buscando…' : 'Buscar'}
           </button>
           <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportarCSV} disabled={!lista.length}>
             <i className="ti ti-download"></i> CSV resumo
           </button>
-          <button className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportarDetalhado} disabled={exportando || !lista.length}
+          <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportarDetalhado} disabled={exportando || !lista.length}
             title="CSV das notas filtradas na tela, com pedido, item, lote, quantidade e valor">
             <i className={'ti ' + (exportando ? 'ti-loader-2' : 'ti-file-spreadsheet')}></i> {exportando ? 'Gerando…' : `Export detalhado (${lista.length} NF${lista.length === 1 ? '' : 's'})`}
           </button>
@@ -2943,22 +2969,31 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
       {/* Filtros */}
       <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <select className="input" style={{ width: 'auto', minWidth: 200, flex: '1 1 220px', padding: '6px 10px', fontSize: 12 }} value={clienteSel} onChange={e => setClienteSel(e.target.value)}>
-          <option value="todos">Todos os {C.partes} ({porCliente.length})</option>
-          {porCliente.map(c => <option key={c.cardCode || c.cliente} value={c.cardCode || c.cliente}>{c.cliente} — {fmtMoney(c.valor)}</option>)}
+          <option value="todos">Todos os {C.partes}{dados ? ` (${porCliente.length} com notas)` : ''}</option>
+          {parceiros.map(c => {
+            const tot = porCliente.find(x => (x.cardCode || x.cliente) === c.codigo);
+            return <option key={c.codigo} value={c.codigo}>{c.nome}{tot ? ` — ${fmtMoney(tot.valor)}` : ''}</option>;
+          })}
         </select>
         <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={cfopSel} onChange={e => setCfopSel(e.target.value)} title="Filtra pelo código da utilização (CFOP) da nota">
           <option value="todos">Utilização: todas</option>
           {cfopsDisponiveis.map(c => <option key={c} value={c}>Utilização {c}</option>)}
         </select>
         <div className="search-box" style={{ flex: '1 1 200px', minWidth: 160 }}><i className="ti ti-search"></i>
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder={`Buscar ${C.parte}, NFe, pedido, ${C.pessoa.toLowerCase()}, CFOP...`} /></div>
+          <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && (!dados || filtrosMudaram)) buscar(); }} placeholder={`Filtrar ${C.parte}, NFe, pedido, ${C.pessoa.toLowerCase()}, CFOP...`} /></div>
         <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
           <input type="checkbox" checked={incluirCanceladas} onChange={e => setIncluirCanceladas(e.target.checked)} /> incluir canceladas
         </label>
       </div>
 
+      {filtrosMudaram && !carregando && (
+        <div style={{ padding: '8px 16px', background: 'var(--orange-bg)', color: 'var(--orange)', fontSize: 12, borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <i className="ti ti-filter"></i> Período ou {C.parte} alterado: clique em <strong>Buscar</strong> para atualizar o resultado.
+        </div>
+      )}
+
       {/* Totalizadores */}
-      <div style={{ display: 'flex', gap: 24, padding: '10px 16px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+      {dados && <div style={{ display: 'flex', gap: 24, padding: '10px 16px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
         <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Notas</div>
           <div className="mono" style={{ fontSize: 18, fontWeight: 800 }}>{fmtNum(totNFs)}</div></div>
         <div><div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>{C.valor}</div>
@@ -2968,9 +3003,18 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
             <button className="btn btn-ghost" style={{ padding: '3px 9px', fontSize: 11 }} onClick={() => setClienteSel('todos')}><i className="ti ti-x"></i> limpar {C.parte}</button>
           </div>
         )}
-      </div>
+      </div>}
 
-      {erro ? (
+      {!dados && !carregando && !erro ? (
+        <div className="empty" style={{ padding: '36px 24px' }}>
+          <i className="ti ti-filter"></i>
+          <div style={{ fontWeight: 700, color: 'var(--text)', letterSpacing: '0.02em' }}>FILTRE AS INFORMAÇÕES DESEJADAS PARA CARREGAR O CONTEÚDO</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6, maxWidth: 520 }}>
+            Escolha o período e, se quiser, o {C.parte}. Depois clique em <strong>Buscar</strong>. Sem {C.parte} escolhido, a busca traz todas as notas do período.
+          </div>
+          <button className="btn btn-primary" style={{ marginTop: 14 }} onClick={buscar} disabled={!desde}><i className="ti ti-search" style={{ fontSize: 14, margin: 0, display: 'inline', opacity: 1, color: 'inherit' }}></i> Buscar</button>
+        </div>
+      ) : erro ? (
         <div className="empty" style={{ padding: 24 }}><i className="ti ti-alert-triangle"></i><div>Não foi possível carregar</div><div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{erro}</div></div>
       ) : carregando && !dados ? (
         <div className="empty" style={{ padding: 24 }}><i className="ti ti-loader-2"></i><div>Consultando NFs no SAP…</div></div>
