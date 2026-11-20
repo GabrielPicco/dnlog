@@ -630,7 +630,7 @@ export class SapClientService implements OnModuleDestroy {
     // DocumentLines vem embutido pelo $select (não usar $expand). Traz CFOP e
     // ProjectCode (safra) por linha, usados para classificar o tipo da NF.
     const select =
-      'DocEntry,DocNum,SequenceSerial,SeriesString,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,CancelStatus,DocumentStatus,SalesPersonCode,DocumentLines';
+      'DocEntry,DocNum,SequenceSerial,SeriesString,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,CancelStatus,DocumentStatus,SalesPersonCode,DocumentLines,AddressExtension,TaxExtension';
     // Monta o $filter de data. O SAP B1 Service Layer costuma aceitar a data
     // entre aspas ('2026-06-13'); alguns ambientes exigem sem aspas. Tentamos
     // as duas formas antes de desistir (não quebra o relatório por formato).
@@ -666,7 +666,7 @@ export class SapClientService implements OnModuleDestroy {
   async getNotasEntrada(desde?: string, ate?: string, cardCode?: string): Promise<any[]> {
     await this.ensureSession();
     const select =
-      'DocEntry,DocNum,SequenceSerial,SeriesString,SequenceModel,NumAtCard,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,CancelStatus,DocumentStatus,SalesPersonCode,DocumentLines';
+      'DocEntry,DocNum,SequenceSerial,SeriesString,SequenceModel,NumAtCard,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,CancelStatus,DocumentStatus,SalesPersonCode,DocumentLines,AddressExtension,TaxExtension';
     const build = (comAspas: boolean) => {
       const q = comAspas ? "'" : '';
       const conds: string[] = [];

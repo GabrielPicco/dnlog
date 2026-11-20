@@ -187,6 +187,11 @@ export class ApiController {
       projeto: projetos.join(', '),
       ehVenda: cfops.length > 0 && cfops.every((c: any) => cfopPrincipal.test(String(c))),
       _baseEntries: baseEntries,
+      // Dados fiscais como saíram na NF: CNPJ (TaxId0) ou CPF (TaxId4) do
+      // parceiro e município/UF do endereço de faturamento (cobrança).
+      cpfCnpj: (i.TaxExtension && (i.TaxExtension.TaxId0 || i.TaxExtension.TaxId4)) || '',
+      municipio: (i.AddressExtension && i.AddressExtension.BillToCity) || (i.TaxExtension && i.TaxExtension.CityB) || '',
+      uf: (i.AddressExtension && i.AddressExtension.BillToState) || (i.TaxExtension && i.TaxExtension.StateB) || '',
     };
   }
 

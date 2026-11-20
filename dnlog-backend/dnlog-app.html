@@ -2713,7 +2713,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
     try {
       const XLSX = await carregarXLSX();
       const org = await garantirOrigem();
-      const cab = ['NFe', 'Série', 'DocNum', 'Data', C.Parte, 'CardCode', C.pessoa, 'CFOP', 'Tipo', 'Pedido', 'Item', 'Descrição', 'Projeto', 'Lote',
+      const cab = ['NFe', 'Série', 'DocNum', 'Data', C.Parte, 'CardCode', 'CPF/CNPJ', 'Município', 'UF', C.pessoa, 'CFOP', 'Tipo', 'Pedido', 'Item', 'Descrição', 'Projeto', 'Lote',
         ...(comOrigem ? ['Fornecedor do lote'] : []), 'Quantidade', 'Peso por BB (kg)', 'Peso total (kg)', 'Valor (R$)', 'Status'];
       const iQtd = cab.indexOf('Quantidade'), iKg = cab.indexOf('Peso total (kg)'), iVal = cab.indexOf('Valor (R$)');
       const cacheLocal = {};
@@ -2735,7 +2735,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
       notas.forEach(n => {
         const linhas = cacheLocal[n.docNum] || [];
         const st = n.cancelada ? 'CANCELADA' : (n.status || '');
-        const cabNF = [n.nfe, n.serie, n.docNum, dataXLSX(n.data), n.cliente || '', n.cardCode || '', n.vendedor || '', n.cfop || '', n.ehVenda ? C.principal : 'Outra'];
+        const cabNF = [n.nfe, n.serie, n.docNum, dataXLSX(n.data), n.cliente || '', n.cardCode || '', n.cpfCnpj || '', n.municipio || '', n.uf || '', n.vendedor || '', n.cfop || '', n.ehVenda ? C.principal : 'Outra'];
         if (!linhas.length) {
           rows.push([...cabNF, pedidosNF(n).join(', '), '', '', '', '', ...(comOrigem ? [''] : []), null, null, null, Number(n.total) || 0, st]);
           return;
@@ -2750,7 +2750,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
           });
         });
       });
-      const larg = [8, 6, 8, 11, 38, 11, 22, 8, 8, 12, 11, 44, 10, 18, ...(comOrigem ? [36] : []), 10, 12, 13, 15, 11];
+      const larg = [8, 6, 8, 11, 38, 11, 20, 22, 5, 22, 8, 8, 12, 11, 44, 10, 18, ...(comOrigem ? [36] : []), 10, 12, 13, 15, 11];
       const ws = abaXLSX(XLSX, cab, rows, [iQtd, iKg, iVal], larg);
       // Formatos numéricos (milhar e centavos) nas colunas de valor/peso.
       for (let r = 1; r <= rows.length + 1; r++) {
@@ -2818,8 +2818,10 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
     const m = new Map();
     base.forEach(n => {
       const k = n.cardCode || n.cliente || '—';
-      if (!m.has(k)) m.set(k, { cardCode: n.cardCode || '', cliente: n.cliente || '—', nfs: 0, valor: 0 });
+      if (!m.has(k)) m.set(k, { cardCode: n.cardCode || '', cliente: n.cliente || '—', nfs: 0, valor: 0, cpfCnpj: '', local: '' });
       const g = m.get(k); g.nfs += 1; g.valor += (n.total || 0);
+      if (!g.cpfCnpj && n.cpfCnpj) g.cpfCnpj = n.cpfCnpj;
+      if (!g.local && n.municipio) g.local = [n.municipio, n.uf].filter(Boolean).join('/');
     });
     return Array.from(m.values()).sort((a, b) => b.valor - a.valor);
   }, [base]);
@@ -2830,7 +2832,8 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
     if (clienteSel !== 'todos') l = l.filter(n => (n.cardCode || n.cliente) === clienteSel);
     if (q) {
       const ql = q.toLowerCase();
-      l = l.filter(n => (n.cliente || '').toLowerCase().includes(ql) || String(n.nfe || '').includes(ql) || (n.vendedor || '').toLowerCase().includes(ql) || String(n.cfop || '').includes(ql) || pedidosNF(n).join(' ').toLowerCase().includes(ql));
+      const qd = q.replace(/\D/g, '');
+      l = l.filter(n => (n.cliente || '').toLowerCase().includes(ql) || String(n.nfe || '').includes(ql) || (qd.length >= 3 && String(n.cpfCnpj || '').replace(/\D/g, '').includes(qd)) || (n.municipio || '').toLowerCase().includes(ql) || (n.vendedor || '').toLowerCase().includes(ql) || String(n.cfop || '').includes(ql) || pedidosNF(n).join(' ').toLowerCase().includes(ql));
     }
     return [...l].sort((a, b) => (b.data || '').localeCompare(a.data || ''));
   }, [base, clienteSel, q]);
@@ -2841,11 +2844,11 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
   const exportarCSV = async () => {
     let XLSX;
     try { XLSX = await carregarXLSX(); } catch (e) { ctx.showToast && ctx.showToast('Não foi possível exportar', e.message); return; }
-    const cab = ['NFe', 'Série', 'DocNum', 'Data', 'Pedido(s)', C.Parte, 'CardCode', C.pessoa, 'CFOP', 'Tipo', 'Projeto', 'Valor (R$)', 'Status'];
-    const rows = lista.map(n => [n.nfe, n.serie, n.docNum, dataXLSX(n.data), pedidosNF(n).join(', '), n.cliente || '', n.cardCode || '', n.vendedor || '',
+    const cab = ['NFe', 'Série', 'DocNum', 'Data', 'Pedido(s)', C.Parte, 'CardCode', 'CPF/CNPJ', 'Município', 'UF', C.pessoa, 'CFOP', 'Tipo', 'Projeto', 'Valor (R$)', 'Status'];
+    const rows = lista.map(n => [n.nfe, n.serie, n.docNum, dataXLSX(n.data), pedidosNF(n).join(', '), n.cliente || '', n.cardCode || '', n.cpfCnpj || '', n.municipio || '', n.uf || '', n.vendedor || '',
       n.cfop || '', n.ehVenda ? C.principal : 'Outra', n.projeto || '', Number(n.total) || 0, n.cancelada ? 'CANCELADA' : n.status]);
-    const ws = abaXLSX(XLSX, cab, rows, [11], [8, 6, 8, 11, 14, 40, 11, 22, 8, 8, 12, 15, 11]);
-    for (let r = 1; r <= rows.length + 1; r++) { const cel = ws[XLSX.utils.encode_cell({ r, c: 11 })]; if (cel) cel.z = '#,##0.00'; }
+    const ws = abaXLSX(XLSX, cab, rows, [14], [8, 6, 8, 11, 14, 40, 11, 20, 22, 5, 22, 8, 8, 12, 15, 11]);
+    for (let r = 1; r <= rows.length + 1; r++) { const cel = ws[XLSX.utils.encode_cell({ r, c: 14 })]; if (cel) cel.z = '#,##0.00'; }
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Notas');
     XLSX.writeFile(wb, `${C.arquivo}_${desde}_a_${ate}.xlsx`, { compression: true });
@@ -2964,6 +2967,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
                     <div className="mono" style={{ fontSize: 12, fontWeight: 700, color: 'var(--green)', flexShrink: 0 }}>{fmtMoney(c.valor)}</div>
                   </div>
                   <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{c.nfs} NF(s){c.cardCode ? ' · ' + c.cardCode : ''}</div>
+                  {(c.cpfCnpj || c.local) && <div className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[c.cpfCnpj, c.local].filter(Boolean).join(' · ')}</div>}
                 </div>
               );
             })}
@@ -2999,7 +3003,10 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
                         </td>
                         <td className="mono cell-muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(n.data)}</td>
                         <td className="mono" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{pedidosNF(n).length ? pedidosNF(n).map(x => <div key={x}>{x}</div>) : <span style={{ color: 'var(--text-dim)' }}>—</span>}</td>
-                        <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.cliente}</td>
+                        <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={[n.cliente, n.cpfCnpj, [n.municipio, n.uf].filter(Boolean).join('/')].filter(Boolean).join(' · ')}>
+                          {n.cliente}
+                          {(n.cpfCnpj || n.municipio) && <div className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{[n.cpfCnpj, [n.municipio, n.uf].filter(Boolean).join('/')].filter(Boolean).join(' · ')}</div>}
+                        </td>
                         <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{n.vendedor || '—'}</td>
                         <td className="num mono" style={{ fontWeight: 700 }}>{fmtMoney(n.total)}{n.cancelada && <span className="chip" style={{ marginLeft: 6, background: 'var(--red-bg)', color: 'var(--red)', fontSize: 9 }}>CANC</span>}</td>
                       </tr>
