@@ -2709,45 +2709,60 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
     const notas = lista;
     if (!notas.length) return;
     setExportando(true);
-    ctx.showToast && ctx.showToast('Gerando export detalhado…', `${notas.length} NF(s) — aguarde`);
-    const clean = s => String(s == null ? '' : s).replace(/[;\n\r]/g, ' ');
-    const org = await garantirOrigem();
-    const num = v => (v == null ? '' : String(Math.round(v * 100) / 100).replace('.', ','));
-    const rows = [['NFe', 'Serie', 'DocNum', 'Data', C.Parte, 'CardCode', C.pessoa, 'CFOP', 'Tipo', 'Pedido', 'Item', 'Descricao', 'Projeto', 'Lote', ...(comOrigem ? ['Fornecedor do lote'] : []), 'Quantidade', 'Peso por BB (kg)', 'Peso total (kg)', 'Valor', 'Status'].join(';')];
-    const cacheLocal = {};
-    let idx = 0;
-    const worker = async () => {
-      while (idx < notas.length) {
-        const n = notas[idx++];
-        const k = n.docNum;
-        let linhas = cacheLocal[k] || (detalhes[k] && detalhes[k].linhas);
-        if (!linhas) {
-          try { const r = await C.detalhe(n); linhas = (r && r.linhas) || []; }
-          catch (e) { linhas = []; }
-          cacheLocal[k] = linhas;
-        }
-        const st = n.cancelada ? 'CANCELADA' : (n.status || '');
-        const data = (n.data || '').slice(0, 10);
-        const cab = [n.nfe, n.serie, n.docNum, data, clean(n.cliente), n.cardCode, clean(n.vendedor), n.cfop, n.ehVenda ? C.principal : 'Outra'];
-        if (!linhas.length) {
-          rows.push([...cab, clean(pedidosNF(n).join(', ')), '', '', '', '', ...(comOrigem ? [''] : []), '', '', '', (n.total || 0).toFixed(2), st].join(';'));
-        } else {
-          linhas.forEach(l => {
-            const lotes = (l.lotes && l.lotes.length) ? l.lotes : [{ lote: '', quantidade: l.quantidade, valor: l.valorLinha }];
-            lotes.forEach(lo => {
-              rows.push([...cab, clean(pedidoLinhaNF(n, l)), l.itemCode, clean(l.descricao), clean(l.projeto), lo.lote, ...(comOrigem ? [clean(fornecedorTxt(org, l, lo))] : []), lo.quantidade, num(lo.peso_bb), num(pesoLoteNF(lo)), (lo.valor || 0).toFixed(2), st].join(';'));
-            });
-          });
-        }
-      }
-    };
+    ctx.showToast && ctx.showToast('Gerando Excel detalhado…', `${notas.length} NF(s) — aguarde`);
     try {
+      const XLSX = await carregarXLSX();
+      const org = await garantirOrigem();
+      const cab = ['NFe', 'Série', 'DocNum', 'Data', C.Parte, 'CardCode', C.pessoa, 'CFOP', 'Tipo', 'Pedido', 'Item', 'Descrição', 'Projeto', 'Lote',
+        ...(comOrigem ? ['Fornecedor do lote'] : []), 'Quantidade', 'Peso por BB (kg)', 'Peso total (kg)', 'Valor (R$)', 'Status'];
+      const iQtd = cab.indexOf('Quantidade'), iKg = cab.indexOf('Peso total (kg)'), iVal = cab.indexOf('Valor (R$)');
+      const cacheLocal = {};
+      let idx = 0;
+      const worker = async () => {
+        while (idx < notas.length) {
+          const n = notas[idx++];
+          const k = n.docNum;
+          if (!cacheLocal[k]) {
+            let linhas = detalhes[k] && detalhes[k].linhas;
+            if (!linhas) { try { const r = await C.detalhe(n); linhas = (r && r.linhas) || []; } catch (e) { linhas = []; } }
+            cacheLocal[k] = linhas;
+          }
+        }
+      };
       await Promise.all(Array.from({ length: 3 }, () => worker()));
-      const blob = new Blob(['﻿' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = `${C.arquivo}_detalhado${clienteSel !== 'todos' || cfopSel !== 'todos' || q ? '_filtrado' : ''}_${desde}_a_${ate}.csv`; a.click();
-      URL.revokeObjectURL(url);
-      ctx.showToast && ctx.showToast('Export detalhado pronto', `${notas.length} NF(s) · ${rows.length - 1} linhas`);
+      // Monta na ordem da tela (os workers terminam fora de ordem).
+      const rows = [];
+      notas.forEach(n => {
+        const linhas = cacheLocal[n.docNum] || [];
+        const st = n.cancelada ? 'CANCELADA' : (n.status || '');
+        const cabNF = [n.nfe, n.serie, n.docNum, dataXLSX(n.data), n.cliente || '', n.cardCode || '', n.vendedor || '', n.cfop || '', n.ehVenda ? C.principal : 'Outra'];
+        if (!linhas.length) {
+          rows.push([...cabNF, pedidosNF(n).join(', '), '', '', '', '', ...(comOrigem ? [''] : []), null, null, null, Number(n.total) || 0, st]);
+          return;
+        }
+        linhas.forEach(l => {
+          const lotes = (l.lotes && l.lotes.length) ? l.lotes : [{ lote: '', quantidade: l.quantidade, valor: l.valorLinha }];
+          lotes.forEach(lo => {
+            const kg = pesoLoteNF(lo);
+            rows.push([...cabNF, pedidoLinhaNF(n, l), l.itemCode || '', l.descricao || '', l.projeto || '', lo.lote || '',
+              ...(comOrigem ? [fornecedorTxt(org, l, lo)] : []), Number(lo.quantidade) || 0,
+              lo.peso_bb != null ? Number(lo.peso_bb) : null, kg != null ? Math.round(kg) : null, Math.round((Number(lo.valor) || 0) * 100) / 100, st]);
+          });
+        });
+      });
+      const larg = [8, 6, 8, 11, 38, 11, 22, 8, 8, 12, 11, 44, 10, 18, ...(comOrigem ? [36] : []), 10, 12, 13, 15, 11];
+      const ws = abaXLSX(XLSX, cab, rows, [iQtd, iKg, iVal], larg);
+      // Formatos numéricos (milhar e centavos) nas colunas de valor/peso.
+      for (let r = 1; r <= rows.length + 1; r++) {
+        [[iVal, '#,##0.00'], [iKg, '#,##0'], [iQtd, '#,##0']].forEach(([c, z]) => { const cel = ws[XLSX.utils.encode_cell({ r, c })]; if (cel) cel.z = z; });
+      }
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Itens e lotes');
+      const filtrado = clienteSel !== 'todos' || cfopSel !== 'todos' || q;
+      XLSX.writeFile(wb, `${C.arquivo}_detalhado${filtrado ? '_filtrado' : ''}_${desde}_a_${ate}.xlsx`, { compression: true });
+      ctx.showToast && ctx.showToast('Excel detalhado pronto', `${notas.length} NF(s) · ${rows.length} linhas`);
+    } catch (e) {
+      ctx.showToast && ctx.showToast('Não foi possível exportar', (e && e.message) || 'falha');
     } finally { setExportando(false); }
   };
 
@@ -2823,18 +2838,17 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
   const totNFs = lista.length;
   const totValor = lista.reduce((a, n) => a + (n.total || 0), 0);
 
-  const exportarCSV = () => {
-    const linhas = [['NFe', 'Serie', 'DocNum', 'Data', 'Pedido(s)', C.Parte, 'CardCode', C.pessoa, 'CFOP', 'Tipo', 'Projeto', 'Valor', 'Status'].join(';')];
-    lista.forEach(n => linhas.push([
-      n.nfe, n.serie, n.docNum, (n.data || '').slice(0, 10), pedidosNF(n).join(', '), (n.cliente || '').replace(/;/g, ','),
-      n.cardCode, (n.vendedor || '').replace(/;/g, ','), n.cfop, n.ehVenda ? C.principal : 'Outra', (n.projeto || '').replace(/;/g, ','),
-      (n.total || 0).toFixed(2), n.cancelada ? 'CANCELADA' : n.status,
-    ].map(c => String(c == null ? '' : c)).join(';')));
-    linhas.push(['', '', '', '', '', 'TOTAL', '', '', '', '', '', totValor.toFixed(2), `${totNFs} NF(s)`].join(';'));
-    const blob = new Blob(['﻿' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `${C.arquivo}_${desde}_a_${ate}.csv`; a.click();
-    URL.revokeObjectURL(url);
+  const exportarCSV = async () => {
+    let XLSX;
+    try { XLSX = await carregarXLSX(); } catch (e) { ctx.showToast && ctx.showToast('Não foi possível exportar', e.message); return; }
+    const cab = ['NFe', 'Série', 'DocNum', 'Data', 'Pedido(s)', C.Parte, 'CardCode', C.pessoa, 'CFOP', 'Tipo', 'Projeto', 'Valor (R$)', 'Status'];
+    const rows = lista.map(n => [n.nfe, n.serie, n.docNum, dataXLSX(n.data), pedidosNF(n).join(', '), n.cliente || '', n.cardCode || '', n.vendedor || '',
+      n.cfop || '', n.ehVenda ? C.principal : 'Outra', n.projeto || '', Number(n.total) || 0, n.cancelada ? 'CANCELADA' : n.status]);
+    const ws = abaXLSX(XLSX, cab, rows, [11], [8, 6, 8, 11, 14, 40, 11, 22, 8, 8, 12, 15, 11]);
+    for (let r = 1; r <= rows.length + 1; r++) { const cel = ws[XLSX.utils.encode_cell({ r, c: 11 })]; if (cel) cel.z = '#,##0.00'; }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Notas');
+    XLSX.writeFile(wb, `${C.arquivo}_${desde}_a_${ate}.xlsx`, { compression: true });
     ctx.showToast && ctx.showToast('Relatório exportado', `${totNFs} NF(s)`);
   };
 
@@ -2870,11 +2884,11 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
             <i className={'ti ' + (carregando ? 'ti-loader-2' : 'ti-search')}></i> {carregando ? 'Buscando…' : 'Buscar'}
           </button>
           <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportarCSV} disabled={!lista.length}>
-            <i className="ti ti-download"></i> CSV resumo
+            <i className="ti ti-download"></i> Excel resumo
           </button>
           <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={exportarDetalhado} disabled={exportando || !lista.length}
             title="CSV das notas filtradas na tela, com pedido, item, lote, quantidade e valor">
-            <i className={'ti ' + (exportando ? 'ti-loader-2' : 'ti-file-spreadsheet')}></i> {exportando ? 'Gerando…' : `Export detalhado (${lista.length} NF${lista.length === 1 ? '' : 's'})`}
+            <i className={'ti ' + (exportando ? 'ti-loader-2' : 'ti-file-spreadsheet')}></i> {exportando ? 'Gerando…' : `Excel detalhado (${lista.length} NF${lista.length === 1 ? '' : 's'})`}
           </button>
         </div>
       </div>
