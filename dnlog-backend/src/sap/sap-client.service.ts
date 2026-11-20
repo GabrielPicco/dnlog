@@ -791,6 +791,65 @@ export class SapClientService implements OnModuleDestroy {
   }
 
   /** [LEITURA] NF de entrada completa (linhas + BatchNumbers) pelo DocEntry. */
+  // Lotes de cada NF de entrada de semente, por DocEntry. NF emitida é imutável,
+  // então o cache é permanente (por processo) e cada nota é lida uma vez só.
+  private lotesNfEntrada = new Map<number, any[]>();
+
+  /**
+   * [LEITURA] Origem (fornecedor) de cada lote: lê as NFs de entrada de semente
+   * e devolve, por lote, quem vendeu para a DN. A lista do Service Layer não traz
+   * os BatchNumbers, então cada NF de semente é aberta uma vez (concorrência 4) e
+   * guardada em cache. Somente leitura (GET).
+   */
+  async getOrigemLotes(desde = '2025-01-01'): Promise<any[]> {
+    await this.ensureSession();
+    const SEMENTE = /^(SOJ|SOR|BRA|MIX|FGE|MIL)/;
+    const lista = await this.getAllPages('/PurchaseInvoices', {
+      $select: 'DocEntry,DocDate,CardCode,CardName,SequenceSerial,NumAtCard,Cancelled,CancelStatus,DocumentLines',
+      $filter: `DocDate ge '${desde}'`,
+      $orderby: 'DocEntry asc',
+    });
+    const notas = (lista || []).filter(
+      (d: any) =>
+        d.Cancelled !== 'tYES' &&
+        d.CancelStatus !== 'csCancellation' &&
+        (d.DocumentLines || []).some((l: any) => SEMENTE.test(l.ItemCode || '')),
+    );
+    const pend = notas.filter((d: any) => !this.lotesNfEntrada.has(d.DocEntry));
+    let idx = 0;
+    const worker = async () => {
+      while (idx < pend.length) {
+        const d = pend[idx++];
+        try {
+          const resp = await this.axios.get(`/PurchaseInvoices(${Number(d.DocEntry)})`);
+          const lotes: any[] = [];
+          for (const l of resp.data?.DocumentLines || [])
+            for (const b of l.BatchNumbers || [])
+              if (b.BatchNumber) lotes.push({ item: l.ItemCode, lote: b.BatchNumber, qtd: Number(b.Quantity) || 0 });
+          this.lotesNfEntrada.set(d.DocEntry, lotes);
+        } catch (err) {
+          // Não guarda: tenta de novo na próxima atualização.
+          this.logger?.warn?.(`origem de lotes: falha na NF de entrada ${d.DocEntry}: ${err?.message || err}`);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: 4 }, () => worker()));
+    const out: any[] = [];
+    for (const d of notas) {
+      for (const lo of this.lotesNfEntrada.get(d.DocEntry) || []) {
+        out.push({
+          ...lo,
+          fornecedor: d.CardName,
+          fornecedor_codigo: d.CardCode,
+          nf: d.SequenceSerial || d.NumAtCard || null,
+          data: d.DocDate,
+          docEntry: d.DocEntry,
+        });
+      }
+    }
+    return out;
+  }
+
   async getNotaEntradaFull(docEntry: number | string): Promise<any> {
     await this.ensureSession();
     try {

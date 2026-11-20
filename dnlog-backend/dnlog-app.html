@@ -1478,6 +1478,13 @@ const DNLOG_API = {
     if (!r.ok) throw new Error('GET /nf-entrada-detalhe ' + r.status);
     return r.json();
   },
+  // Fornecedor de cada lote (NFs de entrada de semente do SAP). A 1ª montagem no
+  // backend pode levar ~1–2 min; depois fica em cache.
+  async lotesOrigem() {
+    const r = await fetch(`${DNLOG_API_BASE}/lotes-origem`, { headers: dnlogAuthHeaders() });
+    if (!r.ok) throw new Error('GET /lotes-origem ' + r.status);
+    return r.json();
+  },
   async nfLotes(nfe, serie) {
     const p = new URLSearchParams();
     p.set('nfe', nfe);
@@ -2595,6 +2602,33 @@ const NFS_CFG = {
     detalhe: (n) => DNLOG_API.nfEntradaDetalhe(n.docEntry),
   },
 };
+// Origem (fornecedor) dos lotes — carregada uma vez por sessão e compartilhada.
+let ORIGEM_LOTES = null, ORIGEM_LOTES_P = null;
+const carregarOrigemLotes = () => {
+  if (ORIGEM_LOTES) return Promise.resolve(ORIGEM_LOTES);
+  if (!ORIGEM_LOTES_P) {
+    ORIGEM_LOTES_P = DNLOG_API.lotesOrigem()
+      .then(r => { ORIGEM_LOTES = r || { porItemLote: {}, porLote: {} }; return ORIGEM_LOTES; })
+      .finally(() => { ORIGEM_LOTES_P = null; });
+  }
+  return ORIGEM_LOTES_P;
+};
+const origemDoLote = (origem, item, lote) => {
+  if (!origem || !lote) return null;
+  const L = String(lote).trim().toUpperCase();
+  return (origem.porItemLote || {})[String(item || '').trim().toUpperCase() + '|' + L] || (origem.porLote || {})[L] || null;
+};
+// Peso (kg) de um lote da NF: qtd × peso líquido por BB. null = lote sem peso no SAP.
+const pesoLoteNF = (lo) => (lo && lo.peso_bb != null ? (Number(lo.quantidade) || 0) * Number(lo.peso_bb) : null);
+// Peso (kg) de uma linha da NF: soma dos lotes com peso; parcial = algum lote sem peso.
+const pesoLinhaNF = (l) => {
+  const lotes = (l && l.lotes) || [];
+  if (!lotes.length) return { kg: null, parcial: false };
+  const comPeso = lotes.filter(lo => lo.peso_bb != null);
+  if (!comPeso.length) return { kg: null, parcial: false };
+  return { kg: comPeso.reduce((a, lo) => a + pesoLoteNF(lo), 0), parcial: comPeso.length < lotes.length };
+};
+const fmtKg = (v) => (v == null ? '—' : fmtNum(Math.round(v)) + ' kg');
 // Data local (YYYY-MM-DD) — evita o "amanhã" do toISOString (UTC) à noite.
 const isoLocal = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 const isoDiasAtras = (dias) => isoLocal(new Date(Date.now() - dias * 86400000));
@@ -2624,6 +2658,21 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
   const [buscado, setBuscado] = useTelaState(`nfs-${tipo}:buscado`, null);
   const [detalhes, setDetalhes] = useState({}); // docNum -> { loading, linhas, erro }
   const [exportando, setExportando] = useState(false);
+  // Fornecedor de cada lote (só na saída — na entrada o fornecedor é o da própria NF).
+  const comOrigem = tipo === 'saida';
+  const [origem, setOrigem] = useState(ORIGEM_LOTES);
+  const [origemErro, setOrigemErro] = useState('');
+  const garantirOrigem = async () => {
+    if (!comOrigem) return null;
+    if (ORIGEM_LOTES) { if (origem !== ORIGEM_LOTES) setOrigem(ORIGEM_LOTES); return ORIGEM_LOTES; }
+    try { const r = await carregarOrigemLotes(); setOrigem(r); setOrigemErro(''); return r; }
+    catch (e) { setOrigemErro((e && e.message) || 'falha'); return null; }
+  };
+  const fornecedorTxt = (org, l, lo) => {
+    if (!lo || !lo.lote || lo.lote === '—') return '';
+    const o = origemDoLote(org, l.itemCode, lo.lote);
+    return o ? o.fornecedor : (org ? 'não localizado' : '');
+  };
 
   // Carrega (uma vez) os itens/lotes/valores de uma NF e guarda em cache.
   const carregarDetalhe = async (n) => {
@@ -2662,7 +2711,9 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
     setExportando(true);
     ctx.showToast && ctx.showToast('Gerando export detalhado…', `${notas.length} NF(s) — aguarde`);
     const clean = s => String(s == null ? '' : s).replace(/[;\n\r]/g, ' ');
-    const rows = [['NFe', 'Serie', 'DocNum', 'Data', C.Parte, 'CardCode', C.pessoa, 'CFOP', 'Tipo', 'Pedido', 'Item', 'Descricao', 'Projeto', 'Lote', 'Quantidade', 'Valor', 'Status'].join(';')];
+    const org = await garantirOrigem();
+    const num = v => (v == null ? '' : String(Math.round(v * 100) / 100).replace('.', ','));
+    const rows = [['NFe', 'Serie', 'DocNum', 'Data', C.Parte, 'CardCode', C.pessoa, 'CFOP', 'Tipo', 'Pedido', 'Item', 'Descricao', 'Projeto', 'Lote', ...(comOrigem ? ['Fornecedor do lote'] : []), 'Quantidade', 'Peso por BB (kg)', 'Peso total (kg)', 'Valor', 'Status'].join(';')];
     const cacheLocal = {};
     let idx = 0;
     const worker = async () => {
@@ -2679,12 +2730,12 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
         const data = (n.data || '').slice(0, 10);
         const cab = [n.nfe, n.serie, n.docNum, data, clean(n.cliente), n.cardCode, clean(n.vendedor), n.cfop, n.ehVenda ? C.principal : 'Outra'];
         if (!linhas.length) {
-          rows.push([...cab, clean(pedidosNF(n).join(', ')), '', '', '', '', '', (n.total || 0).toFixed(2), st].join(';'));
+          rows.push([...cab, clean(pedidosNF(n).join(', ')), '', '', '', '', ...(comOrigem ? [''] : []), '', '', '', (n.total || 0).toFixed(2), st].join(';'));
         } else {
           linhas.forEach(l => {
             const lotes = (l.lotes && l.lotes.length) ? l.lotes : [{ lote: '', quantidade: l.quantidade, valor: l.valorLinha }];
             lotes.forEach(lo => {
-              rows.push([...cab, clean(pedidoLinhaNF(n, l)), l.itemCode, clean(l.descricao), clean(l.projeto), lo.lote, lo.quantidade, (lo.valor || 0).toFixed(2), st].join(';'));
+              rows.push([...cab, clean(pedidoLinhaNF(n, l)), l.itemCode, clean(l.descricao), clean(l.projeto), lo.lote, ...(comOrigem ? [clean(fornecedorTxt(org, l, lo))] : []), lo.quantidade, num(lo.peso_bb), num(pesoLoteNF(lo)), (lo.valor || 0).toFixed(2), st].join(';'));
             });
           });
         }
@@ -2728,6 +2779,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
   };
   // Ao voltar para a tela, refaz a última busca (mesmo resultado de antes).
   useEffect(() => { if (buscado) carregar(buscado); }, [tipo]);
+  useEffect(() => { if (buscado && comOrigem) garantirOrigem(); }, [buscado, tipo]);
   const filtrosMudaram = !!buscado && (buscado.desde !== desde || (buscado.ate || '') !== (ate || '') || (buscado.cardCode || '') !== cardCodeSel);
   useEffect(() => {
     if (!dados || !abertos.size) return;
@@ -2949,23 +3001,59 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
                                 <thead><tr style={{ color: 'var(--text-muted)' }}>
                                   <th style={{ paddingLeft: 28, textAlign: 'left' }}>Item</th>
                                   <th style={{ textAlign: 'left' }}>Lote</th>
-                                  <th style={{ textAlign: 'left' }}>Projeto/safra</th>
+                                  {comOrigem && <th style={{ textAlign: 'left' }}>Fornecedor do lote</th>}
                                   <th className="num">Qtd</th>
+                                  <th className="num" title="Peso total do lote e, abaixo, o peso líquido de cada big bag (SAP)">Peso</th>
                                   <th className="num" style={{ paddingRight: 16 }}>Valor</th>
                                 </tr></thead>
                                 <tbody>
                                   {det.linhas.flatMap((l, li) => {
                                     const lotes = (l.lotes && l.lotes.length) ? l.lotes : [{ lote: '—', quantidade: l.quantidade, valor: l.valorLinha }];
-                                    return lotes.map((lo, loi) => (
+                                    const pl = pesoLinhaNF(l);
+                                    const rowsLote = lotes.map((lo, loi) => {
+                                      const fTxt = comOrigem ? fornecedorTxt(origem, l, lo) : '';
+                                      return (
                                       <tr key={li + '-' + loi}>
-                                        <td style={{ paddingLeft: 28 }}>{loi === 0 ? (l.descricao || l.itemCode) : ''}<span style={{ color: 'var(--text-dim)' }}>{loi === 0 && l.descricao ? ' · ' + l.itemCode : ''}{loi === 0 && pedidosNF(n).length > 1 ? ' · ' + pedidoLinhaNF(n, l) : ''}</span></td>
-                                        <td className="mono" style={{ color: 'var(--accent-light)', fontWeight: 600 }}>{lo.lote}</td>
-                                        <td className="mono" style={{ color: 'var(--text-muted)' }}>{loi === 0 ? (l.projeto || '—') : ''}</td>
+                                        <td style={{ paddingLeft: 28 }}>{loi === 0 ? (l.descricao || l.itemCode) : ''}<span style={{ color: 'var(--text-dim)' }}>{loi === 0 && l.descricao ? ' · ' + l.itemCode : ''}{loi === 0 && l.projeto ? ' · ' + l.projeto : ''}{loi === 0 && pedidosNF(n).length > 1 ? ' · ' + pedidoLinhaNF(n, l) : ''}</span></td>
+                                        <td className="mono" style={{ color: 'var(--accent-light)', fontWeight: 600, wordBreak: 'break-all' }}>{lo.lote}</td>
+                                        {comOrigem && <td style={{ fontSize: 11, color: fTxt === 'não localizado' ? 'var(--text-dim)' : 'var(--text)', minWidth: 110 }} title={fTxt}>
+                                          {fTxt || (lo.lote && lo.lote !== '—' && !origem ? (origemErro ? <span style={{ color: 'var(--red)' }} title={origemErro}>erro</span> : <span style={{ color: 'var(--text-dim)' }}><i className="ti ti-loader-2"></i> buscando…</span>) : <span style={{ color: 'var(--text-dim)' }}>—</span>)}
+                                        </td>}
                                         <td className="num mono">{fmtNum(lo.quantidade)}</td>
+                                        <td className="num mono" style={{ whiteSpace: 'nowrap' }}>{fmtKg(pesoLoteNF(lo))}{lo.peso_bb != null && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{fmtNum(lo.peso_bb)} kg/BB</div>}</td>
                                         <td className="num mono" style={{ paddingRight: 16 }}>{fmtMoney(lo.valor)}</td>
                                       </tr>
-                                    ));
+                                      );
+                                    });
+                                    // Item com mais de um lote: linha de total do item (qtd e peso).
+                                    if (lotes.length > 1) rowsLote.push(
+                                      <tr key={li + '-tot'} style={{ background: 'var(--bg-hover)' }}>
+                                        <td style={{ paddingLeft: 28, fontWeight: 600, color: 'var(--text-muted)' }}>Total do item</td>
+                                        <td></td>
+                                        {comOrigem && <td></td>}
+                                        <td className="num mono" style={{ fontWeight: 700 }}>{fmtNum(l.quantidade)}</td>
+                                        <td className="num mono" style={{ fontWeight: 700, whiteSpace: 'nowrap' }} title={pl.parcial ? 'Algum lote sem peso no SAP — total parcial' : ''}>{pl.parcial ? '≥ ' : ''}{fmtKg(pl.kg)}</td>
+                                        <td className="num mono" style={{ paddingRight: 16, fontWeight: 700 }}>{fmtMoney(l.valorLinha)}</td>
+                                      </tr>
+                                    );
+                                    return rowsLote;
                                   })}
+                                  {(() => {
+                                    const ps = det.linhas.map(pesoLinhaNF);
+                                    const kg = ps.reduce((a, p) => a + (p.kg || 0), 0);
+                                    if (!kg) return null;
+                                    const parcial = ps.some(p => p.parcial || p.kg == null);
+                                    return (
+                                      <tr style={{ borderTop: '1px solid var(--border)' }}>
+                                        <td style={{ paddingLeft: 28, fontWeight: 700 }}>Peso total da NF</td>
+                                        <td></td>
+                                        {comOrigem && <td></td>}
+                                        <td></td>
+                                        <td className="num mono" style={{ fontWeight: 700, color: 'var(--accent-light)', whiteSpace: 'nowrap' }} title={parcial ? 'Há itens/lotes sem peso no SAP — total parcial' : ''}>{parcial ? '≥ ' : ''}{fmtKg(kg)}</td>
+                                        <td></td>
+                                      </tr>
+                                    );
+                                  })()}
                                 </tbody>
                               </table>
                             ) : null}

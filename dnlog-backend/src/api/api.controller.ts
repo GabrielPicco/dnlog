@@ -94,7 +94,11 @@ export class ApiController {
     @Inject(SAP_SERVICE) private sap: any,
     private readonly oeService: OeService,
     private readonly cache: CacheService,
-  ) {}
+  ) {
+    // Monta a origem dos lotes em segundo plano logo após o boot (a 1ª leitura
+    // abre ~400 NFs de entrada no SAP), para o relatório de NFs já abrir pronto.
+    setTimeout(() => { this.lotesOrigem().catch(() => undefined); }, 30000);
+  }
 
   // -------- HEALTH --------
   // Público: o frontend chama /health para detectar o backend sem precisar de API key.
@@ -220,6 +224,8 @@ export class ApiController {
         lote: b.BatchNumber,
         quantidade: Number(b.Quantity) || 0,
         valor: (Number(l.Price) || 0) * (Number(b.Quantity) || 0),
+        // Peso líquido por big bag do lote (UDF Agrotis U_AGRT_PesoLiquido). null = sem peso.
+        peso_bb: Number(b.U_AGRT_PesoLiquido) > 0 ? Number(b.U_AGRT_PesoLiquido) : null,
       })),
     }));
   }
@@ -274,6 +280,51 @@ export class ApiController {
       },
       3600000,
       (v: any) => v && v.encontrada,
+    );
+  }
+
+  // -------- ORIGEM DOS LOTES (fornecedor de cada lote) --------
+  // Fornecedor de cada lote, a partir das NFs de entrada de semente do SAP.
+  // Usado no relatório de NFs de saída. Transferência entre filiais da DN
+  // (fornecedor = a própria DN) só vale se não houver compra de terceiro do lote.
+  // SOMENTE LEITURA no SAP. Cache 30 min (a 1ª montagem lê ~400 NFs).
+  @Get('lotes-origem')
+  async lotesOrigem() {
+    return this.cache.wrap(
+      'lotes-origem',
+      async () => {
+        const rows: any[] = (await this.sap.getOrigemLotes?.()) || [];
+        const interno = (n: string) => /DNSEEDS|DN SEEDS/i.test(n || '');
+        const norm = (v: any) => String(v || '').trim().toUpperCase();
+        const grupos: Record<string, any[]> = {};
+        const porLoteG: Record<string, any[]> = {};
+        for (const r of rows.sort((a, b) => String(a.data).localeCompare(String(b.data)))) {
+          (grupos[norm(r.item) + '|' + norm(r.lote)] ||= []).push(r);
+          (porLoteG[norm(r.lote)] ||= []).push(r);
+        }
+        const resolver = (lista: any[]) => {
+          const terc = lista.filter((r) => !interno(r.fornecedor));
+          const nomes = Array.from(new Set(terc.map((r) => r.fornecedor)));
+          if (terc.length) {
+            const r = terc[0];
+            return { fornecedor: nomes.join(' / '), fornecedor_codigo: r.fornecedor_codigo, nf: r.nf, data: r.data };
+          }
+          const r = lista[0];
+          return { fornecedor: 'DN Seeds (transferência entre filiais)', fornecedor_codigo: r.fornecedor_codigo, nf: r.nf, data: r.data, interno: true };
+        };
+        const porItemLote: Record<string, any> = {};
+        for (const [k, l] of Object.entries(grupos)) porItemLote[k] = resolver(l);
+        // Fallback só pelo lote (ex.: item mudou com o tratamento de sementes),
+        // quando o lote tem um único fornecedor de terceiro.
+        const porLote: Record<string, any> = {};
+        for (const [k, l] of Object.entries(porLoteG)) {
+          const terc = new Set(l.filter((r) => !interno(r.fornecedor)).map((r) => r.fornecedor_codigo));
+          if (terc.size === 1) porLote[k] = resolver(l);
+        }
+        return { geradoEm: new Date().toISOString(), total: rows.length, porItemLote, porLote };
+      },
+      1800000,
+      (v: any) => v && v.total > 0,
     );
   }
 
