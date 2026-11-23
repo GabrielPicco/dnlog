@@ -386,7 +386,7 @@ tbody tr:last-child td { border-bottom: none; }
 .ped-sub { display: block; font-size: 11px; color: var(--text-muted); font-weight: 400; margin-top: 2px; }
 @container (max-width: 980px) { .ped-tabela .c-emoe, .ped-tabela .c-itens { display: none; } }
 @container (max-width: 820px) { .ped-tabela .c-fat, .ped-tabela .c-status { display: none; } }
-@container (max-width: 640px) { .ped-tabela .c-total, .ped-tabela .c-saldoR, .ped-tabela .c-chev { display: none; } }
+@container (max-width: 640px) { .ped-tabela .c-total, .ped-tabela .c-saldoR, .ped-tabela .c-chev, .ped-tabela .c-filial { display: none; } }
 
 /* CHIPS */
 .chip {
@@ -4980,7 +4980,16 @@ const PedidosCompra = ({ ctx }) => {
   const alternar = (num) => setAbertos(prev => { const s = new Set(prev); s.has(num) ? s.delete(num) : s.add(num); return s; });
   const { sortCol, sortDir, onSort } = useSort('entrega', 'asc', 'pc');
   const sortProps = { sortCol, sortDir, onSort };
-  const dados = DADOS_PEDIDOS_COMPRA || [];
+  const [filialSel, setFilialSel] = useTelaState('pc:filial', 'todas');
+  const todos = DADOS_PEDIDOS_COMPRA || [];
+  // Filiais presentes nos pedidos (para o filtro), com a contagem de cada uma.
+  const filiais = useMemo(() => {
+    const m = new Map();
+    todos.forEach(p => { const f = p.filial || 'Sem filial'; m.set(f, (m.get(f) || 0) + 1); });
+    return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0], 'pt'));
+  }, [todos]);
+  // Filtro de filial vale para a lista, os indicadores e o export.
+  const dados = useMemo(() => (filialSel === 'todas' ? todos : todos.filter(p => (p.filial || 'Sem filial') === filialSel)), [todos, filialSel]);
 
   const lista = useMemo(() => {
     let l = [...dados];
@@ -4993,6 +5002,7 @@ const PedidosCompra = ({ ctx }) => {
       switch (col) {
         case 'numero': return p.numero || '';
         case 'fornecedor': return p.fornecedor || '';
+        case 'filial': return p.filial || '';
         case 'emissao': return p.data_emissao || '';
         case 'entrega': return p.data_entrega || '';
         case 'itens': return (p.itens || []).length;
@@ -5020,7 +5030,7 @@ const PedidosCompra = ({ ctx }) => {
         <div>
           <div className="crumb"><i className="ti ti-home"></i> Operação · Pedidos Compra</div>
           <h1 className="page-title">Pedidos de Compra (SAP B1)</h1>
-          <p className="page-subtitle">Espelho em tempo real · {stats.total} pedidos · {stats.comSaldo} com saldo a receber</p>
+          <p className="page-subtitle">Espelho em tempo real · {stats.total} pedidos{filialSel !== 'todas' ? ` · ${filialSel}` : ''} · {stats.comSaldo} com saldo a receber</p>
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <TogglePedidos ctx={ctx} ativo="pedidos-compra" />
@@ -5028,13 +5038,13 @@ const PedidosCompra = ({ ctx }) => {
             className="btn btn-ghost"
             onClick={() => {
               // Exporta CSV dos pedidos de compra (uma linha por item).
-              const linhas = ['Pedido;Fornecedor;Data emissao;Data entrega;Item;Descricao;Embalagem;Qtd total;Qtd entregue;Saldo;Valor unitario;Saldo valor;Status pedido'];
+              const linhas = ['Pedido;Filial;Fornecedor;Data emissao;Data entrega;Item;Descricao;Embalagem;Qtd total;Qtd entregue;Saldo;Valor unitario;Saldo valor;Status pedido'];
               dados.forEach(p => {
                 (p.itens || []).forEach(it => {
                   // Status do SAP: cancelado não é "atendido" (antes saía ATENDIDO por não ter saldo).
                   const status = (p.cancelado || p.status_sap === 'cancelado') ? 'CANCELADO' : (p.tem_saldo ? 'ABERTO' : 'ATENDIDO');
                   const linha = [
-                    p.numero, p.fornecedor || '',
+                    p.numero, p.filial || '', p.fornecedor || '',
                     p.data_emissao || '', p.data_entrega || '',
                     it.codigo, it.descricao, it.embalagem || it.unidade || '',
                     it.qtd_bb, (it.qtd_entregue || 0),
@@ -5050,7 +5060,7 @@ const PedidosCompra = ({ ctx }) => {
               const url = URL.createObjectURL(blob);
               const a = document.createElement('a');
               a.href = url;
-              a.download = `base_pedidos_compra_${new Date().toISOString().slice(0,10)}.csv`;
+              a.download = `base_pedidos_compra${filialSel !== 'todas' ? '_' + filialSel.replace(/\s+/g, '_') : ''}_${new Date().toISOString().slice(0,10)}.csv`;
               a.click();
               URL.revokeObjectURL(url);
               ctx.showToast('Base de compras exportada', `${dados.length} pedidos · saldos atualizados`);
@@ -5083,6 +5093,11 @@ const PedidosCompra = ({ ctx }) => {
       <div className="panel">
         <div className="panel-header">
           <FiltroStatusSap sel={statusSel} setSel={setStatusSel} />
+          <select value={filialSel} onChange={e => setFilialSel(e.target.value)} title="Filtrar pela filial do pedido no SAP"
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, color: 'var(--text)', padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', fontWeight: 600 }}>
+            <option value="todas">Todas as filiais ({todos.length})</option>
+            {filiais.map(([f, nPed]) => <option key={f} value={f}>{f} ({nPed})</option>)}
+          </select>
           <div className="search-box">
             <i className="ti ti-search"></i>
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar pedido ou fornecedor..." />
@@ -5090,13 +5105,14 @@ const PedidosCompra = ({ ctx }) => {
           <BotoesExpandir nAbertos={abertos.size} onExpandir={() => setAbertos(new Set(lista.map(p => p.numero)))} onRecolher={() => setAbertos(new Set())} />
         </div>
         {lista.length === 0 ? (
-          <div className="empty"><i className="ti ti-box-off"></i><div>Nenhum pedido de compra encontrado</div></div>
+          <div className="empty"><i className="ti ti-box-off"></i><div>Nenhum pedido de compra encontrado{filialSel !== 'todas' ? ` na ${filialSel}` : ''}</div></div>
         ) : (
           <div className="ped-wrap">
           <table className="table-tight ped-tabela">
             <thead><tr>
               <SortTh col="numero" {...sortProps}>Pedido</SortTh>
               <SortTh col="fornecedor" {...sortProps}>Fornecedor</SortTh>
+              <SortTh col="filial" className="c-filial" {...sortProps}>Filial</SortTh>
               <SortTh col="emissao" defDir="desc" {...sortProps}>Emissão</SortTh>
               <SortTh col="entrega" {...sortProps}>Entrega</SortTh>
               <SortTh col="itens" className="num c-itens" defDir="desc" {...sortProps}>Itens</SortTh>
@@ -5112,6 +5128,7 @@ const PedidosCompra = ({ ctx }) => {
                 <tr onClick={() => alternar(p.numero)} style={{ cursor: 'pointer', background: abertos.has(p.numero) ? 'var(--bg-hover)' : undefined }}>
                   <td className="cell-primary mono" style={{ fontSize: 12, color: 'var(--accent-light)' }}>{p.numero}</td>
                   <td>{p.fornecedor}</td>
+                  <td className="c-filial" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{p.filial ? <span className="chip" style={{ fontSize: 10, background: p.filial === 'Matriz BA' ? 'var(--bg-hover)' : 'var(--blue-bg)', color: p.filial === 'Matriz BA' ? 'var(--text-muted)' : 'var(--blue)' }}>{p.filial}</span> : <span className="cell-muted">—</span>}</td>
                   <td style={{ fontSize: 12 }}>{fmtDate(p.data_emissao)}</td>
                   <td style={{ fontSize: 12 }}>{fmtDate(p.data_entrega)}</td>
                   <td className="num mono c-itens">{(p.itens || []).length}</td>
@@ -5126,6 +5143,7 @@ const PedidosCompra = ({ ctx }) => {
                   <tr key={p.numero + '_' + i} style={{ background: 'var(--bg-elev)' }}>
                     <td></td>
                     <td className="mono cell-muted" style={{ fontSize: 11 }}>{it.codigo}</td>
+                    <td className="c-filial"></td>
                     <td colSpan={2} style={{ fontSize: 12 }}>{it.descricao} {it.embalagem ? <span className="cell-muted" style={{ fontSize: 11 }}>· {it.embalagem}</span> : null}</td>
                     <td className="num mono cell-muted c-itens" style={{ fontSize: 11 }}>{it.grupo_nome || '—'}</td>
                     <td className="num mono c-total">{fmtNum(it.qtd_bb)}</td>

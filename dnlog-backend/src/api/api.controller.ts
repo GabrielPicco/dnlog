@@ -80,6 +80,18 @@ function resumirLinhas(p: any, itemInfo: ItemInfo) {
   };
 }
 
+// Nome curto da filial (BPL) do SAP. O BPLName vem como "MATRIZ BA - DNSEEDS ..."
+// ou só a razão social; usa o prefixo antes do " - " e, sem ele, o nome conhecido
+// pelo código da filial.
+const FILIAIS_BPL: Record<string, string> = { '1': 'Matriz BA', '3': 'LOG', '4': 'Filial PI', '5': 'Filial MA' };
+function nomeFilialBpl(id: any, nome: any): string {
+  const n = String(nome || '').trim();
+  const prefixo = n.includes(' - ') ? n.split(' - ')[0].trim() : '';
+  if (prefixo) return prefixo.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase()).replace(/\b(Ba|Pi|Ma)\b/g, (u) => u.toUpperCase());
+  if (id != null && FILIAIS_BPL[String(id)]) return FILIAIS_BPL[String(id)];
+  return n || (id != null ? `Filial ${id}` : '');
+}
+
 /**
  * Endpoints da API consumidos pelo frontend DNLog.
  *
@@ -445,6 +457,9 @@ export class ApiController {
       doc_entry: p.DocEntry,
       fornecedor: p.CardName,
       fornecedor_codigo: p.CardCode,
+      // Filial (BPL) do pedido no SAP: código + nome curto ("Matriz BA", "Filial PI").
+      filial_id: p.BPL_IDAssignedToInvoice ?? null,
+      filial: nomeFilialBpl(p.BPL_IDAssignedToInvoice, p.BPLName),
       data_emissao: p.DocDate,
       data_entrega: p.DocDueDate,
       observacoes: p.Comments || '',
