@@ -412,6 +412,9 @@ export class ApiController {
         doc_entry: p.DocEntry,
         cliente: p.CardName,
         cliente_codigo: p.CardCode,
+        // Filial (BPL) do pedido no SAP: código + nome curto ("Matriz BA", "Filial PI").
+        filial_id: p.BPL_IDAssignedToInvoice ?? null,
+        filial: nomeFilialBpl(p.BPL_IDAssignedToInvoice, p.BPLName),
         data_emissao: p.DocDate,
         data_entrega: p.DocDueDate,
         // Vendedor: nome (via SalesPersons) com fallback para UDF/codigo.

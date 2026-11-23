@@ -205,7 +205,7 @@ export class SapClientService implements OnModuleDestroy {
     const params = {
       $filter: `DocumentStatus eq 'bost_Open' or (DocumentStatus eq 'bost_Close' and DocDueDate ge '${anoInicio}')`,
       $select:
-        'DocEntry,DocNum,DocDate,DocDueDate,CardCode,CardName,DocTotal,Comments,DocumentStatus,Cancelled,SalesPersonCode,DocumentLines',
+        'DocEntry,DocNum,DocDate,DocDueDate,CardCode,CardName,DocTotal,Comments,DocumentStatus,Cancelled,SalesPersonCode,BPL_IDAssignedToInvoice,BPLName,DocumentLines',
       // DocEntry (único) desempata: a paginação do SL é por $skip, e ordenar só
       // pela data (que se repete) fazia um pedido "pular" entre as páginas.
       $orderby: 'DocDueDate asc,DocEntry asc',

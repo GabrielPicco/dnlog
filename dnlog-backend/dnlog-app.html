@@ -5172,6 +5172,7 @@ const Pedidos = ({ ctx }) => {
   const [filtroGrupo, setFiltroGrupo] = useTelaState('ped:filtroGrupo', 'todos');
   const [filtroCultivar, setFiltroCultivar] = useTelaState('ped:filtroCultivar', 'todos');
   const [filtroItem, setFiltroItem] = useTelaState('ped:filtroItem', 'todos');
+  const [filtroFilial, setFiltroFilial] = useTelaState('ped:filtroFilial', 'todas');
   const { sortCol, sortDir, onSort } = useSort('entrega', 'asc', 'ped'); // ordenação por clique no cabeçalho
   const sortProps = { sortCol, sortDir, onSort };
   const [abertos, setAbertos] = useTelaSet('ped:abertos'); // pedidos expandidos (vários ao mesmo tempo)
@@ -5184,10 +5185,12 @@ const Pedidos = ({ ctx }) => {
     (filtroGrupo === 'todos' || i.grupo_nome === filtroGrupo) &&
     (filtroCultivar === 'todos' || (i.descricao || i.cultivar_nome) === filtroCultivar) &&
     (filtroItem === 'todos' || i.codigo === filtroItem);
-  const filtrandoPedidos = filtroVendedor !== 'todos' || temItemFiltro;
-  const limparFiltrosPedidos = () => { setFiltroVendedor('todos'); setFiltroGrupo('todos'); setFiltroCultivar('todos'); setFiltroItem('todos'); };
+  const filtrandoPedidos = filtroVendedor !== 'todos' || filtroFilial !== 'todas' || temItemFiltro;
+  const limparFiltrosPedidos = () => { setFiltroFilial('todas'); setFiltroVendedor('todos'); setFiltroGrupo('todos'); setFiltroCultivar('todos'); setFiltroItem('todos'); };
   // Opções (da carteira inteira, para sempre poder escolher qualquer valor).
   const optVendedores = useMemo(() => Array.from(new Set((ctx.pedidos || []).map(p => p.vendedor).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [ctx.pedidos]);
+  // Filiais presentes nos pedidos, com a contagem de cada uma.
+  const optFiliais = useMemo(() => { const m = new Map(); (ctx.pedidos || []).forEach(p => { const f = p.filial || 'Sem filial'; m.set(f, (m.get(f) || 0) + 1); }); return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0], 'pt')); }, [ctx.pedidos]);
   const optGrupos = useMemo(() => Array.from(new Set((ctx.pedidos || []).flatMap(p => (p.itens || []).map(i => i.grupo_nome)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [ctx.pedidos]);
   const optCultivares = useMemo(() => Array.from(new Set((ctx.pedidos || []).flatMap(p => (p.itens || []).map(i => i.descricao || i.cultivar_nome)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [ctx.pedidos]);
   const optItens = useMemo(() => Array.from(new Map((ctx.pedidos || []).flatMap(p => (p.itens || [])).filter(i => i.codigo).map(i => [i.codigo, i.descricao || ''])).entries()).sort((a, b) => a[0].localeCompare(b[0])), [ctx.pedidos]);
@@ -5233,6 +5236,7 @@ const Pedidos = ({ ctx }) => {
       });
     }
     // Filtros estilo Estoque
+    if (filtroFilial !== 'todas') l = l.filter(p => (p.filial || 'Sem filial') === filtroFilial);
     if (filtroVendedor !== 'todos') l = l.filter(p => (p.vendedor || '') === filtroVendedor);
     if (temItemFiltro) l = l.filter(p => (p.itens || []).some(itemMatch));
     // Ordenação por clique no cabeçalho
@@ -5240,6 +5244,7 @@ const Pedidos = ({ ctx }) => {
       switch (col) {
         case 'numero': return p.numero || '';
         case 'cliente': return p.cliente || '';
+        case 'filial': return p.filial || '';
         case 'vendedor': return p.vendedor || '';
         case 'emissao': return p.data_emissao || '';
         case 'entrega': return p.data_entrega || '';
@@ -5254,7 +5259,7 @@ const Pedidos = ({ ctx }) => {
       }
     };
     return sortRows(l, sortCol, sortDir, getVal);
-  }, [ctx.pedidos, q, statusSel, filtroPrazo, filtroVendedor, filtroGrupo, filtroCultivar, filtroItem, sortCol, sortDir]);
+  }, [ctx.pedidos, q, statusSel, filtroPrazo, filtroFilial, filtroVendedor, filtroGrupo, filtroCultivar, filtroItem, sortCol, sortDir]);
 
   // Totalizador — reflete o que está filtrado (lista). Com filtro de item ativo,
   // soma só os itens que casam; senão, todos os itens dos pedidos filtrados.
@@ -5294,13 +5299,13 @@ const Pedidos = ({ ctx }) => {
             className="btn btn-ghost"
             onClick={() => {
               // Exporta CSV com saldo atual de cada pedido + linha por item
-              const linhas = ['Pedido;Cliente;Vendedor;Data emissao;Data entrega;Item;Descricao;Cultivar;Peneira;Embalagem;Qtd total;Qtd entregue;Saldo;Valor unitario;Saldo valor;Status pedido'];
+              const linhas = ['Pedido;Filial;Cliente;Vendedor;Data emissao;Data entrega;Item;Descricao;Cultivar;Peneira;Embalagem;Qtd total;Qtd entregue;Saldo;Valor unitario;Saldo valor;Status pedido'];
               ctx.pedidos.forEach(p => {
                 p.itens.forEach(it => {
                   // Status do SAP: cancelado não é "atendido" (antes saía ATENDIDO por não ter saldo).
                   const status = (p.cancelado || p.status_sap === 'cancelado') ? 'CANCELADO' : (p.tem_saldo ? 'ABERTO' : 'ATENDIDO');
                   const linha = [
-                    p.numero, p.cliente, p.vendedor || '',
+                    p.numero, p.filial || '', p.cliente, p.vendedor || '',
                     p.data_emissao || '', p.data_entrega || '',
                     it.codigo, it.descricao, it.cultivar_nome || '', it.peneira || '',
                     it.embalagem || it.unidade || '',
@@ -5431,6 +5436,10 @@ const Pedidos = ({ ctx }) => {
 
         {/* Filtros estilo Estoque: Vendedor, Grupo, Cultivar, Item */}
         <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filtroFilial} onChange={e => setFiltroFilial(e.target.value)} title="Filtrar pela filial do pedido no SAP">
+            <option value="todas">Todas as filiais ({(ctx.pedidos || []).length})</option>
+            {optFiliais.map(([f, nPed]) => <option key={f} value={f}>{f} ({nPed})</option>)}
+          </select>
           <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filtroVendedor} onChange={e => setFiltroVendedor(e.target.value)}>
             <option value="todos">Todos os representantes</option>
             {optVendedores.map(v => <option key={v} value={v}>{v}</option>)}
@@ -5475,6 +5484,7 @@ const Pedidos = ({ ctx }) => {
           <thead><tr>
             <SortTh col="numero" {...sortProps}>Pedido · emissão</SortTh>
             <SortTh col="cliente" {...sortProps}>Cliente · vendedor</SortTh>
+            <SortTh col="filial" className="c-filial" {...sortProps}>Filial</SortTh>
             <SortTh col="entrega" {...sortProps}>Entrega · urgência</SortTh>
             <SortTh col="qtdtotal" className="num c-total" defDir="desc" {...sortProps}>Qtd total</SortTh>
             <SortTh col="faturado" className="num c-fat" defDir="desc" {...sortProps}>Faturado</SortTh>
@@ -5493,6 +5503,7 @@ const Pedidos = ({ ctx }) => {
               <tr onClick={() => alternar(p.numero)} style={{ cursor: 'pointer', background: exp ? 'var(--bg-hover)' : undefined }}>
                 <td className="cell-primary mono" style={{ whiteSpace: 'nowrap' }}>{p.numero}<span className="ped-sub mono">{fmtDate(p.data_emissao)}</span></td>
                 <td style={{ minWidth: 160 }}>{p.cliente}<span className="ped-sub">{p.vendedor || '—'}</span></td>
+                <td className="c-filial" style={{ whiteSpace: 'nowrap' }}>{p.filial ? <span className="chip" style={{ fontSize: 10, background: p.filial === 'Matriz BA' ? 'var(--bg-hover)' : 'var(--blue-bg)', color: p.filial === 'Matriz BA' ? 'var(--text-muted)' : 'var(--blue)' }}>{p.filial}</span> : <span className="cell-muted">—</span>}</td>
                 <td className="mono" style={{ whiteSpace: 'nowrap' }}>
                   <div style={{ color: u.cor, fontWeight: u.categoria === 'atrasado' || u.categoria === 'hoje' ? 700 : 400 }}>{p.data_entrega ? fmtDate(p.data_entrega) : <span style={{ color: 'var(--text-dim)' }}>—</span>}</div>
                   {p.data_entrega ? (
@@ -5520,7 +5531,7 @@ const Pedidos = ({ ctx }) => {
               </tr>
               {exp && (
                 <tr>
-                  <td colSpan={10} style={{ padding: 0, background: 'var(--bg-card)' }}>
+                  <td colSpan={11} style={{ padding: 0, background: 'var(--bg-card)' }}>
                     <table style={{ width: '100%', fontSize: 12, margin: 0 }}>
                       <thead><tr style={{ color: 'var(--text-muted)' }}>
                         <th style={{ paddingLeft: 28, textAlign: 'left' }}>Item</th>
@@ -12275,6 +12286,8 @@ const Configuracoes = ({ ctx }) => {
       // doc_entry guarda referência SAP para faturamento
       _sap_doc_entry: p.doc_entry,
       _sap_cliente_codigo: p.cliente_codigo,
+      filial: p.filial || '',
+      filial_id: p.filial_id ?? null,
       // Totais e status vindos do backend (o pedidosComSaldo recalcula o saldo
       // considerando as OEs; qtd_total_bb e status_sap vêm prontos daqui).
       qtd_total_bb: p.qtd_total_bb,
