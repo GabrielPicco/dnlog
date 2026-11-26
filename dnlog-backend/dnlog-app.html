@@ -1473,8 +1473,8 @@ const DNLOG_API = {
     if (!r.ok) throw new Error('GET /notas-entrada ' + r.status);
     return r.json();
   },
-  async nfEntradaDetalhe(docEntry) {
-    const r = await fetch(`${DNLOG_API_BASE}/nf-entrada-detalhe?docEntry=${encodeURIComponent(docEntry)}`, { headers: dnlogAuthHeaders() });
+  async nfEntradaDetalhe(docEntry, doc) {
+    const r = await fetch(`${DNLOG_API_BASE}/nf-entrada-detalhe?docEntry=${encodeURIComponent(docEntry)}${doc ? '&doc=' + encodeURIComponent(doc) : ''}`, { headers: dnlogAuthHeaders() });
     if (!r.ok) throw new Error('GET /nf-entrada-detalhe ' + r.status);
     return r.json();
   },
@@ -2599,7 +2599,7 @@ const NFS_CFG = {
     listar: (d, a, cc) => DNLOG_API.listarNotasEntrada(d, a, cc),
     parceiros: () => (DADOS_FORNECEDORES || []).map(f => ({ codigo: f.codigo || '', nome: f.nome || '' })),
     // Na entrada o nº da NF é do fornecedor (repete entre fornecedores) → busca pelo DocEntry.
-    detalhe: (n) => DNLOG_API.nfEntradaDetalhe(n.docEntry),
+    detalhe: (n) => DNLOG_API.nfEntradaDetalhe(n.docEntry, n.docTipo),
   },
 };
 // Origem (fornecedor) dos lotes — carregada uma vez por sessão e compartilhada.
@@ -2629,6 +2629,12 @@ const pesoLinhaNF = (l) => {
   return { kg: comPeso.reduce((a, lo) => a + pesoLoteNF(lo), 0), parcial: comPeso.length < lotes.length };
 };
 const fmtKg = (v) => (v == null ? '—' : fmtNum(Math.round(v)) + ' kg');
+// Chave única de uma NF na tela. Na entrada há compras e devoluções (entidades
+// diferentes do SAP, com DocNum que pode repetir) — o backend manda `chave`.
+const chaveNF = (n) => (n && (n.chave || n.docNum));
+// Tipo da nota para exibir/exportar: devoluções têm rótulo próprio.
+const tipoNF = (n, C) => (n && n.tipoRotulo) || (n && n.ehVenda ? C.principal : 'Outra');
+const TIPOS_NF_ENTRADA = [['todos', 'Tipo: todas'], ['entrada', 'Notas de entrada (compras e outras)'], ['devolucoes', 'Só devoluções'], ['dev_cliente', 'Devoluções de cliente'], ['dev_fornecedor', 'Devoluções a fornecedor']];
 // Data local (YYYY-MM-DD) — evita o "amanhã" do toISOString (UTC) à noite.
 const isoLocal = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 const isoDiasAtras = (dias) => isoLocal(new Date(Date.now() - dias * 86400000));
@@ -2651,7 +2657,8 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
   const [clienteSel, setClienteSel] = useTelaState(`nfs-${tipo}:clienteSel`, 'todos'); // cardCode | 'todos'
   const [q, setQ] = useTelaState(`nfs-${tipo}:q`, '');
   const [incluirCanceladas, setIncluirCanceladas] = useTelaState(`nfs-${tipo}:incluirCanceladas`, false);
-  const [cfopSel, setCfopSel] = useTelaState(`nfs-${tipo}:cfopSel`, 'todos'); // código da utilização (CFOP) ou 'todos'
+  const [cfopSel, setCfopSel] = useTelaState(`nfs-${tipo}:cfopSel`, 'todos');
+  const [tipoDocSel, setTipoDocSel] = useTelaState(`nfs-${tipo}:tipoDoc`, 'todos'); // entrada: compras x devoluções // código da utilização (CFOP) ou 'todos'
   const [abertos, setAbertos] = useTelaSet(`nfs-${tipo}:abertos`); // docNums expandidos (várias NFs juntas)
   // Não carrega ao abrir: o usuário filtra e clica em Buscar. Guarda a última
   // busca ({desde, ate, cardCode}) para reabrir com o mesmo resultado ao voltar.
@@ -2676,7 +2683,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
 
   // Carrega (uma vez) os itens/lotes/valores de uma NF e guarda em cache.
   const carregarDetalhe = async (n) => {
-    const k = n.docNum;
+    const k = chaveNF(n);
     setDetalhes(d => (d[k] && d[k].linhas) ? d : ({ ...d, [k]: { loading: true } }));
     try {
       const r = await C.detalhe(n);
@@ -2689,14 +2696,14 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
     }
   };
   const abrirNF = (n) => {
-    const k = n.docNum;
+    const k = chaveNF(n);
     setAbertos(prev => { const s = new Set(prev); s.has(k) ? s.delete(k) : s.add(k); return s; });
     if (!(detalhes[k] && detalhes[k].linhas)) carregarDetalhe(n);
   };
   const recolherTodas = () => setAbertos(new Set());
   const expandirTodas = async () => {
-    setAbertos(new Set(lista.map(n => n.docNum)));
-    const pend = lista.filter(n => !(detalhes[n.docNum] && detalhes[n.docNum].linhas));
+    setAbertos(new Set(lista.map(chaveNF)));
+    const pend = lista.filter(n => !(detalhes[chaveNF(n)] && detalhes[chaveNF(n)].linhas));
     let idx = 0;
     const worker = async () => { while (idx < pend.length) { await carregarDetalhe(pend[idx++]); } };
     await Promise.all(Array.from({ length: 3 }, () => worker()));
@@ -2721,7 +2728,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
       const worker = async () => {
         while (idx < notas.length) {
           const n = notas[idx++];
-          const k = n.docNum;
+          const k = chaveNF(n);
           if (!cacheLocal[k]) {
             let linhas = detalhes[k] && detalhes[k].linhas;
             if (!linhas) { try { const r = await C.detalhe(n); linhas = (r && r.linhas) || []; } catch (e) { linhas = []; } }
@@ -2733,9 +2740,9 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
       // Monta na ordem da tela (os workers terminam fora de ordem).
       const rows = [];
       notas.forEach(n => {
-        const linhas = cacheLocal[n.docNum] || [];
+        const linhas = cacheLocal[chaveNF(n)] || [];
         const st = n.cancelada ? 'CANCELADA' : (n.status || '');
-        const cabNF = [n.nfe, n.serie, n.docNum, dataXLSX(n.data), n.cliente || '', n.cardCode || '', n.cpfCnpj || '', n.municipio || '', n.uf || '', n.vendedor || '', n.cfop || '', n.ehVenda ? C.principal : 'Outra'];
+        const cabNF = [n.nfe, n.serie, n.docNum, dataXLSX(n.data), n.cliente || '', n.cardCode || '', n.cpfCnpj || '', n.municipio || '', n.uf || '', n.vendedor || '', n.cfop || '', tipoNF(n, C)];
         if (!linhas.length) {
           rows.push([...cabNF, pedidosNF(n).join(', '), '', '', '', '', ...(comOrigem ? [''] : []), null, null, null, Number(n.total) || 0, st]);
           return;
@@ -2746,7 +2753,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
             const kg = pesoLoteNF(lo);
             rows.push([...cabNF, pedidoLinhaNF(n, l), l.itemCode || '', l.descricao || '', l.projeto || '', lo.lote || '',
               ...(comOrigem ? [fornecedorTxt(org, l, lo)] : []), Number(lo.quantidade) || 0,
-              lo.peso_bb != null ? Number(lo.peso_bb) : null, kg != null ? Math.round(kg) : null, Math.round((Number(lo.valor) || 0) * 100) / 100, st]);
+              lo.peso_bb != null ? Number(lo.peso_bb) : null, kg != null ? Math.round(kg) : null, (n.tipoDoc === 'dev_fornecedor' ? -1 : 1) * Math.round((Number(lo.valor) || 0) * 100) / 100, st]);
           });
         });
       });
@@ -2798,7 +2805,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
   const filtrosMudaram = !!buscado && (buscado.desde !== desde || (buscado.ate || '') !== (ate || '') || (buscado.cardCode || '') !== cardCodeSel);
   useEffect(() => {
     if (!dados || !abertos.size) return;
-    dados.filter(n => abertos.has(n.docNum) && !(detalhes[n.docNum] && (detalhes[n.docNum].linhas || detalhes[n.docNum].loading))).forEach(n => carregarDetalhe(n));
+    dados.filter(n => abertos.has(chaveNF(n)) && !(detalhes[chaveNF(n)] && (detalhes[chaveNF(n)].linhas || detalhes[chaveNF(n)].loading))).forEach(n => carregarDetalhe(n));
   }, [dados]);
 
   // Base (aplica cancelamento). A agregação por cliente e a lista partem daqui.
@@ -2810,8 +2817,10 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
   }, [dados]);
   const base = useMemo(() => (dados || []).filter(n =>
     (incluirCanceladas || !n.cancelada) &&
-    (cfopSel === 'todos' || (n.cfops || []).map(String).includes(cfopSel))
-  ), [dados, incluirCanceladas, cfopSel]);
+    (cfopSel === 'todos' || (n.cfops || []).map(String).includes(cfopSel)) &&
+    (tipo !== 'entrada' || tipoDocSel === 'todos' ||
+      (tipoDocSel === 'devolucoes' ? String(n.tipoDoc || '').startsWith('dev_') : (n.tipoDoc || 'entrada') === tipoDocSel))
+  ), [dados, incluirCanceladas, cfopSel, tipoDocSel, tipo]);
 
   // Agregado por cliente (para o filtro e o quadro "por cliente").
   const porCliente = useMemo(() => {
@@ -2846,7 +2855,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
     try { XLSX = await carregarXLSX(); } catch (e) { ctx.showToast && ctx.showToast('Não foi possível exportar', e.message); return; }
     const cab = ['NFe', 'Série', 'DocNum', 'Data', 'Pedido(s)', C.Parte, 'CardCode', 'CPF/CNPJ', 'Município', 'UF', C.pessoa, 'CFOP', 'Tipo', 'Projeto', 'Valor (R$)', 'Status'];
     const rows = lista.map(n => [n.nfe, n.serie, n.docNum, dataXLSX(n.data), pedidosNF(n).join(', '), n.cliente || '', n.cardCode || '', n.cpfCnpj || '', n.municipio || '', n.uf || '', n.vendedor || '',
-      n.cfop || '', n.ehVenda ? C.principal : 'Outra', n.projeto || '', Number(n.total) || 0, n.cancelada ? 'CANCELADA' : n.status]);
+      n.cfop || '', tipoNF(n, C), n.projeto || '', Number(n.total) || 0, n.cancelada ? 'CANCELADA' : n.status]);
     const ws = abaXLSX(XLSX, cab, rows, [14], [8, 6, 8, 11, 14, 40, 11, 20, 22, 5, 22, 8, 8, 12, 15, 11]);
     for (let r = 1; r <= rows.length + 1; r++) { const cel = ws[XLSX.utils.encode_cell({ r, c: 14 })]; if (cel) cel.z = '#,##0.00'; }
     const wb = XLSX.utils.book_new();
@@ -2909,6 +2918,14 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
           <option value="todos">Utilização: todas</option>
           {cfopsDisponiveis.map(c => <option key={c} value={c}>Utilização {c}</option>)}
         </select>
+        {tipo === 'entrada' && (
+          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={tipoDocSel} onChange={e => setTipoDocSel(e.target.value)} title="Compras/entradas ou notas de devolução (de cliente e a fornecedor)">
+            {TIPOS_NF_ENTRADA.map(([v, l]) => {
+              const nTipo = (dados || []).filter(n => v === 'todos' || (v === 'devolucoes' ? String(n.tipoDoc || '').startsWith('dev_') : (n.tipoDoc || 'entrada') === v)).length;
+              return <option key={v} value={v}>{l}{dados ? ` (${nTipo})` : ''}</option>;
+            })}
+          </select>
+        )}
         <div className="search-box" style={{ flex: '1 1 200px', minWidth: 160 }}><i className="ti ti-search"></i>
           <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && (!dados || filtrosMudaram)) buscar(); }} placeholder={`Filtrar ${C.parte}, NFe, pedido, ${C.pessoa.toLowerCase()}, CFOP...`} /></div>
         <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -2990,16 +3007,17 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
               </tr></thead>
               <tbody>
                 {lista.map((n, i) => {
-                  const k = n.docNum;
+                  const k = chaveNF(n);
                   const exp = abertos.has(k);
                   const det = detalhes[k];
                   return (
-                    <React.Fragment key={(n.docNum || '') + '|' + i}>
+                    <React.Fragment key={(chaveNF(n) || '') + '|' + i}>
                       <tr onClick={() => abrirNF(n)} style={{ opacity: n.cancelada ? 0.5 : 1, cursor: 'pointer', background: exp ? 'var(--bg-hover)' : undefined }}>
                         <td className="mono cell-primary" style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
                           <i className={'ti ' + (exp ? 'ti-chevron-down' : 'ti-chevron-right')} style={{ fontSize: 12, marginRight: 4, color: 'var(--text-muted)' }}></i>
                           {n.nfe}<span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>/{n.serie}</span>
                           {n.cfop && <span style={{ display: 'block', fontSize: 9, fontWeight: 400, color: n.ehVenda ? 'var(--text-dim)' : 'var(--orange)' }}>CFOP {n.cfop}</span>}
+                          {n.tipoRotulo && <span className="chip" style={{ display: 'inline-block', marginTop: 3, fontSize: 9, fontWeight: 700, background: n.tipoDoc === 'dev_fornecedor' ? 'var(--red-bg)' : 'var(--orange-bg)', color: n.tipoDoc === 'dev_fornecedor' ? 'var(--red)' : 'var(--orange)' }}>{n.tipoRotulo.toUpperCase()}</span>}
                         </td>
                         <td className="mono cell-muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(n.data)}</td>
                         <td className="mono" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{pedidosNF(n).length ? pedidosNF(n).map(x => <div key={x}>{x}</div>) : <span style={{ color: 'var(--text-dim)' }}>—</span>}</td>
@@ -3008,7 +3026,7 @@ const FaturamentoNFs = ({ ctx, tipo = 'saida' }) => {
                           {(n.cpfCnpj || n.municipio) && <div className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{[n.cpfCnpj, [n.municipio, n.uf].filter(Boolean).join('/')].filter(Boolean).join(' · ')}</div>}
                         </td>
                         <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{n.vendedor || '—'}</td>
-                        <td className="num mono" style={{ fontWeight: 700 }}>{fmtMoney(n.total)}{n.cancelada && <span className="chip" style={{ marginLeft: 6, background: 'var(--red-bg)', color: 'var(--red)', fontSize: 9 }}>CANC</span>}</td>
+                        <td className="num mono" style={{ fontWeight: 700, color: (n.total || 0) < 0 ? 'var(--red)' : undefined }}>{fmtMoney(n.total)}{n.cancelada && <span className="chip" style={{ marginLeft: 6, background: 'var(--red-bg)', color: 'var(--red)', fontSize: 9 }}>CANC</span>}</td>
                       </tr>
                       {exp && (
                         <tr>
@@ -3849,7 +3867,7 @@ const Relatorios = ({ ctx }) => {
   const RELATORIOS_CARDS = [
     { id: 'faturamento', titulo: 'Faturamento — NFs por cliente', desc: 'Notas fiscais de saída do SAP por cliente, com item, lote, quantidade e valor.', icon: 'ti-file-invoice', cor: 'var(--green)', bg: 'var(--green-bg)' },
     { id: 'rastreio-lote', titulo: 'Rastreio de lote', desc: 'Entradas, saídas e saldo de um lote no SAP, as OEs do DNLog e, no QCDN, qualidade, laudos e reservas — com as divergências apontadas.', icon: 'ti-route', cor: 'var(--purple)', bg: 'var(--purple-bg)' },
-    { id: 'nfs-entrada', titulo: 'NFs de entrada — por fornecedor', desc: 'Notas fiscais de entrada (compras) do SAP por fornecedor, com item, lote, quantidade e valor.', icon: 'ti-file-import', cor: 'var(--blue)', bg: 'var(--blue-bg)' },
+    { id: 'nfs-entrada', titulo: 'NFs de entrada — por fornecedor', desc: 'Notas fiscais de entrada e de devolução do SAP por fornecedor, com item, lote, quantidade e valor.', icon: 'ti-file-import', cor: 'var(--blue)', bg: 'var(--blue-bg)' },
     { id: 'financeiro', titulo: 'Recebimentos por cliente', desc: 'O que cada cliente pagou/adiantou, lançado no Assistente de Recebimentos do SAP.', icon: 'ti-wallet', cor: 'var(--green)', bg: 'var(--green-bg)' },
     { id: 'pedidos-pagamentos', titulo: 'Pedidos × Pagamentos', desc: 'Total em pedidos de cada cliente (fechados, em aberto e cancelados) vs. tudo o que já foi recebido, com o saldo a pagar e a flag de pagamento.', icon: 'ti-scale', cor: 'var(--orange)', bg: 'var(--orange-bg)' },
     { id: 'comercial', titulo: 'Resumo comercial de pedidos', desc: 'Abertos/fechados, unidades, valor e comissão por representante.', icon: 'ti-report-money', cor: 'var(--accent-light)', bg: 'var(--bg-hover)' },

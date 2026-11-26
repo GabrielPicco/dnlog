@@ -663,7 +663,12 @@ export class SapClientService implements OnModuleDestroy {
    * NumAtCard = nº da NF informado do fornecedor (fallback quando o SequenceSerial
    * não vem preenchido na nota de terceiro).
    */
-  async getNotasEntrada(desde?: string, ate?: string, cardCode?: string): Promise<any[]> {
+  // Documentos aceitos no relatório de NFs de entrada: compras + devoluções
+  // (de cliente = CreditNotes, nota de entrada; a fornecedor = PurchaseCreditNotes).
+  static readonly DOCS_ENTRADA = ['PurchaseInvoices', 'CreditNotes', 'PurchaseCreditNotes'] as const;
+
+  async getNotasEntrada(desde?: string, ate?: string, cardCode?: string, entidade: string = 'PurchaseInvoices'): Promise<any[]> {
+    const ent = (SapClientService.DOCS_ENTRADA as readonly string[]).includes(entidade) ? entidade : 'PurchaseInvoices';
     await this.ensureSession();
     const select =
       'DocEntry,DocNum,SequenceSerial,SeriesString,SequenceModel,NumAtCard,CardCode,CardName,DocDate,DocDueDate,DocTotal,DocCurrency,Cancelled,CancelStatus,DocumentStatus,SalesPersonCode,DocumentLines,AddressExtension,TaxExtension';
@@ -679,13 +684,13 @@ export class SapClientService implements OnModuleDestroy {
       return params;
     };
     try {
-      return await this.getAllPages('/PurchaseInvoices', build(true));
+      return await this.getAllPages('/' + ent, build(true));
     } catch (err1) {
-      this.logger.warn('NFs de entrada: filtro com aspas falhou, tentando sem aspas…');
+      this.logger.warn(`NFs de entrada (${ent}): filtro com aspas falhou, tentando sem aspas…`);
       try {
-        return await this.getAllPages('/PurchaseInvoices', build(false));
+        return await this.getAllPages('/' + ent, build(false));
       } catch (err2) {
-        this.handleError(err2, 'listar NFs de entrada (PurchaseInvoices)');
+        this.handleError(err2, `listar NFs de entrada (${ent})`);
       }
     }
   }
@@ -850,10 +855,11 @@ export class SapClientService implements OnModuleDestroy {
     return out;
   }
 
-  async getNotaEntradaFull(docEntry: number | string): Promise<any> {
+  async getNotaEntradaFull(docEntry: number | string, entidade: string = 'PurchaseInvoices'): Promise<any> {
     await this.ensureSession();
+    const ent = (SapClientService.DOCS_ENTRADA as readonly string[]).includes(entidade) ? entidade : 'PurchaseInvoices';
     try {
-      const resp = await this.axios.get(`/PurchaseInvoices(${Number(docEntry)})`);
+      const resp = await this.axios.get(`/${ent}(${Number(docEntry)})`);
       return resp.data;
     } catch (err) {
       if (err?.response?.status === 404) return null;

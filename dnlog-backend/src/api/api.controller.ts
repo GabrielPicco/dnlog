@@ -254,17 +254,38 @@ export class ApiController {
     const d = desde || new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
     const a = ate || '';
     return this.cache.wrap(
-      `notas-entrada:${d}:${a}:${cardCode || ''}`,
+      `notas-entrada2:${d}:${a}:${cardCode || ''}`,
       async () => {
-        const [notas, compradores] = await Promise.all([
+        // Devoluções não derrubam o relatório: se a consulta falhar, saem vazias.
+        const dev = (ent: string) => Promise.resolve(this.sap.getNotasEntrada(d, a || undefined, cardCode || undefined, ent)).catch((e: any) => {
+          this.logger.warn(`NFs de entrada: devoluções (${ent}) não carregadas: ${e?.message || e}`);
+          return [];
+        });
+        const [notas, devCliente, devFornecedor, compradores] = await Promise.all([
           this.sap.getNotasEntrada(d, a || undefined, cardCode || undefined),
+          dev('CreditNotes'),
+          dev('PurchaseCreditNotes'),
           this.sap.getSalesPersons?.().catch(() => []) ?? [],
         ]);
         const nome: Record<string, string> = {};
         for (const v of compradores as any[]) nome[String(v.SalesEmployeeCode)] = v.SalesEmployeeName;
         // Compra = CFOPs de compra (1101-1129 / 2101-2129 / 3101-3129). O resto
         // (remessa, retorno de armazém, devolução, transferência…) fica "outra".
-        const nfs = (notas as any[]).map((i) => this.mapNotaFiscal(i, nome, /^[123]1(0[1-9]|1[0-9]|2[0-9])$/, 22));
+        const compras = (notas as any[]).map((i) => ({
+          ...this.mapNotaFiscal(i, nome, /^[123]1(0[1-9]|1[0-9]|2[0-9])$/, 22),
+          docTipo: 'PurchaseInvoices', tipoDoc: 'entrada', chave: `PI-${i.DocEntry}`,
+        }));
+        // Devoluções: CFOP x202 = devolução de compra/venda propriamente dita.
+        const devolucao = (lista: any[], docTipo: string, tipoDoc: string, rotulo: string, prefixo: string, sinal: number) =>
+          (lista || []).map((i) => {
+            const n = this.mapNotaFiscal(i, nome, /^[1256]202$/, -1);
+            return { ...n, total: sinal * (n.total || 0), ehVenda: false, docTipo, tipoDoc, tipoRotulo: rotulo, chave: `${prefixo}-${i.DocEntry}` };
+          });
+        const nfs = [
+          ...compras,
+          ...devolucao(devCliente as any[], 'CreditNotes', 'dev_cliente', 'Devolução de cliente', 'CN', 1),
+          ...devolucao(devFornecedor as any[], 'PurchaseCreditNotes', 'dev_fornecedor', 'Devolução a fornecedor', 'PCN', -1),
+        ].sort((x: any, y: any) => String(y.data || '').localeCompare(String(x.data || '')));
         return this.comPedidos(nfs, '/PurchaseOrders', 'PC');
       },
       300000,
@@ -274,12 +295,14 @@ export class ApiController {
   // Itens/lotes de UMA NF de entrada — pelo DocEntry (o nº da NF é do fornecedor
   // e pode repetir entre fornecedores, então não serve de chave). Cache 1h.
   @Get('nf-entrada-detalhe')
-  async nfEntradaDetalhe(@Query('docEntry') docEntry?: string) {
+  async nfEntradaDetalhe(@Query('docEntry') docEntry?: string, @Query('doc') doc?: string) {
     if (!docEntry) throw new HttpException('Informe o docEntry da NF (?docEntry=)', HttpStatus.BAD_REQUEST);
+    // doc = entidade do SAP (compra, devolução de cliente ou a fornecedor); padrão = compra.
+    const ent = ['CreditNotes', 'PurchaseCreditNotes'].includes(String(doc)) ? String(doc) : 'PurchaseInvoices';
     return this.cache.wrap(
-      `nf-entrada:${docEntry}`,
+      `nf-entrada:${ent}:${docEntry}`,
       async () => {
-        const full = await this.sap.getNotaEntradaFull(docEntry);
+        const full = await this.sap.getNotaEntradaFull(docEntry, ent);
         if (!full) return { encontrada: false, docEntry };
         return {
           encontrada: true,
