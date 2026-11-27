@@ -4999,23 +4999,44 @@ const PedidosCompra = ({ ctx }) => {
   const { sortCol, sortDir, onSort } = useSort('entrega', 'asc', 'pc');
   const sortProps = { sortCol, sortDir, onSort };
   const [filialSel, setFilialSel] = useTelaState('pc:filial', 'todas');
+  // Mesmos filtros da tela de Pedidos de venda: prazo, filial, fornecedor
+  // (no lugar do representante), grupo, cultivar e item.
+  const [filtroPrazo, setFiltroPrazo] = useTelaState('pc:filtroPrazo', 'todos');
+  const [filtroFornecedor, setFiltroFornecedor] = useTelaState('pc:filtroFornecedor', 'todos');
+  const [filtroGrupo, setFiltroGrupo] = useTelaState('pc:filtroGrupo', 'todos');
+  const [filtroCultivar, setFiltroCultivar] = useTelaState('pc:filtroCultivar', 'todos');
+  const [filtroItem, setFiltroItem] = useTelaState('pc:filtroItem', 'todos');
   const todos = DADOS_PEDIDOS_COMPRA || [];
-  // Filiais presentes nos pedidos (para o filtro), com a contagem de cada uma.
+  // Item é nível-linha; um pedido "casa" se tiver pelo menos um item que passe.
+  const temItemFiltro = filtroGrupo !== 'todos' || filtroCultivar !== 'todos' || filtroItem !== 'todos';
+  const itemMatch = (i) =>
+    (filtroGrupo === 'todos' || i.grupo_nome === filtroGrupo) &&
+    (filtroCultivar === 'todos' || (i.descricao || i.cultivar_nome) === filtroCultivar) &&
+    (filtroItem === 'todos' || i.codigo === filtroItem);
+  const filtrandoPedidos = filtroFornecedor !== 'todos' || filialSel !== 'todas' || temItemFiltro;
+  const limparFiltrosPedidos = () => { setFilialSel('todas'); setFiltroFornecedor('todos'); setFiltroGrupo('todos'); setFiltroCultivar('todos'); setFiltroItem('todos'); };
+  // Opções (da carteira inteira, para sempre poder escolher qualquer valor).
   const filiais = useMemo(() => {
     const m = new Map();
     todos.forEach(p => { const f = p.filial || 'Sem filial'; m.set(f, (m.get(f) || 0) + 1); });
     return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0], 'pt'));
   }, [todos]);
-  // Filtro de filial vale para a lista, os indicadores e o export.
-  const dados = useMemo(() => (filialSel === 'todas' ? todos : todos.filter(p => (p.filial || 'Sem filial') === filialSel)), [todos, filialSel]);
+  const optFornecedores = useMemo(() => Array.from(new Set(todos.map(p => p.fornecedor).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [todos]);
+  const optGrupos = useMemo(() => Array.from(new Set(todos.flatMap(p => (p.itens || []).map(i => i.grupo_nome)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [todos]);
+  const optCultivares = useMemo(() => Array.from(new Set(todos.flatMap(p => (p.itens || []).map(i => i.descricao || i.cultivar_nome)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [todos]);
+  const optItens = useMemo(() => Array.from(new Map(todos.flatMap(p => (p.itens || [])).filter(i => i.codigo).map(i => [i.codigo, i.descricao || ''])).entries()).sort((a, b) => a[0].localeCompare(b[0])), [todos]);
 
   const lista = useMemo(() => {
-    let l = [...dados];
+    let l = [...todos];
     if (statusSel.length) l = l.filter(p => statusSel.includes(p.status_sap));
     if (q) {
       const ql = q.toLowerCase();
       l = l.filter(p => (p.numero || '').toLowerCase().includes(ql) || (p.fornecedor || '').toLowerCase().includes(ql));
     }
+    if (filtroPrazo !== 'todos') l = l.filter(p => passaPrazo(p, filtroPrazo));
+    if (filialSel !== 'todas') l = l.filter(p => (p.filial || 'Sem filial') === filialSel);
+    if (filtroFornecedor !== 'todos') l = l.filter(p => (p.fornecedor || '') === filtroFornecedor);
+    if (temItemFiltro) l = l.filter(p => (p.itens || []).some(itemMatch));
     const getVal = (p, col) => {
       switch (col) {
         case 'numero': return p.numero || '';
@@ -5033,14 +5054,24 @@ const PedidosCompra = ({ ctx }) => {
       }
     };
     return sortRows(l, sortCol, sortDir, getVal);
-  }, [dados, q, statusSel, sortCol, sortDir]);
+  }, [todos, q, statusSel, filtroPrazo, filialSel, filtroFornecedor, filtroGrupo, filtroCultivar, filtroItem, sortCol, sortDir]);
 
-  const stats = useMemo(() => ({
-    total: dados.length,
-    comSaldo: dados.filter(p => p.tem_saldo && (p.qtd_saldo_bb || 0) > 0).length,
-    bbs: dados.reduce((a, p) => a + (p.qtd_saldo_bb || 0), 0),
-    valor: dados.reduce((a, p) => a + (p.saldo_aberto || 0), 0),
-  }), [dados]);
+  // Totalizador — reflete o que está filtrado (lista). Com filtro de item ativo,
+  // soma só os itens que casam; senão, todos os itens dos pedidos filtrados.
+  const tot = useMemo(() => {
+    let unid = 0, valor = 0, saldoAb = 0, fat = 0, saldoUn = 0;
+    lista.forEach(p => {
+      const its = (p.itens || []).filter(i => (temItemFiltro ? itemMatch(i) : true));
+      unid += its.reduce((a, i) => a + (i.qtd_bb || 0), 0);
+      its.forEach(i => { const qq = qtdItemPedido(p, i); fat += qq.fat; saldoUn += qq.saldo; });
+      valor += its.reduce((a, i) => a + (i.valor_total != null ? i.valor_total : (i.qtd_bb || 0) * (i.valor_unitario || 0)), 0);
+      saldoAb += its.reduce((a, i) => a + (i.saldo || 0) * (i.valor_unitario || 0), 0);
+    });
+    return { nPed: lista.length, unid, valor, saldoAb, fat, saldoUn };
+  }, [lista, filtroGrupo, filtroCultivar, filtroItem]);
+  const statsPrazo = useMemo(() => contarPrazos(todos), [todos]);
+  const nComSaldo = todos.filter(p => p.tem_saldo && (p.qtd_saldo_bb || 0) > 0).length;
+  const filtroAtivo = filtrandoPedidos || statusSel.length !== 1 || statusSel[0] !== 'aberto' || q || filtroPrazo !== 'todos';
 
   return (
     <div>
@@ -5048,17 +5079,17 @@ const PedidosCompra = ({ ctx }) => {
         <div>
           <div className="crumb"><i className="ti ti-home"></i> Operação · Pedidos Compra</div>
           <h1 className="page-title">Pedidos de Compra (SAP B1)</h1>
-          <p className="page-subtitle">Espelho em tempo real · {stats.total} pedidos{filialSel !== 'todas' ? ` · ${filialSel}` : ''} · {stats.comSaldo} com saldo a receber</p>
+          <p className="page-subtitle">Espelho em tempo real · {todos.length} pedidos · {nComSaldo} com saldo a receber</p>
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <TogglePedidos ctx={ctx} ativo="pedidos-compra" />
           <button
             className="btn btn-ghost"
             onClick={() => {
-              // Exporta CSV dos pedidos de compra (uma linha por item).
+              // Exporta CSV dos pedidos de compra do filtro atual (uma linha por item).
               const linhas = ['Pedido;Filial;Fornecedor;Data emissao;Data entrega;Item;Descricao;Embalagem;Qtd total;Qtd entregue;Saldo;Valor unitario;Saldo valor;Status pedido'];
-              dados.forEach(p => {
-                (p.itens || []).forEach(it => {
+              lista.forEach(p => {
+                (p.itens || []).filter(it => (temItemFiltro ? itemMatch(it) : true)).forEach(it => {
                   // Status do SAP: cancelado não é "atendido" (antes saía ATENDIDO por não ter saldo).
                   const status = (p.cancelado || p.status_sap === 'cancelado') ? 'CANCELADO' : (p.tem_saldo ? 'ABERTO' : 'ATENDIDO');
                   const linha = [
@@ -5081,7 +5112,7 @@ const PedidosCompra = ({ ctx }) => {
               a.download = `base_pedidos_compra${filialSel !== 'todas' ? '_' + filialSel.replace(/\s+/g, '_') : ''}_${new Date().toISOString().slice(0,10)}.csv`;
               a.click();
               URL.revokeObjectURL(url);
-              ctx.showToast('Base de compras exportada', `${dados.length} pedidos · saldos atualizados`);
+              ctx.showToast('Base de compras exportada', `${lista.length} pedidos do filtro atual · saldos atualizados`);
             }}
           >
             <i className="ti ti-file-export"></i> Exportar base
@@ -5090,40 +5121,62 @@ const PedidosCompra = ({ ctx }) => {
         </div>
       </div>
 
-      <div className="metrics" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-        <div className="metric">
-          <div className="metric-label"><i className="ti ti-shopping-cart"></i> Pedidos com saldo</div>
-          <div className="metric-value">{stats.comSaldo}</div>
-          <div className="metric-delta">de {stats.total} no SAP</div>
-        </div>
-        <div className="metric">
-          <div className="metric-label"><i className="ti ti-package"></i> Unidades a receber</div>
-          <div className="metric-value">{fmtNum(stats.bbs)}</div>
-          <div className="metric-delta">saldo em aberto</div>
-        </div>
-        <div className="metric">
-          <div className="metric-label"><i className="ti ti-cash"></i> Valor em aberto</div>
-          <div className="metric-value" style={{ color: 'var(--green)', fontSize: 22 }}>{fmtMoney(stats.valor)}</div>
-          <div className="metric-delta">a receber dos fornecedores</div>
-        </div>
+      {/* PAINEL DE PRIORIDADES — prazo de entrega (só pedidos com saldo a receber) */}
+      <PainelPrazos statsPrazo={statsPrazo} filtroPrazo={filtroPrazo} setFiltroPrazo={setFiltroPrazo} />
+
+      {/* TOTALIZADOR — reflete os filtros (status, prazo, filial, fornecedor, grupo, cultivar, item) */}
+      <div className="metrics" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+        <div className="metric"><div className="metric-label"><i className="ti ti-shopping-cart"></i> Pedidos</div><div className="metric-value">{tot.nPed}</div><div className="metric-delta">{filtroAtivo ? 'no filtro atual' : `de ${todos.length} no SAP`}</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-package"></i> Unidades</div><div className="metric-value">{fmtNum(tot.unid)}</div><div className="metric-delta">{fmtNum(tot.fat)} recebidas · {fmtNum(tot.saldoUn)} a receber</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-cash"></i> Valor total</div><div className="metric-value" style={{ fontSize: 22 }}>{fmtMoney(tot.valor)}</div><div className="metric-delta">soma dos itens</div></div>
+        <div className="metric"><div className="metric-label"><i className="ti ti-wallet"></i> Saldo aberto</div><div className="metric-value" style={{ color: 'var(--green)', fontSize: 22 }}>{fmtMoney(tot.saldoAb)}</div><div className="metric-delta">a receber dos fornecedores</div></div>
       </div>
 
       <div className="panel">
         <div className="panel-header">
           <FiltroStatusSap sel={statusSel} setSel={setStatusSel} />
-          <select value={filialSel} onChange={e => setFilialSel(e.target.value)} title="Filtrar pela filial do pedido no SAP"
-            style={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, color: 'var(--text)', padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', fontWeight: 600 }}>
-            <option value="todas">Todas as filiais ({todos.length})</option>
-            {filiais.map(([f, nPed]) => <option key={f} value={f}>{f} ({nPed})</option>)}
-          </select>
           <div className="search-box">
             <i className="ti ti-search"></i>
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar pedido ou fornecedor..." />
           </div>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+            <i className="ti ti-arrows-sort" style={{ fontSize: 12 }}></i> clique no cabeçalho p/ ordenar · na linha p/ abrir os itens
+          </span>
           <BotoesExpandir nAbertos={abertos.size} onExpandir={() => setAbertos(new Set(lista.map(p => p.numero)))} onRecolher={() => setAbertos(new Set())} />
         </div>
+
+        {/* Filtros iguais aos de Pedidos de venda: Filial, Fornecedor, Grupo, Cultivar, Item */}
+        <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filialSel} onChange={e => setFilialSel(e.target.value)} title="Filtrar pela filial do pedido no SAP">
+            <option value="todas">Todas as filiais ({todos.length})</option>
+            {filiais.map(([f, nPed]) => <option key={f} value={f}>{f} ({nPed})</option>)}
+          </select>
+          <select className="input" style={{ width: 'auto', maxWidth: 260, padding: '6px 10px', fontSize: 12 }} value={filtroFornecedor} onChange={e => setFiltroFornecedor(e.target.value)}>
+            <option value="todos">Todos os fornecedores</option>
+            {optFornecedores.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filtroGrupo} onChange={e => setFiltroGrupo(e.target.value)}>
+            <option value="todos">Todos os grupos</option>
+            {optGrupos.map(g => <option key={g} value={g}>{g}</option>)}
+          </select>
+          <select className="input" style={{ width: 'auto', maxWidth: 220, padding: '6px 10px', fontSize: 12 }} value={filtroCultivar} onChange={e => setFiltroCultivar(e.target.value)}>
+            <option value="todos">Todas as cultivares</option>
+            {optCultivares.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select className="input" style={{ width: 'auto', maxWidth: 220, padding: '6px 10px', fontSize: 12 }} value={filtroItem} onChange={e => setFiltroItem(e.target.value)}>
+            <option value="todos">Todos os itens</option>
+            {optItens.map(([cod, desc]) => <option key={cod} value={cod}>{cod}{desc ? ' — ' + desc : ''}</option>)}
+          </select>
+          {filtrandoPedidos && (
+            <button onClick={limparFiltrosPedidos} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', borderRadius: 6, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <i className="ti ti-x"></i> Limpar
+            </button>
+          )}
+        </div>
+
+        <AvisoFiltroPrazo filtroPrazo={filtroPrazo} setFiltroPrazo={setFiltroPrazo} />
         {lista.length === 0 ? (
-          <div className="empty"><i className="ti ti-box-off"></i><div>Nenhum pedido de compra encontrado{filialSel !== 'todas' ? ` na ${filialSel}` : ''}</div></div>
+          <div className="empty"><i className="ti ti-box-off"></i><div>Nenhum pedido de compra encontrado{filtroAtivo ? ' no filtro atual' : ''}</div></div>
         ) : (
           <div className="ped-wrap">
           <table className="table-tight ped-tabela">
@@ -5182,6 +5235,133 @@ const PedidosCompra = ({ ctx }) => {
   );
 };
 
+// ---- Prazo de entrega (compartilhado: Pedidos de venda e de compra) ----
+const calcUrgenciaEntrega = (dataEntrega) => {
+  if (!dataEntrega) return { categoria: 'sem_prazo', dias: null, label: 'Sem prazo', cor: 'var(--text-muted)', bgCor: 'transparent' };
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const entrega = new Date(dataEntrega); entrega.setHours(0, 0, 0, 0);
+  const diffMs = entrega - hoje;
+  const dias = Math.round(diffMs / (1000 * 60 * 60 * 24));
+  // Atrasado mantém vermelho destacado (crítico).
+  // Demais categorias usam cinza claro para não poluir visualmente — diferença vem por ícone e peso da fonte.
+  if (dias < 0) return { categoria: 'atrasado', dias, label: `${Math.abs(dias)}d atrasado`, cor: 'var(--red)', bgCor: 'var(--red-bg)' };
+  if (dias === 0) return { categoria: 'hoje', dias, label: 'Hoje', cor: 'var(--text)', bgCor: 'var(--bg-elev)' };
+  if (dias <= 3) return { categoria: 'urgente', dias, label: `${dias}d`, cor: 'var(--text)', bgCor: 'var(--bg-elev)' };
+  if (dias <= 7) return { categoria: '7d', dias, label: `${dias}d`, cor: 'var(--text-muted)', bgCor: 'var(--bg-elev)' };
+  if (dias <= 30) return { categoria: '30d', dias, label: `${dias}d`, cor: 'var(--text-muted)', bgCor: 'transparent' };
+  return { categoria: 'futuro', dias, label: `${dias}d`, cor: 'var(--text-dim)', bgCor: 'transparent' };
+};
+// O pedido passa no filtro de prazo (atalhos do painel de prioridades)?
+const passaPrazo = (p, filtroPrazo) => {
+  const u = calcUrgenciaEntrega(p.data_entrega);
+  if (filtroPrazo === 'atrasado') return u.categoria === 'atrasado';
+  if (filtroPrazo === 'hoje') return u.categoria === 'hoje' || u.categoria === 'urgente';
+  if (filtroPrazo === '7d') return ['atrasado','hoje','urgente','7d'].includes(u.categoria);
+  if (filtroPrazo === '30d') return ['atrasado','hoje','urgente','7d','30d'].includes(u.categoria);
+  if (filtroPrazo === 'sem_prazo') return u.categoria === 'sem_prazo';
+  return true;
+};
+// Contagem por urgência (só pedidos com saldo).
+const contarPrazos = (pedidos) => {
+  const stats = { atrasado: 0, hoje: 0, urgente: 0, '7d': 0, '30d': 0, sem_prazo: 0, futuro: 0 };
+  (pedidos || []).filter(p => p.tem_saldo).forEach(p => { const u = calcUrgenciaEntrega(p.data_entrega); stats[u.categoria] = (stats[u.categoria] || 0) + 1; });
+  return stats;
+};
+const PainelPrazos = ({ statsPrazo, filtroPrazo, setFiltroPrazo }) => (
+  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 14 }}>
+    <button
+      onClick={() => setFiltroPrazo(filtroPrazo === 'atrasado' ? 'todos' : 'atrasado')}
+      className="kpi-card"
+      style={{
+        background: filtroPrazo === 'atrasado' ? 'var(--red-bg)' : 'var(--bg-elev)',
+        border: '1px solid ' + (filtroPrazo === 'atrasado' ? 'var(--red)' : 'var(--border)'),
+        cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
+      }}
+    >
+      <div className="kpi-icon" style={{ background: 'var(--red-bg)', color: 'var(--red)' }}><i className="ti ti-alert-octagon"></i></div>
+      <div>
+        <div className="kpi-label" style={{ color: 'var(--red)' }}>Atrasados</div>
+        <div className="kpi-value mono">{statsPrazo.atrasado || 0}</div>
+      </div>
+    </button>
+    <button
+      onClick={() => setFiltroPrazo(filtroPrazo === 'hoje' ? 'todos' : 'hoje')}
+      className="kpi-card"
+      style={{
+        background: filtroPrazo === 'hoje' ? 'var(--orange-bg)' : 'var(--bg-elev)',
+        border: '1px solid ' + (filtroPrazo === 'hoje' ? 'var(--orange)' : 'var(--border)'),
+        cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
+      }}
+    >
+      <div className="kpi-icon" style={{ background: 'var(--orange-bg)', color: 'var(--orange)' }}><i className="ti ti-flame"></i></div>
+      <div>
+        <div className="kpi-label" style={{ color: 'var(--orange)' }}>Hoje + 3 dias</div>
+        <div className="kpi-value mono">{(statsPrazo.hoje || 0) + (statsPrazo.urgente || 0)}</div>
+      </div>
+    </button>
+    <button
+      onClick={() => setFiltroPrazo(filtroPrazo === '7d' ? 'todos' : '7d')}
+      className="kpi-card"
+      style={{
+        background: filtroPrazo === '7d' ? 'var(--blue-bg)' : 'var(--bg-elev)',
+        border: '1px solid ' + (filtroPrazo === '7d' ? 'var(--blue)' : 'var(--border)'),
+        cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
+      }}
+    >
+      <div className="kpi-icon" style={{ background: 'var(--blue-bg)', color: 'var(--blue)' }}><i className="ti ti-clock"></i></div>
+      <div>
+        <div className="kpi-label" style={{ color: 'var(--blue)' }}>Próximos 7 dias</div>
+        <div className="kpi-value mono">{(statsPrazo.atrasado || 0) + (statsPrazo.hoje || 0) + (statsPrazo.urgente || 0) + (statsPrazo['7d'] || 0)}</div>
+      </div>
+    </button>
+    <button
+      onClick={() => setFiltroPrazo(filtroPrazo === '30d' ? 'todos' : '30d')}
+      className="kpi-card"
+      style={{
+        background: filtroPrazo === '30d' ? 'var(--accent-glow)' : 'var(--bg-elev)',
+        border: '1px solid ' + (filtroPrazo === '30d' ? 'var(--accent)' : 'var(--border)'),
+        cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
+      }}
+    >
+      <div className="kpi-icon" style={{ background: 'var(--accent-glow)', color: 'var(--accent-light)' }}><i className="ti ti-calendar-month"></i></div>
+      <div>
+        <div className="kpi-label">Próximos 30 dias</div>
+        <div className="kpi-value mono">{(statsPrazo.atrasado || 0) + (statsPrazo.hoje || 0) + (statsPrazo.urgente || 0) + (statsPrazo['7d'] || 0) + (statsPrazo['30d'] || 0)}</div>
+      </div>
+    </button>
+    <button
+      onClick={() => setFiltroPrazo(filtroPrazo === 'sem_prazo' ? 'todos' : 'sem_prazo')}
+      className="kpi-card"
+      style={{
+        background: filtroPrazo === 'sem_prazo' ? 'var(--bg-hover)' : 'var(--bg-elev)',
+        border: '1px solid ' + (filtroPrazo === 'sem_prazo' ? 'var(--text-muted)' : 'var(--border)'),
+        cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
+      }}
+    >
+      <div className="kpi-icon" style={{ background: 'var(--bg-card)', color: 'var(--text-muted)' }}><i className="ti ti-help"></i></div>
+      <div>
+        <div className="kpi-label">Sem prazo</div>
+        <div className="kpi-value mono">{statsPrazo.sem_prazo || 0}</div>
+      </div>
+    </button>
+  </div>
+);
+const AvisoFiltroPrazo = ({ filtroPrazo, setFiltroPrazo }) => (filtroPrazo === 'todos' ? null : (
+  <div style={{ padding: '8px 16px', background: 'var(--bg-card)', borderBottom: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
+    <i className="ti ti-filter" style={{ color: 'var(--accent-light)' }}></i>
+    Filtrando por prazo: <strong style={{ color: 'var(--text)' }}>
+      {filtroPrazo === 'atrasado' && 'Apenas atrasados'}
+      {filtroPrazo === 'hoje' && 'Hoje + próximos 3 dias'}
+      {filtroPrazo === '7d' && 'Próximos 7 dias'}
+      {filtroPrazo === '30d' && 'Próximos 30 dias'}
+      {filtroPrazo === 'sem_prazo' && 'Pedidos sem prazo definido'}
+    </strong>
+    <button onClick={() => setFiltroPrazo('todos')} style={{ background: 'none', border: 'none', color: 'var(--blue)', cursor: 'pointer', fontSize: 11, padding: '2px 6px', fontFamily: 'inherit' }}>
+      <i className="ti ti-x"></i> limpar
+    </button>
+  </div>
+));
+
 const Pedidos = ({ ctx }) => {
   const [q, setQ] = useTelaState('ped:q', '');
   const [statusSel, setStatusSel] = useTelaState('ped:statusSel', ['aberto']);
@@ -5213,22 +5393,7 @@ const Pedidos = ({ ctx }) => {
   const optCultivares = useMemo(() => Array.from(new Set((ctx.pedidos || []).flatMap(p => (p.itens || []).map(i => i.descricao || i.cultivar_nome)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt')), [ctx.pedidos]);
   const optItens = useMemo(() => Array.from(new Map((ctx.pedidos || []).flatMap(p => (p.itens || [])).filter(i => i.codigo).map(i => [i.codigo, i.descricao || ''])).entries()).sort((a, b) => a[0].localeCompare(b[0])), [ctx.pedidos]);
 
-  // Helpers de cálculo de urgência
-  const calcUrgencia = (dataEntrega) => {
-    if (!dataEntrega) return { categoria: 'sem_prazo', dias: null, label: 'Sem prazo', cor: 'var(--text-muted)', bgCor: 'transparent' };
-    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
-    const entrega = new Date(dataEntrega); entrega.setHours(0, 0, 0, 0);
-    const diffMs = entrega - hoje;
-    const dias = Math.round(diffMs / (1000 * 60 * 60 * 24));
-    // Atrasado mantém vermelho destacado (crítico).
-    // Demais categorias usam cinza claro para não poluir visualmente — diferença vem por ícone e peso da fonte.
-    if (dias < 0) return { categoria: 'atrasado', dias, label: `${Math.abs(dias)}d atrasado`, cor: 'var(--red)', bgCor: 'var(--red-bg)' };
-    if (dias === 0) return { categoria: 'hoje', dias, label: 'Hoje', cor: 'var(--text)', bgCor: 'var(--bg-elev)' };
-    if (dias <= 3) return { categoria: 'urgente', dias, label: `${dias}d`, cor: 'var(--text)', bgCor: 'var(--bg-elev)' };
-    if (dias <= 7) return { categoria: '7d', dias, label: `${dias}d`, cor: 'var(--text-muted)', bgCor: 'var(--bg-elev)' };
-    if (dias <= 30) return { categoria: '30d', dias, label: `${dias}d`, cor: 'var(--text-muted)', bgCor: 'transparent' };
-    return { categoria: 'futuro', dias, label: `${dias}d`, cor: 'var(--text-dim)', bgCor: 'transparent' };
-  };
+  const calcUrgencia = calcUrgenciaEntrega;
 
   const lista = useMemo(() => {
     let l = ctx.pedidos;
@@ -5242,17 +5407,7 @@ const Pedidos = ({ ctx }) => {
       );
     }
     // Filtro de prazo
-    if (filtroPrazo !== 'todos') {
-      l = l.filter(p => {
-        const u = calcUrgencia(p.data_entrega);
-        if (filtroPrazo === 'atrasado') return u.categoria === 'atrasado';
-        if (filtroPrazo === 'hoje') return u.categoria === 'hoje' || u.categoria === 'urgente';
-        if (filtroPrazo === '7d') return ['atrasado','hoje','urgente','7d'].includes(u.categoria);
-        if (filtroPrazo === '30d') return ['atrasado','hoje','urgente','7d','30d'].includes(u.categoria);
-        if (filtroPrazo === 'sem_prazo') return u.categoria === 'sem_prazo';
-        return true;
-      });
-    }
+    if (filtroPrazo !== 'todos') l = l.filter(p => passaPrazo(p, filtroPrazo));
     // Filtros estilo Estoque
     if (filtroFilial !== 'todas') l = l.filter(p => (p.filial || 'Sem filial') === filtroFilial);
     if (filtroVendedor !== 'todos') l = l.filter(p => (p.vendedor || '') === filtroVendedor);
@@ -5353,83 +5508,7 @@ const Pedidos = ({ ctx }) => {
       </div>
 
       {/* PAINEL DE PRIORIDADES (atalhos visuais) */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 14 }}>
-        <button
-          onClick={() => setFiltroPrazo(filtroPrazo === 'atrasado' ? 'todos' : 'atrasado')}
-          className="kpi-card"
-          style={{
-            background: filtroPrazo === 'atrasado' ? 'var(--red-bg)' : 'var(--bg-elev)',
-            border: '1px solid ' + (filtroPrazo === 'atrasado' ? 'var(--red)' : 'var(--border)'),
-            cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
-          }}
-        >
-          <div className="kpi-icon" style={{ background: 'var(--red-bg)', color: 'var(--red)' }}><i className="ti ti-alert-octagon"></i></div>
-          <div>
-            <div className="kpi-label" style={{ color: 'var(--red)' }}>Atrasados</div>
-            <div className="kpi-value mono">{statsPrazo.atrasado || 0}</div>
-          </div>
-        </button>
-        <button
-          onClick={() => setFiltroPrazo(filtroPrazo === 'hoje' ? 'todos' : 'hoje')}
-          className="kpi-card"
-          style={{
-            background: filtroPrazo === 'hoje' ? 'var(--orange-bg)' : 'var(--bg-elev)',
-            border: '1px solid ' + (filtroPrazo === 'hoje' ? 'var(--orange)' : 'var(--border)'),
-            cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
-          }}
-        >
-          <div className="kpi-icon" style={{ background: 'var(--orange-bg)', color: 'var(--orange)' }}><i className="ti ti-flame"></i></div>
-          <div>
-            <div className="kpi-label" style={{ color: 'var(--orange)' }}>Hoje + 3 dias</div>
-            <div className="kpi-value mono">{(statsPrazo.hoje || 0) + (statsPrazo.urgente || 0)}</div>
-          </div>
-        </button>
-        <button
-          onClick={() => setFiltroPrazo(filtroPrazo === '7d' ? 'todos' : '7d')}
-          className="kpi-card"
-          style={{
-            background: filtroPrazo === '7d' ? 'var(--blue-bg)' : 'var(--bg-elev)',
-            border: '1px solid ' + (filtroPrazo === '7d' ? 'var(--blue)' : 'var(--border)'),
-            cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
-          }}
-        >
-          <div className="kpi-icon" style={{ background: 'var(--blue-bg)', color: 'var(--blue)' }}><i className="ti ti-clock"></i></div>
-          <div>
-            <div className="kpi-label" style={{ color: 'var(--blue)' }}>Próximos 7 dias</div>
-            <div className="kpi-value mono">{(statsPrazo.atrasado || 0) + (statsPrazo.hoje || 0) + (statsPrazo.urgente || 0) + (statsPrazo['7d'] || 0)}</div>
-          </div>
-        </button>
-        <button
-          onClick={() => setFiltroPrazo(filtroPrazo === '30d' ? 'todos' : '30d')}
-          className="kpi-card"
-          style={{
-            background: filtroPrazo === '30d' ? 'var(--accent-glow)' : 'var(--bg-elev)',
-            border: '1px solid ' + (filtroPrazo === '30d' ? 'var(--accent)' : 'var(--border)'),
-            cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
-          }}
-        >
-          <div className="kpi-icon" style={{ background: 'var(--accent-glow)', color: 'var(--accent-light)' }}><i className="ti ti-calendar-month"></i></div>
-          <div>
-            <div className="kpi-label">Próximos 30 dias</div>
-            <div className="kpi-value mono">{(statsPrazo.atrasado || 0) + (statsPrazo.hoje || 0) + (statsPrazo.urgente || 0) + (statsPrazo['7d'] || 0) + (statsPrazo['30d'] || 0)}</div>
-          </div>
-        </button>
-        <button
-          onClick={() => setFiltroPrazo(filtroPrazo === 'sem_prazo' ? 'todos' : 'sem_prazo')}
-          className="kpi-card"
-          style={{
-            background: filtroPrazo === 'sem_prazo' ? 'var(--bg-hover)' : 'var(--bg-elev)',
-            border: '1px solid ' + (filtroPrazo === 'sem_prazo' ? 'var(--text-muted)' : 'var(--border)'),
-            cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
-          }}
-        >
-          <div className="kpi-icon" style={{ background: 'var(--bg-card)', color: 'var(--text-muted)' }}><i className="ti ti-help"></i></div>
-          <div>
-            <div className="kpi-label">Sem prazo</div>
-            <div className="kpi-value mono">{statsPrazo.sem_prazo || 0}</div>
-          </div>
-        </button>
-      </div>
+      <PainelPrazos statsPrazo={statsPrazo} filtroPrazo={filtroPrazo} setFiltroPrazo={setFiltroPrazo} />
 
       {/* TOTALIZADOR — reflete os filtros (status, prazo, vendedor, grupo, cultivar, item) */}
       <div className="metrics" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
@@ -5481,21 +5560,7 @@ const Pedidos = ({ ctx }) => {
           )}
         </div>
 
-        {filtroPrazo !== 'todos' && (
-          <div style={{ padding: '8px 16px', background: 'var(--bg-card)', borderBottom: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <i className="ti ti-filter" style={{ color: 'var(--accent-light)' }}></i>
-            Filtrando por prazo: <strong style={{ color: 'var(--text)' }}>
-              {filtroPrazo === 'atrasado' && 'Apenas atrasados'}
-              {filtroPrazo === 'hoje' && 'Hoje + próximos 3 dias'}
-              {filtroPrazo === '7d' && 'Próximos 7 dias'}
-              {filtroPrazo === '30d' && 'Próximos 30 dias'}
-              {filtroPrazo === 'sem_prazo' && 'Pedidos sem prazo definido'}
-            </strong>
-            <button onClick={() => setFiltroPrazo('todos')} style={{ background: 'none', border: 'none', color: 'var(--blue)', cursor: 'pointer', fontSize: 11, padding: '2px 6px', fontFamily: 'inherit' }}>
-              <i className="ti ti-x"></i> limpar
-            </button>
-          </div>
-        )}
+        <AvisoFiltroPrazo filtroPrazo={filtroPrazo} setFiltroPrazo={setFiltroPrazo} />
 
         <div className="ped-wrap">
         <table className="table-tight ped-tabela">
