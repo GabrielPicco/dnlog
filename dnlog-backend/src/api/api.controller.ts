@@ -254,7 +254,7 @@ export class ApiController {
     const d = desde || new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
     const a = ate || '';
     return this.cache.wrap(
-      `notas-entrada2:${d}:${a}:${cardCode || ''}`,
+      `notas-entrada3:${d}:${a}:${cardCode || ''}`,
       async () => {
         // Devoluções não derrubam o relatório: se a consulta falhar, saem vazias.
         const dev = (ent: string) => Promise.resolve(this.sap.getNotasEntrada(d, a || undefined, cardCode || undefined, ent)).catch((e: any) => {
@@ -285,7 +285,11 @@ export class ApiController {
           ...compras,
           ...devolucao(devCliente as any[], 'CreditNotes', 'dev_cliente', 'Devolução de cliente', 'CN', 1),
           ...devolucao(devFornecedor as any[], 'PurchaseCreditNotes', 'dev_fornecedor', 'Devolução a fornecedor', 'PCN', -1),
-        ].sort((x: any, y: any) => String(y.data || '').localeCompare(String(x.data || '')));
+        ]
+          // Reconciliação de adiantamento: todas as linhas com CFOP "x000" (1000,
+          // 2000, 5000, 6000…) — não é operação de mercadoria, fica fora do relatório.
+          .filter((n: any) => !(n.cfops.length > 0 && n.cfops.every((c: any) => /^\d000$/.test(String(c)))))
+          .sort((x: any, y: any) => String(y.data || '').localeCompare(String(x.data || '')));
         return this.comPedidos(nfs, '/PurchaseOrders', 'PC');
       },
       300000,
