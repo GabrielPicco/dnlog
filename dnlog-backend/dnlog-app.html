@@ -4911,6 +4911,63 @@ const StatusSapChip = ({ status }) => {
   const s = STATUS_SAP.find(x => x[0] === status) || STATUS_SAP[0];
   return <span className={'chip ' + s[2]}>{s[1]}</span>;
 };
+// Filtro em lista com campo de busca: clica, digita parte do nome e escolhe.
+// options: [[valor, rótulo], ...]; todos = [valor, rótulo] da opção "todos".
+const semAcento = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const SelectBusca = ({ value, onChange, options, todos, title, maxWidth = 240, placeholder = 'Digite para filtrar...' }) => {
+  const [aberto, setAberto] = useState(false);
+  const [termo, setTermo] = useState('');
+  const [ativo, setAtivo] = useState(0);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!aberto) return;
+    const fora = (e) => { if (ref.current && !ref.current.contains(e.target)) setAberto(false); };
+    document.addEventListener('mousedown', fora);
+    return () => document.removeEventListener('mousedown', fora);
+  }, [aberto]);
+  const todasOpts = [todos, ...options];
+  // Cada palavra digitada precisa aparecer (sem acento; "neo 811" acha "NEO811").
+  const palavras = semAcento(termo).split(/\s+/).filter(Boolean);
+  const casa = (txt) => { const n = semAcento(txt), c = n.replace(/\s+/g, ''); return palavras.every(p => n.includes(p) || c.includes(p)); };
+  const filtradas = palavras.length ? options.filter(([v, r]) => casa(r + ' ' + v)) : todasOpts;
+  const atual = todasOpts.find(([v]) => v === value);
+  const escolher = (v) => { onChange(v); setAberto(false); setTermo(''); };
+  const filtrando = value !== todos[0];
+  return (
+    <div ref={ref} style={{ position: 'relative', display: 'inline-block' }} title={title}>
+      <button type="button" className="input" onClick={() => { setAberto(a => !a); setTermo(''); setAtivo(0); }}
+        style={{ width: 'auto', maxWidth, padding: '6px 26px 6px 10px', fontSize: 12, textAlign: 'left', cursor: 'pointer', position: 'relative', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'inherit', color: 'var(--text)', fontWeight: filtrando ? 700 : 400, borderColor: filtrando ? 'var(--accent)' : undefined }}>
+        {atual ? atual[1] : todos[1]}
+        <i className="ti ti-chevron-down" style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', fontSize: 12, color: 'var(--text-muted)' }}></i>
+      </button>
+      {aberto && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 50, minWidth: 260, maxWidth: 420, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.35)', overflow: 'hidden' }}>
+          <div style={{ padding: 6, borderBottom: '1px solid var(--border)' }}>
+            <input autoFocus className="input" value={termo} placeholder={placeholder}
+              onChange={e => { setTermo(e.target.value); setAtivo(0); }}
+              onKeyDown={e => {
+                if (e.key === 'Escape') setAberto(false);
+                else if (e.key === 'ArrowDown') { e.preventDefault(); setAtivo(i => Math.min(i + 1, filtradas.length - 1)); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); setAtivo(i => Math.max(i - 1, 0)); }
+                else if (e.key === 'Enter' && filtradas[ativo]) { e.preventDefault(); escolher(filtradas[ativo][0]); }
+              }}
+              style={{ width: '100%', padding: '6px 8px', fontSize: 12 }} />
+          </div>
+          <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+            {filtradas.length === 0 && <div style={{ padding: '8px 10px', fontSize: 12, color: 'var(--text-muted)' }}>Nada encontrado</div>}
+            {filtradas.map(([v, r], i) => (
+              <div key={v} onMouseDown={e => { e.preventDefault(); escolher(v); }} onMouseEnter={() => setAtivo(i)}
+                style={{ padding: '6px 10px', fontSize: 12, cursor: 'pointer', background: i === ativo ? 'var(--bg-hover)' : 'transparent', color: v === value ? 'var(--accent-light)' : 'var(--text)', fontWeight: v === value ? 700 : 400 }}>
+                {r}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const FiltroStatusSap = ({ sel, setSel }) => (
   <div style={{ display: 'flex', gap: 4, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: 2 }}
     title="Filtrar por status do pedido no SAP (marque um ou mais)">
@@ -5147,26 +5204,11 @@ const PedidosCompra = ({ ctx }) => {
 
         {/* Filtros iguais aos de Pedidos de venda: Filial, Fornecedor, Grupo, Cultivar, Item */}
         <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filialSel} onChange={e => setFilialSel(e.target.value)} title="Filtrar pela filial do pedido no SAP">
-            <option value="todas">Todas as filiais ({todos.length})</option>
-            {filiais.map(([f, nPed]) => <option key={f} value={f}>{f} ({nPed})</option>)}
-          </select>
-          <select className="input" style={{ width: 'auto', maxWidth: 260, padding: '6px 10px', fontSize: 12 }} value={filtroFornecedor} onChange={e => setFiltroFornecedor(e.target.value)}>
-            <option value="todos">Todos os fornecedores</option>
-            {optFornecedores.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
-          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filtroGrupo} onChange={e => setFiltroGrupo(e.target.value)}>
-            <option value="todos">Todos os grupos</option>
-            {optGrupos.map(g => <option key={g} value={g}>{g}</option>)}
-          </select>
-          <select className="input" style={{ width: 'auto', maxWidth: 220, padding: '6px 10px', fontSize: 12 }} value={filtroCultivar} onChange={e => setFiltroCultivar(e.target.value)}>
-            <option value="todos">Todas as cultivares</option>
-            {optCultivares.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <select className="input" style={{ width: 'auto', maxWidth: 220, padding: '6px 10px', fontSize: 12 }} value={filtroItem} onChange={e => setFiltroItem(e.target.value)}>
-            <option value="todos">Todos os itens</option>
-            {optItens.map(([cod, desc]) => <option key={cod} value={cod}>{cod}{desc ? ' — ' + desc : ''}</option>)}
-          </select>
+          <SelectBusca value={filialSel} onChange={setFilialSel} title="Filtrar pela filial do pedido no SAP" todos={['todas', `Todas as filiais (${todos.length})`]} options={filiais.map(([f, nPed]) => [f, `${f} (${nPed})`])} />
+          <SelectBusca value={filtroFornecedor} onChange={setFiltroFornecedor} maxWidth={260} todos={['todos', 'Todos os fornecedores']} options={optFornecedores.map(v => [v, v])} />
+          <SelectBusca value={filtroGrupo} onChange={setFiltroGrupo} todos={['todos', 'Todos os grupos']} options={optGrupos.map(g => [g, g])} />
+          <SelectBusca value={filtroCultivar} onChange={setFiltroCultivar} maxWidth={220} todos={['todos', 'Todas as cultivares']} options={optCultivares.map(c => [c, c])} />
+          <SelectBusca value={filtroItem} onChange={setFiltroItem} maxWidth={220} todos={['todos', 'Todos os itens']} options={optItens.map(([cod, desc]) => [cod, cod + (desc ? ' — ' + desc : '')])} />
           {filtrandoPedidos && (
             <button onClick={limparFiltrosPedidos} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', borderRadius: 6, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 4 }}>
               <i className="ti ti-x"></i> Limpar
@@ -5533,26 +5575,11 @@ const Pedidos = ({ ctx }) => {
 
         {/* Filtros estilo Estoque: Vendedor, Grupo, Cultivar, Item */}
         <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filtroFilial} onChange={e => setFiltroFilial(e.target.value)} title="Filtrar pela filial do pedido no SAP">
-            <option value="todas">Todas as filiais ({(ctx.pedidos || []).length})</option>
-            {optFiliais.map(([f, nPed]) => <option key={f} value={f}>{f} ({nPed})</option>)}
-          </select>
-          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filtroVendedor} onChange={e => setFiltroVendedor(e.target.value)}>
-            <option value="todos">Todos os representantes</option>
-            {optVendedores.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
-          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 12 }} value={filtroGrupo} onChange={e => setFiltroGrupo(e.target.value)}>
-            <option value="todos">Todos os grupos</option>
-            {optGrupos.map(g => <option key={g} value={g}>{g}</option>)}
-          </select>
-          <select className="input" style={{ width: 'auto', maxWidth: 220, padding: '6px 10px', fontSize: 12 }} value={filtroCultivar} onChange={e => setFiltroCultivar(e.target.value)}>
-            <option value="todos">Todas as cultivares</option>
-            {optCultivares.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <select className="input" style={{ width: 'auto', maxWidth: 220, padding: '6px 10px', fontSize: 12 }} value={filtroItem} onChange={e => setFiltroItem(e.target.value)}>
-            <option value="todos">Todos os itens</option>
-            {optItens.map(([cod, desc]) => <option key={cod} value={cod}>{cod}{desc ? ' — ' + desc : ''}</option>)}
-          </select>
+          <SelectBusca value={filtroFilial} onChange={setFiltroFilial} title="Filtrar pela filial do pedido no SAP" todos={['todas', `Todas as filiais (${(ctx.pedidos || []).length})`]} options={optFiliais.map(([f, nPed]) => [f, `${f} (${nPed})`])} />
+          <SelectBusca value={filtroVendedor} onChange={setFiltroVendedor} todos={['todos', 'Todos os representantes']} options={optVendedores.map(v => [v, v])} />
+          <SelectBusca value={filtroGrupo} onChange={setFiltroGrupo} todos={['todos', 'Todos os grupos']} options={optGrupos.map(g => [g, g])} />
+          <SelectBusca value={filtroCultivar} onChange={setFiltroCultivar} maxWidth={220} todos={['todos', 'Todas as cultivares']} options={optCultivares.map(c => [c, c])} />
+          <SelectBusca value={filtroItem} onChange={setFiltroItem} maxWidth={220} todos={['todos', 'Todos os itens']} options={optItens.map(([cod, desc]) => [cod, cod + (desc ? ' — ' + desc : '')])} />
           {filtrandoPedidos && (
             <button onClick={limparFiltrosPedidos} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', borderRadius: 6, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 4 }}>
               <i className="ti ti-x"></i> Limpar
